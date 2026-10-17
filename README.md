@@ -47,7 +47,7 @@ npm start
 
 主进程由 `app` 协调 `domain`、`hooks` 和 `clients`；页面通过 preload 获取快照和提交操作，不直接访问文件或客户端存储。运行时配置生成在 `src/hooks/config.cjs`，不反向依赖 `scripts`。
 
-本机项目目录改名时，旧目录 `deepsleep-whale-pet` 保留为指向 `deepsleep-whale` 的兼容软链接；仅当该链接确实指向当前项目时，生成配置继续沿用旧命令路径，避免已有 Codex 信任失效。新克隆无需旧目录，直接使用当前路径。
+项目仅保留 `deepsleep-whale` 目录，不依赖旧目录链接。Hook 配置使用当前项目绝对路径；从旧目录迁移后，需要同步更新 Codex / Cursor 的命令路径，并在 Codex 中重新审核、信任变更后的定义。
 
 `scripts/codex-hook.cjs`、`scripts/cursor-hook.cjs` 是保留的稳定兼容入口，内部实现位于 `src/hooks/`。已安装的绝对路径和生成的 Hook 命令保持一致，目录拆分无需重装或重新信任未变化的定义。关键中文注释说明状态优先级、暂时隐藏、去重、跳转确认和配置回滚等边界。
 
