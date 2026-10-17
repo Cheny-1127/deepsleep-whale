@@ -1,0 +1,13 @@
+{
+  "name": "whale-companion",
+  "displayName": "鲸鱼娘 · Cursor 对话跳转",
+  "description": "从本机鲸鱼娘任务提醒打开对应 Cursor 对话。",
+  "publisher": "deepsleep",
+  "version": "0.2.0",
+  "license": "GPL-3.0-only",
+  "engines": {"vscode": "^1.96.0"},
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.cjs",
+  "extensionKind": ["ui"]
+}
