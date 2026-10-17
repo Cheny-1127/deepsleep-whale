@@ -15,9 +15,15 @@
     "test:presence": "node scripts/checks/client-presence-smoke.cjs",
     "test:actions": "node scripts/checks/actions-smoke.cjs",
     "test:approvals": "node scripts/checks/approval-smoke.cjs",
+    "test:wechat": "node scripts/checks/wechat-smoke.cjs",
     "hooks:config": "node scripts/hooks/codex-config.cjs",
     "hooks:cursor-config": "node scripts/hooks/cursor-config.cjs",
     "hooks:install": "node scripts/hooks/install.cjs"
   },
-  "devDependencies": { "electron": "44.7.2" }
+  "devDependencies": {
+    "electron": "44.7.2"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
+  }
 }

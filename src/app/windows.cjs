@@ -107,6 +107,7 @@ function createWindows({ snapshot, performAction, collapseReminders }) {
 
   return {
     showPanel, showReminders,
+    isPanel:sender=>sender===panel?.webContents,
     start() {
       createPanel(); createPet();
       const icon = nativeImage.createFromPath(path.join(__dirname, '../../assets/icon.png')).resize({ width:20, height:20 });

@@ -34,4 +34,12 @@
 - 动画素材允许开源使用、禁止商用；衍生作品在介绍、展示、分发时须附原作者仓库地址。上游 README 的许可原文保存在 `licenses/dsh-pet-ASSET-NOTICE.md`。
 - 运行时仅调整显示比例和位置。这些动画不按根目录 GPL 或 rice 素材的 MIT 许可重新授权；包含这些动画的分发包须保留上述限制和署名。
 
+## Hermes 微信协议参考
+
+- 项目：https://github.com/NousResearch/hermes-agent
+- 固定提交：`868b9f244f5aa3ad238e494048046fe4f29c28ba`
+- 参考源码：`plugins/platforms/weixin/adapter.py` 的 iLink 扫码、请求格式、游标与会话令牌处理；本项目独立实现 JavaScript 文本网关，不包含完整 Hermes 运行时或其 Python 源文件。
+- Copyright (c) 2025 Nous Research；MIT 全文保存在 `licenses/hermes-agent-MIT.txt`。
+- 本机二维码生成使用 `qrcode`（MIT），安装依赖保留其包内许可。
+
 本项目是非官方同人作品，与 DeepSeek、OpenAI 及其他品牌没有授权、赞助或背书关系。商标归各自权利人所有。

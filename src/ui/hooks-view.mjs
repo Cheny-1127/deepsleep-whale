@@ -3,8 +3,7 @@ const $ = id => document.getElementById(id);
 
 export function showView(view) {
   if(!$('home-view'))return;
-  const hooks=view==='hooks';
-  $('home-view').hidden=hooks;$('hooks-view').hidden=!hooks;
+  for(const name of ['home','hooks','wechat'])if($(name+'-view'))$(name+'-view').hidden=name!==view;
   for(const button of document.querySelectorAll('[data-view]')) {
     const selected=button.dataset.view===view;
     button.classList.toggle('selected',selected);
