@@ -4,6 +4,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('whale', {
   snapshot: () => ipcRenderer.invoke('snapshot'),
   action: (name, value) => ipcRenderer.invoke('action', name, value),
+  wechat: (name, value) => ipcRenderer.invoke('wechat', name, value),
   drag: (phase, point) => ipcRenderer.send('pet-drag', phase, point),
   subscribe: callback => ipcRenderer.on('snapshot', (_event, data) => callback(data)),
   showReminders: callback => ipcRenderer.on('show-reminders', callback),

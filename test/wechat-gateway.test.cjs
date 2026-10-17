@@ -1,0 +1,321 @@
+'use strict';
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const path=require('node:path');
+const {createWechatGateway}=require('../src/channels/wechat-gateway.cjs');
+const {fresh,bindingKey}=require('../src/channels/wechat-store.cjs');
+const {AgentError}=require('../src/agents/agent-error.cjs');
+const tick=()=>new Promise(resolve=>setTimeout(resolve,5));
+async function until(check,attempts=250){for(let i=0;i<attempts;i++){if(check())return;await tick();}assert.fail('gateway condition timed out');}
+function harness(t,initial,options={}) {
+  const state=initial||fresh();
+  if(!initial){state.account={id:'bot',token:'private-token',owner:'owner'};state.allowed=['owner'];state.bindings[bindingKey('bot','owner')]={id:'owner-binding',cwd:process.cwd(),clientId:'',threadId:'',automatic:true};}
+  let saved=structuredClone(state),failStore=false,sendError=null,updateError=null;
+  const batches=[{}],sent=[],runs=[],pending=[];
+  const store={available:()=>true,load:()=>structuredClone(saved),save:value=>{if(failStore)throw Error('disk');saved=structuredClone(value);},remove:()=>{saved=fresh();}};
+  const api={validate:value=>value,qr:async()=>({qrcode:'private-poll-code',qrcode_img_content:'https://login.example.test/qr'}),
+    qrStatus:async()=>({status:'confirmed',ilink_bot_id:'bot',bot_token:'private-token',ilink_user_id:'owner',baseurl:'https://ilinkai.weixin.qq.com'}),
+    async updates(_account,_cursor,signal){if(updateError)throw updateError;if(batches.length)return batches.shift();return new Promise(resolve=>{const done=()=>{const i=pending.indexOf(done);if(i>=0)pending.splice(i,1);resolve(batches.shift()||{});};pending.push(done);signal.addEventListener('abort',done,{once:true});});},
+    async send(_account,sender,text,context,id){if(sendError)throw sendError;sent.push({sender,text,context,id});}};
+  const gateway=createWechatGateway({store,api,makeQr:async()=> 'data:image/png;base64,test',pollDelay:1,loginDelay:1,...options,runAgent:options=>{
+    const run={options};runs.push(run);run.promise=new Promise((resolve,reject)=>{run.resolve=text=>resolve({text});run.reject=reject;});run.cancel=()=>{run.cancelled=true;run.reject(Error('cancelled'));};return run;
+  }});t.after(()=>gateway.close());
+  const message=(id,text,sender='owner')=>({message_id:id,message_type:1,from_user_id:sender,to_user_id:'bot',context_token:'ctx-'+id,item_list:[{type:1,text_item:{text}}]});
+  function push(...msgs){batches.push({msgs,get_updates_buf:'cursor-'+msgs[0]?.message_id});pending.shift()?.();}
+  return {gateway,api,runs,sent,message,push,get saved(){return saved;},set failStore(value){failStore=value;},set sendError(value){sendError=value;},set updateError(value){updateError=value;},async login(){await gateway.action('login');await until(()=>gateway.snapshot().status==='connected');}};
+}
+
+test('scan login hides credentials; strangers need explicit authorization and a new message',async t=>{
+  const h=harness(t);await h.login();
+  assert.ok(!JSON.stringify(h.gateway.snapshot()).includes('private-token'));
+  h.push(h.message('1','排查','stranger'));await until(()=>h.gateway.snapshot().pending.includes('stranger'));assert.equal(h.runs.length,0);
+  await h.gateway.action('allow-user','stranger');await tick();assert.equal(h.runs.length,0);
+  h.push(h.message('p','/project '+process.cwd(),'stranger'),h.message('2','重新排查','stranger'));await until(()=>h.runs.length===1);
+  h.runs[0].resolve('结论');await until(()=>h.gateway.snapshot().jobs[0].state==='completed');
+});
+test('dedup and restart never replay work; conversations resume only within their binding',async t=>{
+  const h=harness(t);await h.login();const msg=h.message('1','排查一下');h.push(msg,msg);await until(()=>h.runs.length===1);
+  h.runs[0].options.onSession('thread-1');h.runs[0].resolve('第一轮完成');await until(()=>!h.gateway.snapshot().active);
+  h.push(h.message('2','继续'));await until(()=>h.runs.length===2);assert.equal(h.runs[1].options.session,'thread-1');
+  const saved=h.saved;h.gateway.close();const reboot=harness(t,saved);reboot.gateway.start();await tick();
+  assert.equal(reboot.runs.length,0);assert.equal(reboot.gateway.snapshot().jobs[0].state,'interrupted');
+  assert.ok(!('text' in reboot.saved.jobs.at(-1)));
+});
+test('delivery failure retains stable IDs, retry sends results without repeating the agent',async t=>{
+  const h=harness(t);let attempts=0;const send=h.api.send;h.api.send=(...args)=>{attempts++;return send(...args);};
+  h.sendError=Error('offline');await h.login();h.push(h.message('1','排查'));await until(()=>h.runs.length===1);
+  h.runs[0].resolve('完成结果');await until(()=>h.gateway.snapshot().outbox===2);const id=h.saved.outbox[0].id;
+  h.push();await tick();h.push();await tick();assert.equal(attempts,1,'failed delivery must back off while polling continues');
+  h.sendError=null;await h.gateway.action('retry');await until(()=>h.gateway.snapshot().outbox===0);
+  assert.equal(h.runs.length,1);assert.equal(h.sent[0].id,id+'-0');assert.equal(h.sent.at(-1).text,'完成结果');assert.equal(h.sent.at(-1).context,'ctx-1');
+});
+test('approval belongs to the initiating sender and is single use; stop only cancels owned work',async t=>{
+  const h=harness(t);await h.login();h.push(h.message('1','排查'));await until(()=>h.runs.length===1);
+  const decision=h.runs[0].options.onApproval({kind:'command',detail:'test command',cwd:process.cwd()});
+  await until(()=>h.saved.outbox.some(item=>item.parts[0].includes('/allow'))||h.sent.some(item=>item.text.includes('/allow')));
+  const approval=h.saved.outbox.find(item=>item.parts[0].includes('/allow'))?.parts[0]||h.sent.find(item=>item.text.includes('/allow')).text;
+  const token=approval.match(/\/allow ([\w-]+)/)[1];
+  h.push(h.message('2','/allow '+token,'stranger'));await until(()=>h.gateway.snapshot().pending.includes('stranger'));assert.equal(h.gateway.snapshot().jobs[0].state,'approval');
+  h.push(h.message('3','/allow '+token));assert.equal(await decision,true);
+  h.push(h.message('4','/stop'));await until(()=>h.runs[0].cancelled);assert.equal(h.runs.length,1);
+});
+test('expired login and storage failure stop execution instead of reconnecting or starting tasks',async t=>{
+  const h=harness(t);await h.login();h.failStore=true;h.push(h.message('1','must not run'));await until(()=>!h.gateway.snapshot().enabled);
+  assert.equal(h.runs.length,0);assert.match(h.gateway.snapshot().error,/保存/);
+  const e=harness(t);await e.login();e.updateError=Object.assign(Error('expired'),{code:-14});e.push();await until(()=>e.gateway.snapshot().status==='expired');assert.equal(e.gateway.snapshot().enabled,false);
+});
+test('expired QR and cancelled login never install credentials from a late response',async t=>{
+  const h=harness(t,fresh());h.api.qrStatus=async()=>({status:'expired'});await h.gateway.action('login');await until(()=>h.gateway.snapshot().status==='error');assert.equal(h.gateway.snapshot().account,null);
+  let confirm;h.api.qrStatus=()=>new Promise(resolve=>{confirm=resolve;});await h.gateway.action('login');await until(()=>confirm);
+  await h.gateway.action('cancel-login');confirm({status:'confirmed',ilink_bot_id:'late-bot',bot_token:'late-token'});await tick();assert.equal(h.gateway.snapshot().account,null);assert.equal(h.gateway.snapshot().status,'paused');
+});
+test('new conversation drops only that sender context and revoked users cannot finish queued work',async t=>{
+  const h=harness(t);await h.login();h.push(h.message('1','排查'));await until(()=>h.runs.length===1);h.runs[0].options.onSession('old-thread');h.runs[0].resolve('done');await until(()=>!h.gateway.snapshot().active);
+  h.push(h.message('2','/new'));await until(()=>h.saved.bindings[bindingKey('bot','owner')].threadId==='');h.push(h.message('3','继续'));await until(()=>h.runs.length===2);assert.equal(h.runs[1].options.session,undefined);
+  h.push(h.message('4','排队'));await until(()=>h.gateway.snapshot().jobs.some(job=>job.state==='queued'));
+  await h.gateway.action('remove-user','owner');await until(()=>!h.gateway.snapshot().active);assert.equal(h.runs.length,2);assert.ok(h.runs[1].cancelled);assert.ok(!h.saved.outbox.some(item=>item.sender==='owner'));
+});
+test('revoking a recipient during delivery cannot discard the next recipients result',async t=>{
+  const initial=fresh();initial.enabled=true;initial.account={id:'bot',token:'test',owner:'owner'};initial.allowed=['owner','other'];
+  initial.outbox=[{id:'first',sender:'owner',parts:['one'],index:0},{id:'second',sender:'other',parts:['two'],index:0}];
+  const h=harness(t,initial),send=h.api.send;let finish;
+  h.api.send=async(...args)=>{if(args[1]==='owner')return new Promise(resolve=>{finish=resolve;});return send(...args);};
+  h.gateway.start();await until(()=>finish);await h.gateway.action('remove-user','owner');finish();await until(()=>h.gateway.snapshot().outbox===0);
+  assert.deepEqual(h.sent.map(item=>item.text),['two']);
+});
+test('late send failure from a paused connection cannot expire the restored connection',async t=>{
+  const initial=fresh();initial.enabled=true;initial.account={id:'bot',token:'test',owner:'owner'};initial.allowed=['owner'];initial.outbox=[{id:'first',sender:'owner',parts:['one'],index:0}];
+  const h=harness(t,initial),send=h.api.send;let fail,first=true;
+  h.api.send=async(...args)=>{if(first){first=false;return new Promise((_resolve,reject)=>{fail=reject;});}return send(...args);};
+  h.gateway.start();await until(()=>fail);await h.gateway.action('enable',false);await h.gateway.action('enable',true);fail(Object.assign(Error('old connection expired'),{code:-14}));
+  await tick();h.push();
+  await until(()=>h.gateway.snapshot().outbox===0);assert.equal(h.gateway.snapshot().enabled,true);assert.notEqual(h.gateway.snapshot().status,'expired');
+});
+
+test('default setup connects without a project and explains how to select a desktop conversation',async t=>{
+  const h=harness(t,fresh());await h.login();assert.equal(h.gateway.snapshot().clients[0].backend,'codex');
+  h.push(h.message('hello','检查项目'));await until(()=>h.saved.outbox.some(item=>item.parts.join('').includes('/chats'))||h.sent.some(item=>item.text.includes('/chats')));
+  assert.equal(h.runs.length,0);assert.deepEqual(h.saved.bindings,{});
+});
+test('priority is used for new conversations; pinned threads and failures never move to another instance',async t=>{
+  const h=harness(t);await h.login();
+  const clients=[{...fresh().clients[0],id:'priority',name:'优先 Codex',profile:'priority'},{...fresh().clients[0],id:'other',name:'第二 Codex',profile:'other'}];
+  await h.gateway.action('save-clients',clients);
+  h.push(h.message('1','检查'));await until(()=>h.runs.length===1);assert.equal(h.runs[0].options.settings.profile,'priority');h.runs[0].options.onSession('priority-thread');h.runs[0].resolve('done');await until(()=>!h.gateway.snapshot().active);
+  await h.gateway.action('save-clients',[clients[1],clients[0]]);
+  h.push(h.message('2','继续'));await until(()=>h.runs.length===2);assert.equal(h.runs[1].options.settings.profile,'priority');assert.equal(h.runs[1].options.session,'priority-thread');
+  h.runs[1].reject(Error('provider unavailable'));await until(()=>!h.gateway.snapshot().active);assert.equal(h.runs.length,2);
+  h.push(h.message('3','/new'),h.message('4','新任务'));await until(()=>h.runs.length===3);assert.equal(h.runs[2].options.settings.profile,'other');assert.equal(h.runs[2].options.session,undefined);
+});
+test('desktop conversation selection is scoped to sender and instance; selections precede subsequent text',async t=>{
+  let finishRead;const reads=[];
+  const threads=[{id:'desktop-thread',cwd:process.cwd(),name:'桌面里的对话',status:'active'}];
+  const h=harness(t,fresh(),{listThreads:async()=>({threads,nextCursor:null}),readThread:async(client,id)=>{reads.push({client,id});return new Promise(resolve=>{finishRead=()=>resolve(threads[0]);});}});
+  await h.login();h.push(h.message('list','/chats'),h.message('select','/chat 1'),h.message('task','继续桌面的任务'));await until(()=>finishRead);
+  assert.equal(h.runs.length,0);finishRead();await until(()=>h.runs.length===1);assert.equal(h.runs[0].options.session,'desktop-thread');assert.equal(reads[0].client.id,'codex-default');
+  assert.equal(h.runs[0].options.transport,'desktop');assert.equal(h.runs[0].options.text,'继续桌面的任务');
+  h.push(h.message('s','hello','stranger'));await until(()=>h.gateway.snapshot().pending.includes('stranger'));await h.gateway.action('allow-user','stranger');
+  h.push(h.message('s2','/chat 1','stranger'));await until(()=>h.sent.some(item=>item.sender==='stranger')||h.saved.outbox.some(item=>item.sender==='stranger'));assert.equal(h.runs.length,1);
+});
+test('queries that finish after revoke, pause or client edits cannot install a stale selection',async t=>{
+  for(const action of ['remove-user','enable','save-clients']) {
+    let finish;const h=harness(t,undefined,{listThreads:async()=>({threads:[{id:'desktop',cwd:process.cwd(),name:'桌面对话'}],nextCursor:null}),readThread:()=>new Promise(resolve=>{finish=resolve;})});
+    await h.login();h.push(h.message('list','/chats'),h.message('select','/chat 1'));await until(()=>finish);
+    await h.gateway.action(action,action==='remove-user'?'owner':action==='enable'?false:fresh().clients);
+    finish({id:'desktop',cwd:process.cwd(),name:'桌面对话',status:'idle'});await tick();
+    assert.notEqual(h.saved.bindings[bindingKey('bot','owner')]?.threadId,'desktop');assert.equal(h.runs.length,0);
+  }
+});
+test('queued work freezes its route and shares only its own new conversation',async t=>{
+  const h=harness(t);await h.login();h.push(h.message('1','第一条'),h.message('2','第二条'));await until(()=>h.saved.jobs.some(job=>job.state==='queued'));
+  const queued=h.saved.jobs.find(job=>job.state==='queued');assert.equal(queued.route.settings.cwd,process.cwd());
+  await assert.rejects(h.gateway.action('save-clients',[]),/任务结束/);
+  h.push(h.message('select','/new'));await tick();assert.equal(h.runs.length,1);
+  h.runs[0].options.onSession('new-thread');h.runs[0].resolve('done');await until(()=>h.runs.length===2);assert.equal(h.runs[1].options.session,'new-thread');assert.equal(h.runs[1].options.transport,'local');
+});
+test('disabled pinned clients require an explicit selection; editing an instance cannot resume an old account thread',async t=>{
+  const h=harness(t);await h.login();h.push(h.message('1','检查'));await until(()=>h.runs.length===1);h.runs[0].options.onSession('old-account');h.runs[0].resolve('done');await until(()=>!h.gateway.snapshot().active);
+  const clients=h.gateway.snapshot().clients;clients[0].enabled=false;
+  await h.gateway.action('save-clients',[...clients,{...fresh().clients[0],id:'other',name:'Other'}]);
+  h.push(h.message('2','继续'));await until(()=>h.saved.seen.includes('2'));await tick();assert.equal(h.runs.length,1);
+  clients[0].enabled=true;clients[0].profile='another-account';await h.gateway.action('save-clients',clients);
+  assert.equal(h.saved.bindings[bindingKey('bot','owner')].threadId,'');
+});
+test('stop interrupts active work immediately despite a stalled catalog and discards waiting messages',async t=>{
+  let finish;const h=harness(t,undefined,{listThreads:()=>new Promise(resolve=>{finish=resolve;})});
+  await h.login();h.push(h.message('1','正在运行'));await until(()=>h.runs.length===1);
+  h.push(h.message('list','/chats'),h.message('waiting','不能在停止后执行'));await until(()=>finish);
+  h.push(h.message('stop','／STOP\u200b。'));await until(()=>h.runs[0].cancelled);
+  finish({threads:[],nextCursor:null});await tick();assert.equal(h.runs.length,1);
+});
+test('manual client selection skips disabled entries and scopes paginated catalogs to that instance',async t=>{
+  const calls=[],base=fresh().clients[0];
+  const h=harness(t,fresh(),{listThreads:async(client,options)=>{calls.push({id:client.id,cursor:options.cursor});return {threads:[{id:'thread-'+client.id,cwd:process.cwd(),name:client.name,status:'idle'}],nextCursor:options.cursor?null:'page-two'};}});
+  await h.login();await h.gateway.action('save-clients',[{...base,id:'disabled',enabled:false},{...base,id:'first',name:'First',profile:'first'},{...base,id:'second',name:'Second',profile:'second'}]);
+  h.push(h.message('list','/clients'),h.message('client','/client 2'),h.message('projects','/projects'),h.message('project','/project 1'),h.message('chats','/chats'),h.message('next','/chats next'),h.message('task','检查'));
+  await until(()=>h.runs.length===1);assert.equal(h.runs[0].options.settings.profile,'second');assert.deepEqual(calls.map(call=>call.id),['second','second','second']);assert.equal(calls[2].cursor,'page-two');
+});
+test('forget clears WeChat credentials and selections while preserving independent client configuration',async t=>{
+  const h=harness(t);await h.login();const clients=[{...fresh().clients[0],name:'My Codex',profile:'existing'}];await h.gateway.action('save-clients',clients);
+  await h.gateway.action('forget');assert.equal(h.saved.account,null);assert.deepEqual(h.saved.allowed,[]);assert.deepEqual(h.saved.bindings,{});assert.deepEqual(h.saved.jobs,[]);assert.deepEqual(h.saved.clients,clients);
+});
+
+test('projects returns a readable project list, including commands copied with invisible or fullwidth characters',async t=>{
+  for(const command of ['/projects\u200b','／PROJECTS。','/projects']) {
+    const h=harness(t,fresh(),{listThreads:async()=>({threads:[{id:'desktop',cwd:process.cwd(),name:'桌面对话'}],nextCursor:null})});
+    await h.login();h.push(h.message('list',command));await until(()=>h.sent.length);
+    assert.match(h.sent[0].text,/^最近项目/);assert.ok(h.sent[0].text.includes('1. '+path.basename(process.cwd())));
+    assert.match(h.sent[0].text,/回复.*1/);assert.ok(!h.sent[0].text.includes('/allow'));assert.equal(h.runs.length,0);
+  }
+});
+test('number replies select the latest list, then subsequent numbers are ordinary task text',async t=>{
+  const thread={id:'desktop',cwd:process.cwd(),name:'桌面对话',status:'idle'};
+  const h=harness(t,fresh(),{listThreads:async()=>({threads:[thread],nextCursor:null}),readThread:async()=>thread});
+  await h.login();
+  h.push(h.message('projects','/projects'),h.message('project','1'));
+  await until(()=>h.saved.bindings[bindingKey('bot','owner')]?.cwd===process.cwd());assert.equal(h.runs.length,0);
+  h.push(h.message('chats','/chats'),h.message('chat','1'),h.message('task','123'));
+  await until(()=>h.runs.length===1);assert.equal(h.runs[0].options.session,'desktop');assert.equal(h.runs[0].options.text,'123');
+});
+test('chats renders five escaped table rows and number selection uses the displayed page',async t=>{
+  const threads=Array.from({length:7},(_,i)=>({id:'thread-'+i,cwd:process.cwd(),name:i===0?'特殊 | **标题**\n[链接](https://example.test)':'会话'+i,status:'idle'}));
+  const calls=[];
+  const h=harness(t,fresh(),{listThreads:async(_client,options)=>{calls.push(options);const start=Number(options.cursor||0),end=start+options.limit;return {threads:threads.slice(start,end),nextCursor:end<threads.length?String(end):null};},readThread:async(_client,id)=>threads.find(thread=>thread.id===id)});
+  await h.login();h.push(h.message('list','/chats'));await until(()=>h.sent.length);
+  const first=h.sent[0].text;assert.match(first,/\| 编号 \| 对话 \| 项目 \/ 客户端 \|/);assert.match(first,/回复.*编号/);assert.match(first,/下一页/);
+  assert.equal(calls[0].limit,5);assert.equal(first.split('\n').filter(line=>/^\| [1-9]\d* \|/.test(line)).length,5);
+  assert.ok(!first.includes(process.cwd()));assert.ok(first.includes('\\|'));assert.ok(!first.includes('**标题**'));assert.ok(!first.includes('\n[链接]'));
+  h.push(h.message('next','下一页'));await until(()=>h.sent.some(item=>item.text.includes('会话6')));
+  h.push(h.message('select','2'),h.message('task','保留原文\n  问题  '));await until(()=>h.runs.length===1);
+  assert.equal(h.runs[0].options.session,'thread-6');assert.equal(h.runs[0].options.text,'保留原文\n  问题  ');
+});
+test('multi-client chat tables retain buffered rows across pages without dropping or refetching them',async t=>{
+  const base=fresh().clients[0],calls=[];
+  const h=harness(t,fresh(),{listThreads:async(client,options)=>{calls.push({id:client.id,...options});const threads=Array.from({length:7},(_,i)=>({id:client.id+'-'+i,cwd:process.cwd(),name:client.id+'会话'+i})),start=Number(options.cursor||0),end=start+options.limit;return {threads:threads.slice(start,end),nextCursor:end<threads.length?String(end):null};}});
+  await h.login();await h.gateway.action('save-clients',[{...base,id:'first',name:'First'},{...base,id:'second',name:'Second'}]);
+  h.push(h.message('list','/chats'));await until(()=>h.sent.length);
+  assert.equal(h.sent[0].text.split('\n').filter(line=>/^\| [1-9]\d* \|/.test(line)).length,5);assert.match(h.sent[0].text,/下一页/);
+  h.push(h.message('next','下一页'));await until(()=>h.sent.length===2);
+  assert.equal(calls.length,2,'buffered second page must retain remote cursors without querying again');
+  h.push(h.message('last','下一页'));await until(()=>h.sent.length===3);
+  const rows=h.sent.flatMap(item=>item.text.split('\n').filter(line=>/^\| [1-9]\d* \|/.test(line)));
+  assert.equal(rows.length,14);for(const id of ['first','second'])for(let i=0;i<7;i++)assert.equal(rows.filter(row=>row.includes(id+'会话'+i)).length,1);
+  assert.equal(calls.length,4);assert.ok(!h.sent[2].text.includes('下一页'));assert.equal(h.runs.length,0);
+});
+test('a failed next chat page preserves its cursor for an explicit retry',async t=>{
+  let fail=true;
+  const h=harness(t,fresh(),{listThreads:async(_client,options)=>{if(options.cursor&&fail){fail=false;throw Error('offline');}return {threads:options.cursor?[{id:'last',name:'末页对话',cwd:process.cwd()}]:Array.from({length:5},(_,i)=>({id:'first'+i,name:'首页对话'+i,cwd:process.cwd()})),nextCursor:options.cursor?null:'next'};}});
+  await h.login();h.push(h.message('list','/chats'));await until(()=>h.sent.length===1);
+  h.push(h.message('next','下一页'));await until(()=>h.sent.length===2);assert.match(h.sent[1].text,/查询失败/);
+  h.push(h.message('retry','/chats next'));await until(()=>h.sent.length===3);assert.match(h.sent[2].text,/末页对话/);assert.equal(h.runs.length,0);
+});
+test('number selection and next-page replies stay within the senders latest menu',async t=>{
+  const calls=[],base=fresh().clients[0];
+  const h=harness(t,fresh(),{listThreads:async(client,options)=>{calls.push({id:client.id,cursor:options.cursor});return {threads:[{id:'desktop',cwd:process.cwd(),name:'桌面对话'}],nextCursor:options.cursor?null:'next-page'};}});
+  await h.login();await h.gateway.action('save-clients',[base,{...base,id:'second',name:'第二 Codex',profile:'second'}]);
+  h.push(h.message('projects','/projects'),h.message('next','下一页'),h.message('clients','/clients'),h.message('client','2'));
+  await until(()=>h.saved.bindings[bindingKey('bot','owner')]?.clientId==='second');
+  assert.equal(calls.length,4);assert.equal(calls[2].cursor,'next-page');assert.equal(h.runs.length,0);
+  h.push(h.message('stranger','hi','stranger'));await until(()=>h.gateway.snapshot().pending.includes('stranger'));await h.gateway.action('allow-user','stranger');
+  h.push(h.message('other-choice','1','stranger'));await until(()=>h.sent.some(item=>item.sender==='stranger')||h.saved.outbox.some(item=>item.sender==='stranger'));
+  assert.equal(h.saved.bindings[bindingKey('bot','stranger')],undefined);assert.equal(h.runs.length,0);
+});
+test('unknown commands give a short next step; only help returns the command reference',async t=>{
+  const h=harness(t);await h.login();h.push(h.message('unknown','/unknown'));
+  await until(()=>h.sent.length);assert.match(h.sent[0].text,/没认出/);assert.match(h.sent[0].text,/\/projects/);assert.ok(!h.sent[0].text.includes('/allow'));
+  h.push(h.message('help','/help'));await until(()=>h.saved.outbox.some(item=>item.parts.join('').includes('/allow'))||h.sent.some(item=>item.text.includes('/allow')));assert.equal(h.runs.length,0);
+});
+test('task failures retain safe stages and RPC codes for replies, snapshots and status without rerunning',async t=>{
+  const h=harness(t);await h.login();h.push(h.message('task','修改项目代码'));await until(()=>h.runs.length===1);
+  h.runs[0].reject(new AgentError('RPC_REJECTED','turn/start',-32602));await until(()=>!h.gateway.snapshot().active);
+  const failure=h.gateway.snapshot().jobs[0].failure;assert.equal(failure.stage,'turn/start');assert.equal(failure.rpcCode,-32602);
+  assert.match(failure.message,/启动任务失败/);assert.deepEqual(h.saved.jobs.at(-1).failure,failure);
+  h.push(h.message('status','/status'));await until(()=>h.saved.outbox.some(item=>item.parts.join('').includes('最近任务：failed'))||h.sent.some(item=>item.text.includes('最近任务：failed')));
+  const replies=[...h.sent.map(item=>item.text),...h.saved.outbox.flatMap(item=>item.parts)].join('\n');assert.match(replies,/RPC -32602/);assert.equal(h.runs.length,1);
+});
+test('unknown task errors cannot expose arbitrary exception text in diagnostics or messages',async t=>{
+  const h=harness(t);await h.login();h.push(h.message('task','检查'));await until(()=>h.runs.length===1);
+  h.runs[0].reject(Error('Bearer private-api-key https://private.example'));await until(()=>!h.gateway.snapshot().active);
+  const report=JSON.stringify({snapshot:h.gateway.snapshot(),saved:h.saved,sent:h.sent});assert.ok(!report.includes('private-api-key'));assert.ok(!report.includes('private.example'));
+  assert.equal(h.gateway.snapshot().jobs[0].failure.code,'UNKNOWN');
+});
+
+
+test('numbered chat pagination accepts sizes, retains them, resets and guards invalid navigation',async t=>{
+  const calls=[],threads=Array.from({length:30},(_,i)=>({id:'t'+i,cwd:process.cwd(),name:'会话'+i}));
+  const h=harness(t,undefined,{listThreads:async(_client,o)=>{calls.push(o);const start=Number(o.cursor||0),end=start+o.limit;return {threads:threads.slice(start,end),nextCursor:end<threads.length?String(end):null};},readThread:async(_client,id)=>threads.find(x=>x.id===id)});
+  await h.login();
+  async function send(text){const n=h.sent.length;h.push(h.message('page-'+Math.random(),text));await until(()=>h.sent.length>n);return h.sent.at(-1).text;}
+  assert.match(await send('/chats'),/\| 0 \| 下一页 \| 当前每页 5 条 \|/);
+  let page=await send('0 10');assert.match(page,/第 2 页.*每页 10 条/);assert.match(page,/\| 1 \| 会话5 \|/);assert.match(page,/\| 10 \| 会话14 \|/);
+  page=await send('0');assert.match(page,/第 3 页.*每页 10 条/);assert.match(page,/会话24/);
+  page=await send('下一页 3');assert.match(page,/\| 1 \| 会话25 \|/);assert.match(page,/每页 3 条/);
+  page=await send('/chats next');assert.match(page,/会话29/);assert.ok(!page.includes('| 0 |'));
+  const count=calls.length;assert.match(await send('0'),/没有下一页/);assert.equal(calls.length,count);
+  for(const invalid of ['0 0','0 21','0 -1','0 1.5','0 abc','/chats 0','/chats next 21'])assert.match(await send(invalid),/1.*20/);
+  assert.equal(calls.length,count);assert.equal(h.runs.length,0);
+  page=await send('/chats 10');assert.match(page,/第 1 页.*每页 10 条/);assert.match(page,/会话0/);
+  page=await send('/chats');assert.match(page,/第 1 页.*每页 5 条/);
+  h.push(h.message('choose','1'),h.message('numeric-prompt','0 10'));await until(()=>h.runs.length===1);assert.equal(h.runs[0].options.text,'0 10');assert.equal(h.runs[0].options.session,'t0');
+});
+
+test('changing page sizes consumes multi-client buffers and original cursors exactly once',async t=>{
+  const base=fresh().clients[0],calls=[],seen=[];
+  const h=harness(t,fresh(),{listThreads:async(client,o)=>{calls.push([client.id,o.cursor,o.limit]);const all=Array.from({length:11},(_,i)=>({id:client.id+i,cwd:process.cwd(),name:client.id+'会话'+i})),start=Number(o.cursor||0),end=start+o.limit;return {threads:all.slice(start,end),nextCursor:end<all.length?String(end):null};}});
+  await h.login();await h.gateway.action('save-clients',[{...base,id:'first',name:'甲客户端'},{...base,id:'second',name:'乙客户端'}]);
+  for(const command of ['/chats','0 10','0 3','0','0']){
+    const n=h.sent.length;h.push(h.message('size-'+n,command));await until(()=>h.sent.length>n);
+    const rows=h.sent.at(-1).text.split('\n').filter(x=>/^\| [1-9]\d* \|/.test(x));seen.push(...rows.map(x=>x.split(' | ')[1]));
+  }
+  assert.equal(seen.length,22);assert.equal(new Set(seen).size,22);
+  for(const id of ['first','second'])for(let i=0;i<11;i++)assert.ok(seen.includes(id+'会话'+i));
+  assert.equal(new Set(calls.map(([id,cursor])=>id+':'+cursor)).size,calls.length);assert.equal(h.runs.length,0);
+});
+
+test('large chat pages split only at row boundaries with continuous numbering and a final navigation row',async t=>{
+  const base=fresh().clients[0],h=harness(t,fresh(),{listThreads:async()=>({threads:Array.from({length:20},(_,i)=>({id:'long'+i,cwd:'/tmp/'+'*'.repeat(40),name:i+'*'.repeat(40)})),nextCursor:'more'})});
+  await h.login();await h.gateway.action('save-clients',[{...base,name:'*'.repeat(60)}]);
+  h.push(h.message('large','/chats 20'));await until(()=>h.sent.length>1&&h.gateway.snapshot().outbox===0,1000);
+  const rows=[];for(const part of h.sent){assert.ok(Array.from(part.text).length<=1800);assert.match(part.text,/\| 编号 \| 对话 \| 项目 \/ 客户端 \|/);for(const line of part.text.split('\n').filter(x=>x.startsWith('|'))){assert.ok(line.endsWith(' |'));if(/^\| [1-9]\d* \|/.test(line))rows.push(Number(line.split(' | ')[0].slice(2)));}}
+  assert.deepEqual(rows,Array.from({length:20},(_,i)=>i+1));assert.equal(h.sent.filter(x=>x.text.includes('| 0 |')).length,1);assert.match(h.sent.at(-1).text,/\| 0 \| 下一页/);assert.equal(h.runs.length,0);
+});
+
+test('failed numbered pagination keeps the current selection and retries its cursor and requested size',async t=>{
+  let fail=true;const calls=[],first=Array.from({length:5},(_,i)=>({id:'old'+i,name:'旧会话'+i,cwd:process.cwd()}));
+  const h=harness(t,fresh(),{listThreads:async(_client,o)=>{calls.push([o.cursor,o.limit]);if(o.cursor&&fail){fail=false;throw Error('offline');}return {threads:o.cursor?[{id:'last',name:'末页会话',cwd:process.cwd()}]:first,nextCursor:o.cursor?null:'cursor-5'};},readThread:async(_client,id)=>first.find(x=>x.id===id)});
+  await h.login();h.push(h.message('first','/chats'));await until(()=>h.sent.length===1);
+  h.push(h.message('fail','0 10'));await until(()=>h.sent.length===2);assert.match(h.sent[1].text,/查询失败/);
+  h.push(h.message('retry','0'));await until(()=>h.sent.length===3);assert.match(h.sent[2].text,/第 2 页.*每页 10 条/);assert.match(h.sent[2].text,/末页会话/);assert.deepEqual(calls,[[null,5],['cursor-5',10],['cursor-5',10]]);assert.equal(h.runs.length,0);
+});
+
+
+test('a failed chat query can retry from the start and never replaces the last successful number selection',async t=>{
+  let fail=true,failNext=true;const calls=[],threads=Array.from({length:5},(_,i)=>({id:'valid'+i,name:'会话'+i,cwd:process.cwd()}));
+  const h=harness(t,fresh(),{listThreads:async(_client,o)=>{calls.push(o.cursor);if(fail){fail=false;throw Error('offline');}if(o.cursor&&failNext){failNext=false;throw Error('offline-next');}return {threads,nextCursor:'next'};},readThread:async(_client,id)=>threads.find(x=>x.id===id)});
+  await h.login();h.push(h.message('fail-first','/chats'));await until(()=>h.sent.length===1);assert.match(h.sent[0].text,/查询失败/);
+  h.push(h.message('retry-first','0'));await until(()=>h.sent.length===2);assert.match(h.sent[1].text,/第 1 页/);
+  h.push(h.message('fail-next','0'));await until(()=>h.sent.length===3);assert.match(h.sent[2].text,/查询失败/);
+  h.push(h.message('choose-previous','3'),h.message('task','test'));await until(()=>h.runs.length===1);assert.equal(h.runs[0].options.session,'valid2');assert.deepEqual(calls,[null,null,'next']);
+});
+
+test('empty filtered pages continue to the next cursor, with bounded requests for an empty source',async t=>{
+  let mode='filtered';const calls=[];
+  const h=harness(t,fresh(),{listThreads:async(_client,o)=>{calls.push(o.cursor);return mode==='filtered'?{threads:o.cursor?[{id:'visible',name:'可见对话',cwd:process.cwd()}]:[],nextCursor:o.cursor?null:'filtered'}:{threads:[],nextCursor:String(calls.length)};}});
+  await h.login();h.push(h.message('filtered','/chats'));await until(()=>h.sent.length===1);assert.match(h.sent[0].text,/可见对话/);assert.deepEqual(calls,[null,'filtered']);
+  mode='empty';h.push(h.message('bounded','/chats'));await until(()=>h.sent.length===2);assert.equal(calls.length,22);assert.match(h.sent[1].text,/回复 0 继续/);assert.equal(h.runs.length,0);
+});
+
+test('zero navigation never executes in another menu and chat menus remain isolated per contact',async t=>{
+  const h=harness(t,undefined,{listThreads:async()=>({threads:[{id:'one',name:'桌面对话',cwd:process.cwd()}],nextCursor:null})});
+  await h.login();h.push(h.message('clients','/clients'),h.message('zero','0 10'));await until(()=>h.sent.length===2);assert.match(h.sent[1].text,/对话表格/);assert.equal(h.runs.length,0);
+  h.push(h.message('chats','/chats'),h.message('stranger','hi','stranger'));await until(()=>h.gateway.snapshot().pending.includes('stranger'));await h.gateway.action('allow-user','stranger');
+  h.push(h.message('other-zero','0','stranger'));await until(()=>h.sent.some(x=>x.sender==='stranger')||h.saved.outbox.some(x=>x.sender==='stranger'));assert.equal(h.saved.bindings[bindingKey('bot','stranger')],undefined);assert.equal(h.runs.length,0);
+});
+
+
+test('explicit chats next reopens the chat menu so zero retries cannot become model prompts',async t=>{
+  let fail=true;const threads=Array.from({length:5},(_,i)=>({id:'first'+i,name:'会话'+i,cwd:process.cwd()}));
+  const h=harness(t,fresh(),{listThreads:async(_client,o)=>{if(o.cursor&&fail){fail=false;throw Error('offline');}return {threads:o.cursor?[{id:'last',name:'最终对话',cwd:process.cwd()}]:threads,nextCursor:o.cursor?null:'next'};},readThread:async(_client,id)=>threads.find(x=>x.id===id)});
+  await h.login();h.push(h.message('list','/chats'),h.message('select','1'),h.message('fail','/chats next'));await until(()=>h.sent.length===3);assert.match(h.sent[2].text,/查询失败/);
+  h.push(h.message('retry','0'));await until(()=>h.sent.length===4);assert.match(h.sent[3].text,/最终对话/);assert.equal(h.runs.length,0);
+});

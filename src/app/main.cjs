@@ -1,5 +1,5 @@
 'use strict';
-const { app, ipcMain, Notification, shell, clipboard } = require('electron');
+const { app, ipcMain, Notification, shell, clipboard, net, safeStorage, dialog } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
@@ -15,13 +15,17 @@ const {createWindows}=require('./windows.cjs');
 const {createCursorChatOpener}=require('../clients/cursor-chat.cjs');
 const {readClientPresence}=require('../clients/presence.cjs');
 const {createCodexRuntime}=require('../clients/codex-runtime.cjs');
+const {createWechatApi}=require('../channels/wechat-api.cjs');
+const {createWechatStore}=require('../channels/wechat-store.cjs');
+const {createWechatGateway}=require('../channels/wechat-gateway.cjs');
+const QRCode=require('qrcode');
 
 const dataDir = dataDirectory();
 fs.mkdirSync(dataDir, { recursive: true });
 app.setPath('userData', dataDir);
 app.setName('鲸鱼娘');
 if (!app.requestSingleInstanceLock()) { app.quit(); } else {
-  let bridge;
+  let bridge,wechat;
   let eventQueue=Promise.resolve();
   const cursorState=process.env.WHALE_CURSOR_STATE_DB||path.join(os.homedir(),'Library','Application Support','Cursor','User','globalStorage','state.vscdb');
   const cursorChats=createCursorChatOpener({stateFile:cursorState,openExternal:url=>shell.openExternal(url)});
@@ -86,7 +90,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   function snapshot() {
     // 两个窗口共享同一份主进程状态，避免小屋和悬浮桌宠各自计时、各自累计成长。
     const tasks = activity.snapshot();
-    return { hookAdapters:hooks.adapters,hookAvailability:hooks.availability,sourceStatus,codexApprovalSync:codexRuntime.snapshot(),clientRunning:{...clientRunning},completionExpanded, busyExpanded, reminderView, settings:hooks.settings, nurture: nurture.snapshot(), activity: tasks, ...behavior.snapshot(), bridge: Boolean(bridge), bridgeError, reminderError };
+    return { wechat:wechat?.snapshot()||null,hookAdapters:hooks.adapters,hookAvailability:hooks.availability,sourceStatus,codexApprovalSync:codexRuntime.snapshot(),clientRunning:{...clientRunning},completionExpanded, busyExpanded, reminderView, settings:hooks.settings, nurture: nurture.snapshot(), activity: tasks, ...behavior.snapshot(), bridge: Boolean(bridge), bridgeError, reminderError };
   }
   function canObserveCodexApproval() {
     return hooks.settings.sources.codex&&hooks.settings.events.codex?.PermissionRequest!==false&&clientRunning.codex===true&&
@@ -190,13 +194,27 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     return snapshot();
   }
   ipcMain.handle('action', (_event, action, value) => performAction(action, value));
-  app.on('before-quit', () => { codexRuntime.close();bridge?.close(); titles.close();cursorTitles.close(); });
+  ipcMain.handle('wechat', async(event,name,value)=>{
+    if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋配置微信');
+    if(!wechat)throw new Error('微信接入正在初始化');
+    if(name==='pick-directory') {
+      const result=await dialog.showOpenDialog({properties:['openDirectory']});
+      return {path:result.canceled?'':result.filePaths[0]};
+    }
+    try{return {value:await wechat.action(name,value)};}
+    catch(error){return {error:error.message};}
+  });
+  app.on('before-quit', () => { wechat?.close();codexRuntime.close();bridge?.close(); titles.close();cursorTitles.close(); });
   app.whenReady().then(async () => {
     // 先确认客户端运行状态，再过滤临时会话、同步已读，避免清掉退出时暂存的提醒。
     await refreshClients();
     activity.reconcile(titles.readState());
     if(savedReminders)saveReminders();
     windows.start();
+    wechat=createWechatGateway({store:createWechatStore({dataDir,safeStorage}),
+      api:createWechatApi({fetchImpl:(url,options)=>net.fetch(url,options)}),
+      makeQr:text=>QRCode.toDataURL(text,{width:256,margin:2,errorCorrectionLevel:'M'}),onChange:broadcast});
+    wechat.start();
     for(const source of SOURCES)void hooks.refresh(source);
     try {
       const acceptEvent = event => {

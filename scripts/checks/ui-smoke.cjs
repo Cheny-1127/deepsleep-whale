@@ -37,7 +37,7 @@ let app;
 
   await panel.waitForSelector('#satiety-value');
   await panel.waitForFunction(() => document.querySelector('#connection-status').textContent === '等待首次事件');
-  assert.equal(await panel.locator('select, canvas').count(),0);
+  assert.equal(await panel.locator('#home-view select, #home-view canvas').count(),0);
   const settings=await panel.evaluate(async()=>(await window.whale.snapshot()).settings);
   assert.equal(settings.sound,false);
   assert.equal(settings.notifications,true);
@@ -155,6 +155,7 @@ let app;
   send('Stop','smoke-session-b','turn-b');
   send('Stop','smoke-session-a','turn-a');
   await panel.waitForFunction(() => document.querySelector('#growth-value').textContent === '2 次回复');
+  await panel.locator('#tab-daily').click();
   await panel.locator('[data-demo="idle"]').click();
   fs.mkdirSync(path.join(root,'out'),{recursive:true});
   await panel.screenshot({ path:path.join(root,'out/control-room.png'), fullPage:true });
@@ -166,7 +167,8 @@ let app;
   await pet.mouse.up();
   const afterDrag=await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/pet.html')).getBounds());
   assert.ok(afterDrag.x<beforeDrag.x-10,'dragging the character moves the window');
-  assert.equal(afterDrag.width,220); assert.equal(afterDrag.height,320);
+  // 前面的完成事件会展开提醒；拖动应保持当前尺寸，不应强制收起提醒。
+  assert.equal(afterDrag.width,beforeDrag.width); assert.equal(afterDrag.height,beforeDrag.height);
   await pet.screenshot({ path:path.join(root,'out/floating-pet.png'), omitBackground:true });
   const dimensions = await panel.evaluate(() => ({ scroll: document.documentElement.scrollHeight, height:innerHeight }));
   assert.deepEqual(errors,[]);
