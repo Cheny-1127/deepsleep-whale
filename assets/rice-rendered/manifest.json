@@ -1,0 +1,266 @@
+{
+  "angry": {
+    "frames": 50,
+    "durationMs": 4000,
+    "sourceSize": [
+      300,
+      168
+    ],
+    "contentBounds": [
+      89,
+      0,
+      300,
+      168
+    ],
+    "scale": 1.6,
+    "anchor": [
+      147,
+      157
+    ],
+    "target": [
+      135,
+      280
+    ],
+    "removedBorderPixels": 17
+  },
+  "approval": {
+    "frames": 50,
+    "durationMs": 4000,
+    "sourceSize": [
+      300,
+      169
+    ],
+    "contentBounds": [
+      86,
+      3,
+      296,
+      166
+    ],
+    "scale": 1.6,
+    "anchor": [
+      144,
+      155
+    ],
+    "target": [
+      135,
+      280
+    ],
+    "removedBorderPixels": 955
+  },
+  "coding": {
+    "frames": 61,
+    "durationMs": 4880,
+    "sourceSize": [
+      300,
+      300
+    ],
+    "contentBounds": [
+      10,
+      42,
+      300,
+      263
+    ],
+    "scale": 0.96,
+    "anchor": [
+      154,
+      260
+    ],
+    "target": [
+      150,
+      280
+    ],
+    "removedBorderPixels": 0
+  },
+  "error": {
+    "frames": 50,
+    "durationMs": 4000,
+    "sourceSize": [
+      300,
+      169
+    ],
+    "contentBounds": [
+      89,
+      4,
+      223,
+      159
+    ],
+    "scale": 1.6,
+    "anchor": [
+      144,
+      155
+    ],
+    "target": [
+      135,
+      280
+    ],
+    "removedBorderPixels": 0
+  },
+  "happy": {
+    "frames": 50,
+    "durationMs": 4000,
+    "sourceSize": [
+      300,
+      169
+    ],
+    "contentBounds": [
+      86,
+      1,
+      294,
+      166
+    ],
+    "scale": 1.6,
+    "anchor": [
+      143,
+      155
+    ],
+    "target": [
+      135,
+      280
+    ],
+    "removedBorderPixels": 882
+  },
+  "idle": {
+    "frames": 50,
+    "durationMs": 4000,
+    "sourceSize": [
+      300,
+      169
+    ],
+    "contentBounds": [
+      81,
+      6,
+      241,
+      162
+    ],
+    "scale": 1.6,
+    "anchor": [
+      148,
+      160
+    ],
+    "target": [
+      135,
+      280
+    ],
+    "removedBorderPixels": 0
+  },
+  "pat": {
+    "frames": 50,
+    "durationMs": 4000,
+    "sourceSize": [
+      300,
+      169
+    ],
+    "contentBounds": [
+      86,
+      4,
+      294,
+      166
+    ],
+    "scale": 1.6,
+    "anchor": [
+      142,
+      155
+    ],
+    "target": [
+      135,
+      280
+    ],
+    "removedBorderPixels": 966
+  },
+  "question": {
+    "frames": 50,
+    "durationMs": 4000,
+    "sourceSize": [
+      300,
+      169
+    ],
+    "contentBounds": [
+      86,
+      4,
+      294,
+      166
+    ],
+    "scale": 1.6,
+    "anchor": [
+      146,
+      155
+    ],
+    "target": [
+      135,
+      280
+    ],
+    "removedBorderPixels": 1275
+  },
+  "sleep": {
+    "frames": 50,
+    "durationMs": 4000,
+    "sourceSize": [
+      300,
+      169
+    ],
+    "contentBounds": [
+      31,
+      2,
+      279,
+      160
+    ],
+    "scale": 1.1,
+    "anchor": [
+      155,
+      156
+    ],
+    "target": [
+      150,
+      280
+    ],
+    "removedBorderPixels": 0
+  },
+  "success": {
+    "frames": 61,
+    "durationMs": 4880,
+    "sourceSize": [
+      300,
+      300
+    ],
+    "contentBounds": [
+      24,
+      12,
+      300,
+      300
+    ],
+    "scale": 0.8,
+    "anchor": [
+      133,
+      294
+    ],
+    "target": [
+      135,
+      280
+    ],
+    "removedBorderPixels": 0
+  },
+  "thinking": {
+    "frames": 61,
+    "durationMs": 4880,
+    "sourceSize": [
+      300,
+      300
+    ],
+    "contentBounds": [
+      42,
+      20,
+      287,
+      278
+    ],
+    "scale": 1.05,
+    "anchor": [
+      130,
+      274
+    ],
+    "target": [
+      130,
+      280
+    ],
+    "removedBorderPixels": 0
+  }
+}

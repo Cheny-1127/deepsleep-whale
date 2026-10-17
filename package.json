@@ -1,0 +1,23 @@
+{
+  "name": "deepsleep-whale",
+  "version": "0.1.0",
+  "description": "鲸鱼娘独立桌宠与 Codex 本地事件提醒",
+  "license": "GPL-3.0-only",
+  "private": true,
+  "main": "src/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.cjs",
+    "check": "node scripts/checks/syntax.cjs",
+    "test:ui": "node scripts/checks/ui-smoke.cjs",
+    "test:hooks": "node scripts/checks/hooks-smoke.cjs",
+    "test:reminders": "node scripts/checks/reminder-smoke.cjs",
+    "test:presence": "node scripts/checks/client-presence-smoke.cjs",
+    "test:actions": "node scripts/checks/actions-smoke.cjs",
+    "test:approvals": "node scripts/checks/approval-smoke.cjs",
+    "hooks:config": "node scripts/hooks/codex-config.cjs",
+    "hooks:cursor-config": "node scripts/hooks/cursor-config.cjs",
+    "hooks:install": "node scripts/hooks/install.cjs"
+  },
+  "devDependencies": { "electron": "44.7.2" }
+}

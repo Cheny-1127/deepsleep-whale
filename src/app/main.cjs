@@ -1,0 +1,254 @@
+'use strict';
+const { app, ipcMain, Notification, shell, clipboard } = require('electron');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const { Activity } = require('../domain/activity.cjs');
+const { Behavior } = require('../domain/behavior.cjs');
+const SPECIAL_ACTIONS = require('../shared/special-actions.js');
+const { createTitleReader, createCursorTitleReader, chatUrl } = require('../clients/chat-metadata.cjs');
+const { startBridge, dataDirectory } = require('../hooks/bridge.cjs');
+const nurture = require('../../vendor/nurture.cjs');
+const {SOURCES,sourceOf,eventName}=require('../shared/hook-events.cjs');
+const {createHookSettings}=require('./hook-settings.cjs');
+const {createWindows}=require('./windows.cjs');
+const {createCursorChatOpener}=require('../clients/cursor-chat.cjs');
+const {readClientPresence}=require('../clients/presence.cjs');
+const {createCodexRuntime}=require('../clients/codex-runtime.cjs');
+
+const dataDir = dataDirectory();
+fs.mkdirSync(dataDir, { recursive: true });
+app.setPath('userData', dataDir);
+app.setName('鲸鱼娘');
+if (!app.requestSingleInstanceLock()) { app.quit(); } else {
+  let bridge;
+  let eventQueue=Promise.resolve();
+  const cursorState=process.env.WHALE_CURSOR_STATE_DB||path.join(os.homedir(),'Library','Application Support','Cursor','User','globalStorage','state.vscdb');
+  const cursorChats=createCursorChatOpener({stateFile:cursorState,openExternal:url=>shell.openExternal(url)});
+  let completionExpanded=false,busyExpanded=false,reminderView=null;
+  let bridgeError = '';
+  const behavior = new Behavior();
+  const hooks=createHookSettings({dataDir,cwd:path.resolve(__dirname,'../../..'),onChange:broadcast});
+  const sourceStatus=Object.fromEntries(SOURCES.map(id=>[id,{lastReceivedAt:null,lastAcceptedAt:null,ignored:0}]));
+  const titles=createTitleReader();
+  const cursorTitles=createCursorTitleReader();
+  const remindersFile=path.join(dataDir,'reminders.json');
+  let savedReminders,reminderError='';
+  try { savedReminders=JSON.parse(fs.readFileSync(remindersFile,'utf8')); } catch {}
+  const clientRunning={codex:null,cursor:null};
+  let clientCheck;
+  const activity = new Activity({sourceRunning:clientRunning,saved:savedReminders,resolveChat:id=>id.startsWith('cursor:')?cursorTitles.lookup(id):titles.lookup(id)});
+  const codexRuntime=createCodexRuntime({
+    onState:state=>{
+      // 和 Hook 使用同一队列；避免跨进程回调把旧审批状态写到新一轮。
+      eventQueue=eventQueue.then(()=>{
+        if(!canObserveCodexApproval())return;
+        if(activity.syncCodexApproval(state)){behavior.task(activity.snapshot());broadcast();}
+      }).catch(()=>{});
+    },
+    onReset:()=>{eventQueue=eventQueue.then(()=>activity.resetCodexApprovalObservations()).catch(()=>{});}
+  });
+  function saveReminders() {
+    try {
+      fs.writeFileSync(remindersFile+'.tmp',JSON.stringify(activity.exportState()),{mode:0o600});
+      fs.renameSync(remindersFile+'.tmp',remindersFile);
+      reminderError='';
+    } catch { reminderError='提醒暂时无法保存，退出桌宠后可能丢失。'; }
+  }
+  nurture.setSaveDir(dataDir);
+  nurture.load();
+
+  const windows=createWindows({snapshot,performAction,collapseReminders:()=>{
+    if(completionExpanded||busyExpanded) { completionExpanded=false;busyExpanded=false;broadcast(); }
+  }});
+  const {showPanel,showReminders}=windows;
+
+  // 客户端退出只隐藏提醒并清理实时任务，重新打开不会重放通知或成长。
+  function refreshClients() {
+    if(clientCheck)return clientCheck;
+    clientCheck=readClientPresence().then(result=>{
+      if(!result)return null; // 检测失败不是退出，保留上次有效状态。
+      let changed=false,closed=false;
+      for(const source of SOURCES) {
+        clientRunning[source]=result[source];
+        const update=activity.setSourceRunning(source,result[source]);
+        changed=update||changed;closed=(update&&!result[source])||closed;
+      }
+      if(changed) {
+        if(closed) {const tasks=activity.snapshot();behavior.task({...tasks,state:tasks.pending||tasks.working?tasks.state:'idle'});}
+        broadcast();
+      }
+      return result;
+    }).finally(()=>{clientCheck=null;});
+    return clientCheck;
+  }
+
+  function snapshot() {
+    // 两个窗口共享同一份主进程状态，避免小屋和悬浮桌宠各自计时、各自累计成长。
+    const tasks = activity.snapshot();
+    return { hookAdapters:hooks.adapters,hookAvailability:hooks.availability,sourceStatus,codexApprovalSync:codexRuntime.snapshot(),clientRunning:{...clientRunning},completionExpanded, busyExpanded, reminderView, settings:hooks.settings, nurture: nurture.snapshot(), activity: tasks, ...behavior.snapshot(), bridge: Boolean(bridge), bridgeError, reminderError };
+  }
+  function canObserveCodexApproval() {
+    return hooks.settings.sources.codex&&hooks.settings.events.codex?.PermissionRequest!==false&&clientRunning.codex===true&&
+      hooks.availability.codex.state==='checked'&&hooks.availability.codex.events.PermissionRequest?.available;
+  }
+  function broadcast() {
+    if (activity.snapshot().unread<=3) completionExpanded=false;
+    if (!activity.snapshot().sessions.some(item=>['thinking','working','approval'].includes(item.state))) busyExpanded=false;
+    const tasks=activity.snapshot();
+    codexRuntime.setSessions(canObserveCodexApproval()
+      ?tasks.sessions.filter(s=>!s.session_id.startsWith('cursor:')&&['working','thinking','approval'].includes(s.state)):[]);
+    if((reminderView==='pending'&&!tasks.pending)||(reminderView==='completed'&&!tasks.unread)||(reminderView==='busy'&&!tasks.working))reminderView=null;
+    windows.broadcast(snapshot());
+  }
+  async function openChat(sessionId,noticeId) {
+    // 跳转前重新确认客户端，避免点击旧提醒时把已经退出的应用重新唤起。
+    const known=activity.sessions.has(sessionId)||activity.notices.some(item=>item.session_id===sessionId);
+    const source=typeof sessionId==='string'&&sessionId.startsWith('cursor:')?'cursor':'codex';
+    if(!known)throw new Error('无法定位这个聊天');
+    const running=await refreshClients();
+    if(!running)throw new Error('暂时无法确认客户端是否运行，请稍后重试；提醒已保留。');
+    if(!running[source])throw new Error(`${source==='cursor'?'Cursor':'Codex'} 已退出，提醒暂时隐藏，重新打开后恢复。`);
+    if(sessionId?.startsWith('cursor:')) {
+      if(!known||cursorTitles.lookup(sessionId).kind!=='chat')throw new Error('无法定位这个 Cursor 聊天，可能已被删除。');
+      await cursorChats.open(sessionId);
+      if(activity.acknowledgeCursor(sessionId))saveReminders();
+    } else {
+      const url=known&&chatUrl(sessionId);
+      if(!url)throw new Error('无法定位这个 Codex 聊天');
+      await shell.openExternal(url);
+      if(activity.notices.some(item=>item.id===noticeId&&item.session_id===sessionId)) {
+        activity.markRead(noticeId);saveReminders();
+      }
+    }
+    broadcast();
+  }
+  ipcMain.handle('snapshot', () => snapshot());
+  // 小屋按钮和右键菜单共用入口，统一动作锁定、成长和窗口同步。
+  async function performAction(action, value) {
+    if (['feed','pat','touch','happy','angry'].includes(action) || Object.hasOwn(SPECIAL_ACTIONS, action)) {
+      if (behavior.interact(action)) {
+        if (action === 'feed') nurture.feed(); else if (!Object.hasOwn(SPECIAL_ACTIONS, action)) nurture.pat();
+      }
+    } else if (action === 'demo') {
+      // 演示只操作动画状态，不经过真实事件统计，也不增加工作成长值。
+      behavior.setCycle(false); behavior.showDemo(value);
+    } else if (action === 'cycle' && typeof value === 'boolean') {
+      behavior.setCycle(value);
+    } else if (action==='copy-hook-config') {
+      const adapter=hooks.adapters.find(item=>item.id===value);
+      if(!adapter)throw new Error('未知来源');
+      clipboard.writeText(adapter.config);
+    } else if (action==='refresh-hooks') {
+      if(!SOURCES.includes(value))throw new Error('未知来源');
+      await hooks.refresh(value);
+    } else if (action==='hook-source'||action==='hook-event') {
+      await hooks.update(value,action==='hook-event');
+      if(!value.enabled&&action==='hook-source') {
+        activity.pauseSource(value.source);
+        const tasks=activity.snapshot();
+        behavior.task({...tasks,state:tasks.pending||tasks.working?tasks.state:'idle'});
+      }
+    } else if (['sound', 'notifications'].includes(action) && typeof value === 'boolean') {
+      hooks.setPreference(action,value);
+    } else if (action === 'open-completion') {
+      const tasks=activity.snapshot();
+      const switching=(reminderView||(busyExpanded?'busy':tasks.pending?'pending':'completed'))!=='completed';
+      reminderView='completed';busyExpanded=false;
+      const count=tasks.notices.length;
+      if(switching) {completionExpanded=count>3;broadcast();return snapshot();}
+      if(count>1) { completionExpanded=count>3?!completionExpanded:false;broadcast();return snapshot(); }
+      // 点击时读取最新提醒，避免界面刚更新时跳到旧对话；仅在跳转成功后标记对应条目。
+      const latest=activity.snapshot().notices[0];
+      if(latest) {
+        try { await openChat(latest.session_id,latest.id); }
+        catch(error) { reminderError=error.message;showReminders(); }
+      } else showReminders();
+    } else if(action==='open-pending') {
+      reminderView='pending';completionExpanded=false;busyExpanded=false;
+    } else if (action === 'open-busy') {
+      const tasks=activity.snapshot();
+      const switching=(reminderView||(busyExpanded?'busy':tasks.pending?'pending':'completed'))!=='busy';
+      reminderView='busy';completionExpanded=false;
+      if(switching) {busyExpanded=true;broadcast();return snapshot();}
+      const busy=activity.snapshot().sessions.filter(item=>['thinking','working'].includes(item.state));
+      if(busy.length>1) busyExpanded=!busyExpanded;
+      else if(busy.length===1) {
+        busyExpanded=false;
+        try { await openChat(busy[0].session_id); }
+        catch(error) {reminderError=error.message;showReminders();}
+      } else busyExpanded=false;
+    } else if (action === 'close-completions') { completionExpanded=false;busyExpanded=false;reminderView=null; }
+    else if (action === 'reminders') showReminders();
+    else if (action === 'read-notice' && typeof value === 'string') { activity.markRead(value);saveReminders(); }
+    else if (action === 'open-chat') { await openChat(value?.sessionId,value?.noticeId); }
+    else if (action === 'panel') showPanel();
+    else if (action === 'show-pet') windows.showPet();
+    else if (action === 'hide-pet') windows.hidePet();
+    else if (action === 'quit') app.quit();
+    broadcast();
+    return snapshot();
+  }
+  ipcMain.handle('action', (_event, action, value) => performAction(action, value));
+  app.on('before-quit', () => { codexRuntime.close();bridge?.close(); titles.close();cursorTitles.close(); });
+  app.whenReady().then(async () => {
+    // 先确认客户端运行状态，再过滤临时会话、同步已读，避免清掉退出时暂存的提醒。
+    await refreshClients();
+    activity.reconcile(titles.readState());
+    if(savedReminders)saveReminders();
+    windows.start();
+    for(const source of SOURCES)void hooks.refresh(source);
+    try {
+      const acceptEvent = event => {
+        // 先校验和去重，再更新动作、成长和通知，防止重复 Stop 产生多次副作用。
+        const source=sourceOf(event),status=sourceStatus[source];
+        status.lastReceivedAt=Date.now();
+        if(!hooks.settings.sources[source]) {status.ignored++;broadcast();return;}
+        if(hooks.settings.events[source]?.[eventName(event)]===false||hooks.availability[source].state!=='checked'||!hooks.availability[source].events[eventName(event)]?.available) {
+          status.ignored++;
+          // 结束和工具返回仍清理跟踪，避免关闭提醒后卡在工作中；不产生完成、成长或通知。
+          if(['Stop','Interrupt','SessionEnd','PostToolUse'].includes(event.hook_event_name)) {
+            activity.pauseSession(event.session_id,event.turn_id);
+            const tasks=activity.snapshot();behavior.task({...tasks,state:tasks.pending||tasks.working?tasks.state:'idle'});
+          }
+          broadcast();return;
+        }
+        const accepted = activity.accept(event);
+        if (!accepted) return;
+        status.lastAcceptedAt=Date.now();
+        if(['Stop','UserPromptSubmit'].includes(accepted.hook_event_name))saveReminders();
+        if(clientRunning[source]===false) {broadcast();return;}
+        behavior.task(activity.snapshot());
+        // completed 仅代表一轮回复结束，不代表任务整体成功或测试通过。
+        if (accepted.state === 'completed') nurture.workCompleted();
+        if (accepted.state==='completed' || accepted.hook_event_name==='PermissionRequest') {
+          const tasks=activity.snapshot();
+          const remaining=tasks.working+tasks.pending;
+          const text = accepted.state === 'completed'
+            ? `「${accepted.title}」本轮已结束 · ${remaining ? `还有 ${remaining} 个聊天在进行` : '当前没有其他活动聊天'}${tasks.pending ? `（${tasks.pending} 个在检查权限）` : ''}`
+            : `「${accepted.title}」有操作进入权限检查，可能需要你确认。`;
+          if (hooks.settings.notifications && Notification.isSupported()) {
+            const notice = new Notification({ title: `deepsleep · ${source==='cursor'?'Cursor':'Codex'} 提醒`, body: text, silent: !hooks.settings.sound });
+            const completionId=accepted.state==='completed'?tasks.notices[0]?.id:undefined;
+            notice.on('click', () => openChat(accepted.session_id,completionId).catch(error=>{reminderError=error.message;showReminders();broadcast();})); notice.show();
+          }
+          if (hooks.settings.sound) windows.chime();
+        }
+        broadcast();
+      };
+      bridge = await startBridge(dataDir, event => {
+        // 排队检测并接收，避免异步进程查询改变 Hook 的到达顺序。
+        eventQueue=eventQueue.then(async()=>{await refreshClients();acceptEvent(event);}).catch(()=>{bridgeError='事件处理失败，请重试。';broadcast();});
+      },packet=>cursorChats.receive(packet));
+    } catch (error) { bridgeError = error.message; }
+    broadcast();
+    setInterval(broadcast, 200);
+    setInterval(()=>void refreshClients(),1000);
+    setInterval(()=>{
+      // 用户在 Cursor 里打开已完成对话时没有新提示词；选中该对话就清掉它的完成提醒。
+      const viewed=clientRunning.cursor===true&&activity.acknowledgeCursor(cursorChats.selectedSession());
+      if(viewed||activity.reconcile(titles.readState())) { saveReminders();broadcast(); }
+    },1000);
+    setInterval(() => { nurture.tick(10); broadcast(); }, 10 * 60 * 1000);
+  });
+}
