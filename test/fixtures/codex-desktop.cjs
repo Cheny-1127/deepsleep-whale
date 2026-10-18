@@ -28,10 +28,26 @@ async function desktopFixture({home,cwd=home,session='desktop-fixture',busy=fals
         if(m.params.turnStart.request.input[0].text==='desktop-rejected'){socket.write(frame({type:'response',requestId:m.requestId,resultType:'error',error:'private-api-key https://private.example/rejected'}));continue;}
         const request=m.params.turnStart.request;
         state.threadRuntimeStatus.type='active';state.turnHistory.history.entitiesByKey.current={turnId:'forwarded-turn',status:'inProgress',params:{clientUserMessageId:request.clientUserMessageId},items:[]};snapshot();
-        if(autoComplete)complete();
+        if(autoComplete&&request.input[0].text==='desktop-question') {
+          state.requests=[{id:'fixture-question',method:'item/tool/requestUserInput',params:{threadId:session,turnId:'forwarded-turn',questions:[{id:'mode',header:'方式',question:'请选择处理方式',options:[{label:'分析'},{label:'修复'}]}]}}];snapshot();
+        }else if(autoComplete&&request.input[0].text==='desktop-async-question') {
+          state.turnHistory.history.entitiesByKey.current.items=[{id:'fixture-async-question',type:'agentMessage',phase:'commentary',text:'异步问题',questions:[{title:'还有哪些要求？',options:['保持配置','允许调整']}]}];snapshot();
+        }else if(autoComplete)complete();
         respond(m,{result:{turn:{id:'forwarded-turn',status:'inProgress'}}});
       } else if(m.type==='request'&&m.method==='thread-follower-interrupt-turn')respond(m,{ok:true,interruptedTurnId:m.params.expectedTurnId});
-      else if(m.type==='request'&&['thread-follower-command-approval-decision','thread-follower-file-approval-decision'].includes(m.method))respond(m,{ok:true});
+      else if(m.type==='request'&&['thread-follower-command-approval-decision','thread-follower-file-approval-decision','thread-follower-submit-user-input','thread-follower-steer-turn'].includes(m.method)){
+        if(m.method==='thread-follower-steer-turn'){
+          // 桌面实现会直接读取 restoreMessage.cwd/context，不能以无条件成功掩盖缺参。
+          const restore=m.params.restoreMessage;
+          if(!restore?.context||typeof restore.text!=='string'||!Array.isArray(restore.context.workspaceRoots)){
+            socket.write(frame({type:'response',requestId:m.requestId,method:m.method,handledByClientId:'desktop-owner',resultType:'error',error:'missing-restore-message'}));continue;
+          }
+          state.turnHistory.history.entitiesByKey.current.items.push({type:'steeringUserMessage',id:restore.id,status:'accepted',input:m.params.input});snapshot();
+        }
+        respond(m,{ok:true});
+        if(autoComplete&&m.method==='thread-follower-submit-user-input'){state.requests=[];complete('桌面问答已继续：'+m.params.response.answers.mode.answers[0]);}
+        if(autoComplete&&m.method==='thread-follower-steer-turn')complete('桌面异步问答已继续');
+      }
     }});
   });server.listen(socketPath);await once(server,'listening');fs.chmodSync(socketPath,0o600);
   return {socketPath,wire,connections,snapshot,patch,broadcast,complete,idle,get state(){return state;},

@@ -49,6 +49,31 @@ test('delivery failure retains stable IDs, retry sends results without repeating
   h.sendError=null;await h.gateway.action('retry');await until(()=>h.gateway.snapshot().outbox===0);
   assert.equal(h.runs.length,1);assert.equal(h.sent[0].id,id+'-0');assert.equal(h.sent.at(-1).text,'完成结果');assert.equal(h.sent.at(-1).context,'ctx-1');
 });
+test('long completed results retain all content including the tail beyond 60000 characters',async t=>{
+  const h=harness(t);h.sendError=Error('offline');await h.login();
+  h.push(h.message('long-result','检查完整结果'));await until(()=>h.runs.length===1);
+  const result='完整结果开始\n'+'甲😀乙\n'.repeat(15000)+'\n【完整结果结束】';
+  assert.ok(result.length>60000);h.runs[0].resolve(result);
+  await until(()=>h.gateway.snapshot().jobs[0].state==='completed');
+  const delivery=h.saved.outbox.at(-1);
+  delivery.parts.forEach((part,index)=>assert.ok(part.startsWith(`【结果 ${index+1}/${delivery.parts.length}】\n\n`)));
+  const reassembled=delivery.parts.map(part=>part.replace(/^【结果 \d+\/\d+】\n\n/,'')).join('');
+  assert.equal(reassembled.length,result.length);assert.ok(reassembled===result,'reassembling every numbered part must preserve the full original result');
+  assert.ok(delivery.parts.every(part=>Array.from(part).length<=1800));
+  assert.equal(h.runs.length,1);
+});
+test('restart resumes a partially delivered result with the same part IDs and no agent replay',async t=>{
+  const initial=fresh();initial.enabled=true;initial.account={id:'bot',token:'test',owner:'owner'};initial.allowed=['owner'];
+  initial.outbox=[{id:'long-result',sender:'owner',parts:['第一段','第二段','【完整结束】'],index:0}];
+  const h=harness(t,initial),send=h.api.send,attempted=[];
+  h.api.send=async(...args)=>{attempted.push(args[4]);if(args[4]==='long-result-1')throw Error('offline');return send(...args);};
+  h.gateway.start();await until(()=>h.gateway.snapshot().error);
+  assert.deepEqual(attempted,['long-result-0','long-result-1']);assert.equal(h.saved.outbox[0].index,1);
+  h.gateway.close();const reboot=harness(t,h.saved);reboot.gateway.start();await until(()=>reboot.gateway.snapshot().outbox===0);
+  assert.deepEqual(reboot.sent.map(item=>item.id),['long-result-1','long-result-2']);
+  assert.deepEqual([...h.sent,...reboot.sent].map(item=>item.text),initial.outbox[0].parts);
+  assert.equal(reboot.runs.length,0);
+});
 test('approval belongs to the initiating sender and is single use; stop only cancels owned work',async t=>{
   const h=harness(t);await h.login();h.push(h.message('1','排查'));await until(()=>h.runs.length===1);
   const decision=h.runs[0].options.onApproval({kind:'command',detail:'test command',cwd:process.cwd()});
@@ -58,6 +83,59 @@ test('approval belongs to the initiating sender and is single use; stop only can
   h.push(h.message('2','/allow '+token,'stranger'));await until(()=>h.gateway.snapshot().pending.includes('stranger'));assert.equal(h.gateway.snapshot().jobs[0].state,'approval');
   h.push(h.message('3','/allow '+token));assert.equal(await decision,true);
   h.push(h.message('4','/stop'));await until(()=>h.runs[0].cancelled);assert.equal(h.runs.length,1);
+});
+test('question answers select labels or preserve free text and continue the original job',async t=>{
+  const h=harness(t);await h.login();h.push(h.message('task','需要问答'));await until(()=>h.runs.length===1);
+  assert.equal(typeof h.runs[0].options.onUserInput,'function');
+  const decision=h.runs[0].options.onUserInput({questions:[
+    {id:'mode',header:'处理方式',question:'如何处理？',options:[{label:'仅分析',description:'查看原因'},{label:'修改代码',description:'直接修复'}]},
+    {id:'notes',header:'补充',question:'还有哪些要求？',options:[]}
+  ]});
+  await until(()=>h.saved.jobs[0].state==='question');
+  const first=[...h.sent.map(x=>x.text),...h.saved.outbox.flatMap(x=>x.parts)].find(x=>x.includes('如何处理？'));
+  const token=first.match(/\/answer ([\w-]+)/)[1];
+  const choice=h.message('answer-one','2');h.push(choice,choice);
+  await until(()=>[...h.sent.map(x=>x.text),...h.saved.outbox.flatMap(x=>x.parts)].some(x=>x.includes('还有哪些要求？')));
+  h.push(h.message('stale','/answer '+token+' 1'));await tick();assert.equal(h.runs.length,1);
+  const second=[...h.sent.map(x=>x.text),...h.saved.outbox.flatMap(x=>x.parts)].find(x=>x.includes('还有哪些要求？')).match(/\/answer ([\w-]+)/)[1];
+  h.push(h.message('answer-two','/answer '+second+' 保持已有配置，路径 /tmp/example  不要改\n保留换行'));
+  assert.deepEqual(await decision,{answers:{mode:{answers:['修改代码']},notes:{answers:['保持已有配置，路径 /tmp/example  不要改\n保留换行']}}});
+  assert.equal(h.runs.length,1);assert.equal(h.saved.jobs[0].state,'running');
+  h.runs[0].resolve('依据答案完成');await until(()=>h.saved.jobs[0].state==='completed');
+});
+test('pending questions take precedence over menus and only their sender can answer',async t=>{
+  const h=harness(t);await h.login();h.push(h.message('task','排查'));await until(()=>h.runs.length===1);
+  assert.equal(typeof h.runs[0].options.onUserInput,'function');
+  let answered=false;const answer=h.runs[0].options.onUserInput({questions:[{id:'q',question:'是否继续？',options:[{label:'继续'},{label:'停止'}]}]}).then(value=>{answered=true;return value;});
+  h.push(h.message('menu','/clients'),h.message('stranger','1','stranger'));await until(()=>h.saved.pending.includes('stranger'));assert.equal(answered,false);
+  h.push(h.message('invalid','9'));await tick();assert.equal(answered,false);
+  h.push(h.message('answer','1'));assert.deepEqual(await answer,{answers:{q:{answers:['继续']}}});assert.equal(h.runs.length,1);
+});
+test('withdrawn questions cannot accept old answers and their unsent prompts are removed',async t=>{
+  const h=harness(t);h.sendError=Error('offline');await h.login();h.push(h.message('task','排查'));await until(()=>h.runs.length===1);
+  assert.equal(typeof h.runs[0].options.onUserInput,'function');
+  const controller=new AbortController(),answer=h.runs[0].options.onUserInput({questions:[{id:'q',question:'桌面问题',options:[]}],signal:controller.signal});
+  await until(()=>h.saved.outbox.some(x=>x.questionId));const token=h.saved.outbox.find(x=>x.questionId).questionId;
+  controller.abort();assert.equal(await answer,null);assert.equal(h.saved.jobs[0].state,'running');assert.ok(!h.saved.outbox.some(x=>x.questionId));
+  h.push(h.message('stale','/answer '+token+' 文字'));await tick();assert.equal(h.runs.length,1);
+});
+test('resolving a concurrent approval preserves the waiting question',async t=>{
+  const h=harness(t);await h.login();h.push(h.message('task','排查'));await until(()=>h.runs.length===1);
+  const answer=h.runs[0].options.onUserInput({questions:[{id:'q',question:'如何处理？',options:[]}]});
+  const approval=h.runs[0].options.onApproval({kind:'command',detail:'pwd',cwd:process.cwd()});
+  await until(()=>h.saved.jobs[0].state==='approval');
+  const notice=[...h.sent.map(x=>x.text),...h.saved.outbox.flatMap(x=>x.parts)].find(x=>x.includes('/allow '));
+  h.push(h.message('deny','/deny '+notice.match(/\/allow ([\w-]+)/)[1]));assert.equal(await approval,false);
+  assert.equal(h.saved.jobs[0].state,'question');
+  h.push(h.message('answer','仅分析'));assert.deepEqual(await answer,{answers:{q:{answers:['仅分析']}}});assert.equal(h.runs.length,1);
+});
+test('question timeout stops the owned task and restart discards expired question prompts',async t=>{
+  const h=harness(t,undefined,{questionTimeoutMs:25});await h.login();h.push(h.message('task','排查'));await until(()=>h.runs.length===1);
+  assert.equal(typeof h.runs[0].options.onUserInput,'function');
+  const answer=h.runs[0].options.onUserInput({questions:[{id:'q',question:'等待超时',options:[]}]});
+  assert.equal(await answer,null);await until(()=>h.runs[0].cancelled);assert.equal(h.runs.length,1);
+  const state=fresh();state.jobs=[{id:'old',state:'question'}];state.outbox=[{id:'stale',sender:'owner',parts:['旧问题'],index:0,questionId:'old-1'}];
+  const reboot=harness(t,state);reboot.gateway.start();assert.equal(reboot.gateway.snapshot().jobs[0].state,'interrupted');assert.equal(reboot.gateway.snapshot().outbox,0);
 });
 test('expired login and storage failure stop execution instead of reconnecting or starting tasks',async t=>{
   const h=harness(t);await h.login();h.failStore=true;h.push(h.message('1','must not run'));await until(()=>!h.gateway.snapshot().enabled);

@@ -53,6 +53,16 @@ test('only identified private inbound messages are eligible; Unicode chunks stay
   for(const value of [{...msg,message_id:''},{...msg,message_type:2},{...msg,room_id:'group'},{...msg,to_user_id:'other'},{...msg,from_user_id:'bot'}])assert.equal(incoming(value,'bot'),null);
   const text='甲😀'.repeat(2000),parts=splitText(text);assert.equal(parts.join(''),text);assert.ok(parts.every(part=>Array.from(part).length<=1800));
 });
+test('long text splits at paragraphs or line endings without dropping whitespace or emoji',()=>{
+  for(const separator of ['\n\n','\n','\r\n']){
+    const text='😀'.repeat(12)+separator+'乙'.repeat(12)+separator+'丙'.repeat(12);
+    const parts=splitText(text,20);
+    assert.deepEqual(parts,['😀'.repeat(12)+separator,'乙'.repeat(12)+separator,'丙'.repeat(12)]);
+    assert.equal(parts.join(''),text);
+  }
+  const unbroken='甲😀'.repeat(50),parts=splitText(unbroken,20);
+  assert.equal(parts.join(''),unbroken);assert.ok(parts.every(part=>Array.from(part).length<=20));
+});
 test('store encrypts the whole state atomically and refuses plaintext fallback',t=>{
   const dataDir=fs.mkdtempSync(path.join(os.tmpdir(),'whale-wechat-store-'));t.after(()=>fs.rmSync(dataDir,{recursive:true,force:true}));
   let encrypted=0;

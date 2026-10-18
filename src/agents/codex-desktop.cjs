@@ -2,12 +2,35 @@
 const fs=require('node:fs'),net=require('node:net'),path=require('node:path'),os=require('node:os');
 const {randomUUID}=require('node:crypto');
 const {AgentError}=require('./agent-error.cjs');
+const {normalizeQuestions,normalizeAnswer,asyncQuestions,asyncReply,answeredQuestionIds}=require('./user-input.cjs');
 const IGNORE=Symbol('ignore'),MAX_FRAME=64*1024*1024;
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
 const text=value=>typeof value==='string'?value:null;
+function question(value,asynchronous) {
+  if(!object(value))return null;
+  if(asynchronous)return {title:text(value.title),options:Array.isArray(value.options)?value.options.map(text):[]};
+  return {id:text(value.id),header:text(value.header),question:text(value.question),isOther:value.isOther===true,isSecret:value.isSecret===true,
+    options:Array.isArray(value.options)?value.options.map(option=>({label:text(option?.label),description:text(option?.description)})):[]};
+}
+function questionPart(value,parts,asynchronous) {
+  if(!parts.length)return Array.isArray(value)?value.map(entry=>question(entry,asynchronous)):[];
+  if(parts.length===1)return question(value,asynchronous);
+  const field=parts[1];
+  if(field==='options') {
+    if(parts.length===2)return Array.isArray(value)?value.map(option=>asynchronous?text(option):{label:text(option?.label),description:text(option?.description)}):[];
+    if(parts.length===3)return asynchronous?text(value):{label:text(value?.label),description:text(value?.description)};
+    return !asynchronous&&parts.length===4&&['label','description'].includes(parts[3])?text(value):IGNORE;
+  }
+  if(parts.length!==2)return IGNORE;
+  if(asynchronous)return field==='title'?text(value):IGNORE;
+  return ['id','header','question'].includes(field)?text(value):['isOther','isSecret'].includes(field)?value===true:IGNORE;
+}
+function replyText(value){return typeof value==='string'&&value.trim().startsWith('<send_user_message_question_reply>')?value:'';}
+function replyInput(value){return Array.isArray(value)?value.map(entry=>({type:text(entry?.type),text:replyText(entry?.text)})):[];}
 function item(value) {
   if(!object(value))return null;
-  if(value.type==='agentMessage')return {type:value.type,id:text(value.id),text:text(value.text),phase:text(value.phase)};
+  if(value.type==='agentMessage')return {type:value.type,id:text(value.id),text:text(value.text),phase:text(value.phase),questions:questionPart(value.questions,[],true)};
+  if(['userMessage','steeringUserMessage'].includes(value.type))return {type:value.type,id:text(value.id),status:text(value.status),content:replyInput(value.content),input:replyInput(value.input)};
   if(value.type==='fileChange')return {type:value.type,id:text(value.id),changes:Array.isArray(value.changes)?value.changes.map(change=>({path:text(change.path),diff:text(change.diff)})):[]};
   return {type:text(value.type),id:text(value.id)};
 }
@@ -15,7 +38,7 @@ function approval(value) {
   if(!object(value))return null;
   const params=value.params||{};
   return {id:typeof value.id==='string'||Number.isSafeInteger(value.id)?value.id:null,method:text(value.method),params:{
-    threadId:text(params.threadId),turnId:text(params.turnId),itemId:text(params.itemId),command:text(params.command),cwd:text(params.cwd),reason:text(params.reason),grantRoot:params.grantRoot??null}};
+    threadId:text(params.threadId),turnId:text(params.turnId),itemId:text(params.itemId),command:text(params.command),cwd:text(params.cwd),reason:text(params.reason),grantRoot:params.grantRoot??null,questions:questionPart(params.questions,[],false)}};
 }
 function turn(value) {
   return object(value)?{turnId:text(value.turnId),rootTurnId:text(value.rootTurnId),status:text(value.status),
@@ -29,14 +52,20 @@ function turnPart(value,parts) {
   if(key!=='items')return IGNORE;
   if(parts.length===1)return Array.isArray(value)?value.map(item):null;
   if(parts.length===2)return item(value);
+  if(field==='questions')return questionPart(value,parts.slice(3),true);
+  if(['content','input'].includes(field)) {
+    if(parts.length===3)return replyInput(value);
+    if(parts.length===4)return {type:text(value?.type),text:replyText(value?.text)};
+    return parts.length===5&&['type','text'].includes(parts[4])?(parts[4]==='text'?replyText(value):text(value)):IGNORE;
+  }
   if(field==='changes') {
     if(parts.length===3)return Array.isArray(value)?value.map(change=>({path:text(change.path),diff:text(change.diff)})):[];
     if(parts.length===4)return {path:text(value?.path),diff:text(value?.diff)};
     return parts.length===5&&['path','diff'].includes(parts[4])?text(value):IGNORE;
   }
-  return parts.length===3&&['type','id','text','phase'].includes(field)?text(value):IGNORE;
+  return parts.length===3&&['type','id','text','phase','status'].includes(field)?text(value):IGNORE;
 }
-// 仅在内存保留选中聊天的轮次关联与助手文本；工具输出、认证和其他字段不进入投影。
+// 仅在内存保留轮次关联、助手文本、问题及结构化答案；工具输出、认证和普通用户正文不进入投影。
 function project(value,parts=[]) {
   const [root,a,b]=parts;
   if(!parts.length)return object(value)?{id:text(value.id),cwd:text(value.cwd),threadRuntimeStatus:project(value.threadRuntimeStatus,['threadRuntimeStatus']),
@@ -49,6 +78,7 @@ function project(value,parts=[]) {
     if(parts.length===2)return approval(value);
     if(parts.length===3&&a!==undefined&&b==='params')return approval({params:value}).params;
     if(parts.length===3&&['id','method'].includes(b))return b==='id'&&(typeof value==='string'||Number.isSafeInteger(value))?value:text(value);
+    if(parts.length>=4&&b==='params'&&parts[3]==='questions')return questionPart(value,parts.slice(4),false);
     return parts.length===4&&b==='params'&&['threadId','turnId','itemId','command','cwd','reason','grantRoot'].includes(parts[3])?value:IGNORE;
   }
   if(root!=='turnHistory')return IGNORE;
@@ -90,9 +120,9 @@ function safeSocket(file) {
     return uid!==undefined&&socket.isSocket()&&socket.uid===uid&&dir.isDirectory()&&dir.uid===uid&&!(dir.mode&0o022)&&!(socket.mode&0o077);
   }catch{return false;}
 }
-function startDesktopAgent({settings,text:prompt,session,onSession=()=>{},onApproval,timeoutMs=600000,rpcTimeoutMs=15000}) {
+function startDesktopAgent({settings,text:prompt,session,onSession=()=>{},onApproval,onUserInput,timeoutMs=600000,rpcTimeoutMs=15000}) {
   let socket,clientId='',owner='',bytes=Buffer.alloc(0),done=false,submitted=false,cancelled=false,turnId='',starting=false,stopping=false;
-  const messageId=randomUUID(),projection=new DesktopProjection(),pending=new Map(),reviewed=new Set();
+  const messageId=randomUUID(),projection=new DesktopProjection(),pending=new Map(),reviewed=new Set(),userInputs=new Map();
   let resolveResult,rejectResult;
   const promise=new Promise((resolve,reject)=>{resolveResult=resolve;rejectResult=reject;});
   const timer=setTimeout(()=>cancel('TIMEOUT'),timeoutMs);timer.unref?.();
@@ -105,6 +135,7 @@ function startDesktopAgent({settings,text:prompt,session,onSession=()=>{},onAppr
     if(done)return;
     if(owner&&clientId&&socket?.writable)try{follow(false);}catch{}
     done=true;clearTimeout(timer);clearTimeout(streamTimer);
+    for(const entry of userInputs.values())entry.controller.abort();userInputs.clear();
     for(const request of pending.values()){clearTimeout(request.timer);request.reject(new AgentError(submitted?'DELIVERY_UNKNOWN':'DESKTOP_UNAVAILABLE','desktop'));}pending.clear();
     projection.data=null;socket?.end();socket?.destroy();
     error?rejectResult(error):resolveResult({text:result||'本轮没有返回文本结果。',session});
@@ -143,6 +174,49 @@ function startDesktopAgent({settings,text:prompt,session,onSession=()=>{},onAppr
         }).catch(()=>finish(new AgentError('INTERACTION','desktop')));
     }
   }
+  function reviewUserInputs(own) {
+    const live=new Map();
+    if(own?.status==='inProgress') {
+      for(const entry of projection.data.requests||[])if(entry?.method==='item/tool/requestUserInput'&&entry.id!==null&&entry.params.threadId===session&&entry.params.turnId===turnId) {
+        live.set('request:'+entry.id,{questions:normalizeQuestions(entry.params.questions),requestId:entry.id});
+      }
+      const answered=answeredQuestionIds(own.items);
+      for(const entry of own.items)if(entry?.type==='agentMessage'&&entry.id&&entry.questions?.length) {
+        const questions=asyncQuestions(entry);
+        // 已在桌面回答的题目不再投递；逐题保留原始标识，不能按过滤后的下标重编号。
+        const remaining=questions.filter(question=>!answered.has(question.id));
+        if(remaining.length)live.set('async:'+entry.id,{questions:remaining});
+      }
+    }
+    // 桌面已答、撤销或修改的问题立即失效；AbortSignal 同时清除微信端的等待状态。
+    for(const [key,entry] of userInputs)if(!live.has(key)||JSON.stringify(live.get(key).questions)!==entry.fingerprint){entry.controller.abort();userInputs.delete(key);}
+    if(!onUserInput)return;
+    for(const [key,value] of live) {
+      const fingerprint=JSON.stringify(value.questions),reviewKey=key+':'+fingerprint;
+      if(reviewed.has(reviewKey)||userInputs.has(key))continue;
+      const controller=new AbortController();
+      reviewed.add(reviewKey);userInputs.set(key,{controller,fingerprint});
+      void Promise.resolve().then(()=>onUserInput({questions:value.questions,signal:controller.signal})).then(response=>{
+        if(done||cancelled||controller.signal.aborted)return;
+        // 用户可能已在桌面作答或结束任务；发送前再次核对原轮次与原问题，始终交回原 owner。
+        const current=projection.turns().find(turn=>turn.turnId===turnId&&turn.status==='inProgress');
+        if(!current)return;
+        const answer=normalizeAnswer(response,value.questions);
+        if(value.requestId!==undefined) {
+          const requestEntry=projection.data.requests.find(entry=>entry?.id===value.requestId&&entry.params.turnId===turnId);
+          if(!requestEntry||JSON.stringify(normalizeQuestions(requestEntry.params.questions))!==fingerprint)return;
+          return request('thread-follower-submit-user-input',{conversationId:session,requestId:value.requestId,response:answer},1,owner);
+        }
+        if(value.questions.some(question=>answeredQuestionIds(current.items).has(question.id)))return;
+        const clientUserMessageId=randomUUID(),text=asyncReply(value.questions,answer);
+        // 桌面需要用于恢复输入框及关联回填的消息上下文；不传模型或权限覆盖。
+        const restoreMessage={id:clientUserMessageId,text,cwd:settings.cwd,createdAt:Date.now(),context:{prompt:text,addedFiles:[],fileAttachments:[],ideContext:null,imageAttachments:[],workspaceRoots:[settings.cwd]}};
+        return request('thread-follower-steer-turn',{conversationId:session,clientUserMessageId,input:[{type:'text',text,text_elements:[]}],restoreMessage},1,owner);
+      }).catch(()=>{if(!done&&!controller.signal.aborted)finish(new AgentError('INTERACTION','desktop'));}).finally(()=>{
+        if(userInputs.get(key)?.controller===controller)userInputs.delete(key);controller.abort();
+      });
+    }
+  }
   function observe() {
     if(done)return;
     const data=projection.data;
@@ -154,6 +228,7 @@ function startDesktopAgent({settings,text:prompt,session,onSession=()=>{},onAppr
     const own=matches.find(turn=>['completed','failed','interrupted'].includes(turn.status))||matches[0];
     if(own?.turnId){if(turnId&&turnId!==own.turnId)throw new AgentError('DESKTOP_PROTOCOL','desktop');turnId=own.turnId;}
     if(cancelled){void interrupt(cancelCode);return;}
+    reviewUserInputs(own);
     if(own&&['completed','failed','interrupted'].includes(own.status)) {
       if(own.status!=='completed'){finish(new AgentError('TURN_FAILED','desktop'));return;}
       const answers=own.items.filter(item=>item?.type==='agentMessage'),finals=answers.filter(item=>item.phase==='final_answer');

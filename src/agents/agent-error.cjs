@@ -1,5 +1,5 @@
 'use strict';
-const STAGES={client:'客户端执行',desktop:'桌面对话转发',spawn:'启动客户端',initialize:'初始化客户端','thread/read':'读取对话','thread/resume':'续接对话','thread/start':'新建对话','turn/start':'启动任务',turn:'执行任务',cursor:'Cursor 执行'};
+const STAGES={client:'客户端执行',desktop:'桌面对话转发',spawn:'启动客户端',initialize:'初始化客户端','thread/read':'读取对话','thread/resume':'续接对话','thread/start':'新建对话','turn/start':'启动任务','turn/steer':'回填答案',turn:'执行任务',cursor:'Cursor 执行'};
 const REASONS={
   UNKNOWN:'客户端执行失败，尚未取得可公开的错误原因',
   BINARY:'未找到可用的客户端，请检查安装和可执行文件路径',

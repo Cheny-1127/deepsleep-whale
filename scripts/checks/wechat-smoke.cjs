@@ -19,7 +19,7 @@ require(${JSON.stringify(path.join(root,'test/fixtures/codex-desktop.cjs'))}).de
 let app;
 async function waitSnapshot(panel,check) {
   for(let i=0;i<600;i++){const snapshot=await panel.evaluate(()=>window.whale.snapshot());if(check(snapshot))return snapshot;await new Promise(resolve=>setTimeout(resolve,50));}
-  assert.fail('snapshot condition timed out');
+  assert.fail('snapshot condition timed out: '+JSON.stringify((await panel.evaluate(()=>window.whale.snapshot())).wechat));
 }
 (async()=>{
   app=await electron.launch({executablePath:require('electron'),args:[bootstrap],env:{...process.env,WHALE_DATA_DIR:dir,WHALE_CODEX_BIN:bin,CODEX_HOME:dir,WHALE_CURSOR_HOME:dir,WHALE_AGENT_FIXTURE_LOG:path.join(dir,'agent-wire.jsonl'),WHALE_AGENT_FIXTURE_CWD:dir}});
@@ -61,8 +61,21 @@ async function waitSnapshot(panel,check) {
   assert.deepEqual(wire.filter(item=>item.method==='thread/list').map(item=>item.params.limit),[20,20,10,10,5,5]);
   const desktopWire=await app.evaluate(()=>global.desktopSmoke.wire),forwarded=desktopWire.filter(item=>item.method==='thread-follower-start-turn');
   assert.equal(forwarded.length,1);assert.equal(forwarded[0].params.conversationId,'desktop-fixture');assert.equal(forwarded[0].params.turnStart.request.input[0].text,'检查项目');assert.deepEqual(forwarded[0].params.turnStart.context,{inheritThreadSettings:true});
+  for(const [taskText,answer]of [['desktop-question','2'],['desktop-async-question','我的要求：保留现有配置']]) {
+    await app.evaluate((_electron,text)=>global.wechatSmoke.queue.push({message_id:'task-'+text,message_type:1,from_user_id:'fixture-owner',to_user_id:'fixture-bot',context_token:'fixture-context',item_list:[{type:1,text_item:{text}}]}),taskText);
+    await waitSnapshot(panel,s=>s.wechat.jobs.some(job=>job.state==='question'));
+    await panel.waitForFunction(()=>document.querySelector('#wechat-jobs').textContent.includes('等待回答'));
+    await app.evaluate((_electron,text)=>global.wechatSmoke.queue.push({message_id:'answer-'+text,message_type:1,from_user_id:'fixture-owner',to_user_id:'fixture-bot',context_token:'fixture-context',item_list:[{type:1,text_item:{text}}]}),answer);
+    await waitSnapshot(panel,s=>!s.wechat.active);
+    await panel.waitForFunction(()=>document.querySelector('#wechat-outbox').textContent==='待投递 0 条');
+  }
+  const questionWire=await app.evaluate(()=>global.desktopSmoke.wire);
+  assert.equal(questionWire.filter(m=>m.method==='thread-follower-start-turn').length,3,'answers must not start another turn');
+  const submitted=questionWire.find(m=>m.method==='thread-follower-submit-user-input');assert.deepEqual(submitted.params.response,{answers:{mode:{answers:['修复']}}});
+  const steered=questionWire.find(m=>m.method==='thread-follower-steer-turn');assert.ok(steered.params.input[0].text.includes('我的要求：保留现有配置'));assert.match(steered.params.input[0].text,/<send_user_message_question_reply>/);
+  const questionReplies=await app.evaluate(()=>global.wechatSmoke.sent.map(m=>m.item_list[0].text_item.text));assert.ok(questionReplies.some(text=>text.includes('桌面问答已继续：修复')));assert.ok(questionReplies.some(text=>text.includes('桌面异步问答已继续')));
   await app.evaluate(()=>{for(const [id,text]of [['new','/new'],['two','新的任务']])global.wechatSmoke.queue.push({message_id:id,message_type:1,from_user_id:'fixture-owner',to_user_id:'fixture-bot',context_token:'fixture-context',item_list:[{type:1,text_item:{text}}]});});
-  await waitSnapshot(panel,s=>s.wechat.jobs.filter(j=>j.state==='completed').length===2);
+  await waitSnapshot(panel,s=>s.wechat.jobs.filter(j=>j.state==='completed').length===4);
   wire=fs.readFileSync(path.join(dir,'agent-wire.jsonl'),'utf8').split('\n').filter(Boolean).map(JSON.parse);assert.equal(wire.filter(item=>item.method==='turn/start').length,1);assert.equal(wire.filter(item=>item.method==='thread/start').length,1);
   await app.evaluate(()=>global.wechatSmoke.queue.push({message_id:'failed-turn',message_type:1,from_user_id:'fixture-owner',to_user_id:'fixture-bot',context_token:'fixture-context',item_list:[{type:1,text_item:{text:'turn-rpc-failed'}}]}));
   await waitSnapshot(panel,s=>s.wechat.jobs.some(j=>j.state==='failed'&&j.failure?.rpcCode===-32602));
@@ -71,5 +84,5 @@ async function waitSnapshot(panel,check) {
   const failedReplies=JSON.stringify(await app.evaluate(()=>global.wechatSmoke.sent));assert.ok(failedReplies.includes('RPC -32602'));assert.ok(!failedReplies.includes('private-api-key'));
   await panel.locator('#wechat-toggle').click();await panel.waitForFunction(()=>document.querySelector('#wechat-status').textContent==='已暂停');
   await panel.locator('#nav-hooks').click();assert.ok(await panel.locator('#wechat-view').isHidden());await panel.locator('#nav-home').click();assert.ok(await panel.locator('#hooks-view').isHidden());
-  assert.deepEqual(errors,[]);console.log(JSON.stringify({result:'passed',checks:['scan-without-setup','multiple-clients','priority','local-QR','scan-confirmation','readable-project-list','number-selection','desktop-owner-forwarding','verbatim-input','no-desktop-resume','new-thread','dedup','Codex-result','safe-error-reporting','context','pause','dirty-form','IPC-sender','navigation','no-renderer-errors'],dataDir:dir}));
-})().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{if(app)await app.close();});
+  assert.deepEqual(errors,[]);console.log(JSON.stringify({result:'passed',checks:['scan-without-setup','multiple-clients','priority','local-QR','scan-confirmation','readable-project-list','number-selection','desktop-owner-forwarding','verbatim-input','no-desktop-resume','blocking-question-answer','async-question-answer','answers-continue-original-turn','new-thread','dedup','Codex-result','safe-error-reporting','context','pause','dirty-form','IPC-sender','navigation','no-renderer-errors'],dataDir:dir}));
+})().catch(async error=>{console.error(error);if(app)console.error(JSON.stringify(await app.evaluate(()=>({queue:global.wechatSmoke.queue,sent:global.wechatSmoke.sent.map(m=>m.item_list[0].text_item.text),wire:global.desktopSmoke.wire.map(m=>({method:m.method,input:m.params?.turnStart?.request?.input}))}))));process.exitCode=1;}).finally(async()=>{if(app)await app.close();});

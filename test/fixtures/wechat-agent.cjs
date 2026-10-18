@@ -13,7 +13,7 @@ if(!process.argv.includes('app-server')) {
   let approval;
   readline.createInterface({input:process.stdin}).on('line',line=>{
     const request=JSON.parse(line);record(request);
-    if(!request.method){if(request.id===90){approval=request.result;record({approval});complete();}return;}
+    if(!request.method){if(request.id===90){approval=request.result;record({approval});complete();}if(request.id===91){record({userInput:request.result||request.error});complete();}return;}
     if(request.method==='initialized')return;
     if(request.method==='initialize')send({id:request.id,result:{userAgent:'fixture'}});
     else if(request.method==='thread/list')send({id:request.id,result:{data:[metadata('desktop-fixture')],nextCursor:null}});
@@ -37,8 +37,15 @@ if(!process.argv.includes('app-server')) {
       if(text==='turn-failed'){send({method:'turn/completed',params:{threadId,turn:{...turn,status:'failed',error:{message:'401 Unauthorized Bearer private-api-key',codexErrorInfo:'unauthorized'}}}});return;}
       if(text==='hang')return;
       if(text==='approval'){send({id:90,method:'item/commandExecution/requestApproval',params:{threadId,turnId:turn.id,command:'fixture-read',cwd:process.cwd()}});return;}
+      if(['question','foreign-question','withdrawn-question'].includes(text)){
+        send({id:91,method:'item/tool/requestUserInput',params:{threadId,turnId:text==='foreign-question'?'foreign-turn':turn.id,itemId:'question',questions:[{id:'mode',header:'处理方式',question:'如何处理？',options:[{label:'仅分析',description:'查看原因'},{label:'修改代码',description:'修复问题'}],isOther:true,isSecret:false}]}});
+        if(text==='withdrawn-question')setTimeout(()=>{send({method:'serverRequest/resolved',params:{threadId,requestId:91}});complete();},30);
+        return;
+      }
+      if(text==='async-question'){send({method:'item/completed',params:{threadId,turnId:turn.id,item:{id:'async-item',type:'agentMessage',phase:'commentary',text:'请选择处理方式',questions:[{title:'如何处理？',options:['仅分析','修改代码']}]}}});return;}
       complete();
-    }else send({id:request.id,result:{}});
+    }else if(request.method==='turn/steer'){record({steeringInput:request.params});send({id:request.id,result:{turnId:turn.id}});complete();}
+    else send({id:request.id,result:{}});
   });
   function complete(){
     send({method:'item/completed',params:{threadId,turnId:turn.id,item:{id:'answer',type:'agentMessage',text:'Codex fixture 结论😀'}}});
