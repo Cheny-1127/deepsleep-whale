@@ -21,6 +21,6 @@ function adapterInfo() {
   return SOURCES.map(source=>({id:source,name:source==='codex'?'Codex':'Cursor',
     mappings:(source==='codex'?CODEX_EVENTS.map(name=>[name,name]):Object.entries(CURSOR_EVENTS))
       .map(([event,normalized])=>({event,normalized,label:LABELS[normalized],note:source==='cursor'&&event==='stop'?'仅 completed 计为完成；aborted / error 记为停止':''})),
-    capabilities:source==='codex'?'支持聊天名称、原对话跳转和已读同步。':'支持开始、工具返回、完成与停止提醒；支持读取本机聊天标题，读取不到时显示短 ID；支持跳转原智能体对话；进入该对话后清除对应完成提醒。'}));
+    capabilities:source==='codex'?'支持聊天名称、原对话跳转和已读同步。':'支持开始、工具返回、完成与停止提醒；支持读取本机聊天标题，读取不到时显示短 ID；点击提醒成功跳转、手动标为已读或继续发送消息后，清除对应完成提醒。'}));
 }
 module.exports={eventName,LABELS,CODEX_EVENTS,CURSOR_EVENTS,SOURCES,sourceOf,adaptCursor,adapterInfo};

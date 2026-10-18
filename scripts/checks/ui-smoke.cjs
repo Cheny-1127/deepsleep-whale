@@ -7,6 +7,7 @@ const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
 const root = path.resolve(__dirname, '../..');
 const programs = require('../../src/shared/special-actions.js');
+const createPetMenuDriver=require('./pet-menu-driver.cjs');
 const dir = fs.mkdtempSync('/tmp/whale-ui-');
 // 旧版外观设置不应阻止启动，也不应丢失通知偏好。
 fs.writeFileSync(path.join(dir,'settings.json'),JSON.stringify({skin:'legacy',sound:false,notifications:true}));
@@ -68,29 +69,24 @@ let app;
   };
   const pet = app.windows().find(page => page.url().endsWith('/pet.html'));
   assert.ok(pet,'floating pet exists');
-  // 真正右键人物，检查弹出的原生菜单，再执行其实际回调。
-  await app.evaluate(({ Menu }) => {
-    const popup = Menu.prototype.popup;
-    Menu.prototype.popup = function(options) {
-      global.whaleTestMenu = this;
-      return popup.call(this, options);
-    };
-  });
-  await pet.locator('#pet-art').click({button:'right'});
-  const menuItems = await app.evaluate(() => global.whaleTestMenu.items.map(item => ({label:item.label,enabled:item.enabled})));
-  assert.deepEqual(menuItems.filter(item => item.label).map(item => item.label),['互动表情','小节目','打开小屋','隐藏桌宠','重启','退出']);
-  assert.ok(menuItems[0].enabled);
-  await app.evaluate(() => {
-    const menu = global.whaleTestMenu;
-    menu.closePopup();
-    menu.items.find(item => item.label === '小节目').submenu.items.find(item => item.label === '舞狮头').click();
-  });
+  assert.equal(await panel.getByText('鲸鱼娘的小角落',{exact:true}).count(),0);
+  // 真正右键人物并点击自绘子菜单，验证与小屋动作共用同一入口。
+  const menuDriver=createPetMenuDriver(app,pet);
+  let petMenu;
+  async function openPetMenu() {
+    petMenu=await menuDriver.open();
+  }
+  await openPetMenu();
+  assert.equal(await petMenu.getByRole('menu',{name:'桌宠菜单',exact:true}).getByRole('menuitem').count(),6);
+  await petMenu.getByRole('menuitem',{name:'小节目',exact:true}).hover();
+  await petMenu.getByRole('menuitem',{name:'舞狮头',exact:true}).click();
   await panel.waitForFunction(()=>{const v=document.querySelector('#special-video');return !v.paused&&v.currentTime>1&&v.videoWidth===640;});
   const beforeLion=await panel.evaluate(()=>window.whale.snapshot());
   const playback=await panel.locator('#special-video').evaluate(v=>v.currentTime);
-  await pet.locator('#pet-art').click({button:'right'});
-  assert.equal(await app.evaluate(() => global.whaleTestMenu.items.find(item=>item.label==='小节目').submenu.items[0].enabled),false,'dance cannot be restarted from the menu');
-  await app.evaluate(() => global.whaleTestMenu.closePopup());
+  await openPetMenu();
+  await petMenu.getByRole('menuitem',{name:'小节目',exact:true}).hover();
+  assert.equal(await petMenu.getByRole('menuitem',{name:'舞狮头',exact:true}).isDisabled(),true,'dance cannot be restarted from the menu');
+  await petMenu.keyboard.press('Escape');
   send('UserPromptSubmit','smoke-lion','turn-lion');
   await panel.waitForTimeout(400);
   assert.equal(await panel.locator('#state-label').textContent(),'舞狮头');
@@ -110,13 +106,9 @@ let app;
   await panel.locator('#notifications').uncheck();
   const beforePrograms=await panel.evaluate(()=>window.whale.snapshot());
   for(const [id,clip] of Object.entries(programs).filter(([id])=>id!=='lion')) {
-    await pet.locator('#pet-art').click({button:'right'});
-    await app.evaluate(({},{label})=>{
-      const menu=global.whaleTestMenu;
-      const item=menu.items.find(item=>item.label==='小节目').submenu.items.find(item=>item.label===label);
-      if(!item?.enabled) throw new Error('Program menu is unavailable: '+label);
-      menu.closePopup();item.click();
-    },{label:clip.label});
+    await openPetMenu();
+    await petMenu.getByRole('menuitem',{name:'小节目',exact:true}).hover();
+    await petMenu.getByRole('menuitem',{name:clip.label,exact:true}).click();
     for(const page of [panel,pet]) {
       await page.waitForFunction(file=>{const v=document.querySelector('#special-video');return !v.paused&&v.currentTime>.4&&v.videoWidth===640&&v.src.endsWith('/'+file+'.webm');},clip.file);
     }
@@ -173,5 +165,5 @@ let app;
   const dimensions = await panel.evaluate(() => ({ scroll: document.documentElement.scrollHeight, height:innerHeight }));
   assert.deepEqual(errors,[]);
   assert.deepEqual(failedAssets,[]);
-  console.log(JSON.stringify({ result:'passed', checks:['feed','pat','legacy-settings-and-rice-only','demo-is-not-live','working','approval','multi-chat','Stop-dedup','floating-window','no-renderer-errors','full-meal-duration','all-11-rice-actions','real-event-stops-demo','character-drag','compact-window','special-video-once','lion-resumes-task','lion-approval-interrupt','lion-no-growth','native-right-click-menu','menu-dance-lock','all-seven-extra-programs','fireworks-space-restores','programs-no-growth-or-events'], dimensions, dataDir:dir }));
+  console.log(JSON.stringify({ result:'passed', checks:['feed','pat','legacy-settings-and-rice-only','demo-is-not-live','working','approval','multi-chat','Stop-dedup','floating-window','no-renderer-errors','full-meal-duration','all-11-rice-actions','real-event-stops-demo','character-drag','compact-window','special-video-once','lion-resumes-task','lion-approval-interrupt','lion-no-growth','custom-right-click-menu','menu-dance-lock','all-seven-extra-programs','fireworks-space-restores','programs-no-growth-or-events'], dimensions, dataDir:dir }));
 })().catch(error => { console.error(error); process.exitCode=1; }).finally(async () => { if (app) await app.close(); });

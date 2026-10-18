@@ -15,11 +15,6 @@ test('an already selected Cursor chat still focuses the Agents window',async()=>
   await opener.open(id);
   assert.equal(opened,1);
 });
-test('the selected Cursor chat is exposed only as a valid session id',()=>{
-  assert.equal(createCursorChatOpener({openExternal(){},readSelected:()=>id.slice(7)}).selectedSession(),id);
-  assert.equal(createCursorChatOpener({openExternal(){},readSelected:()=>null}).selectedSession(),null);
-  assert.equal(createCursorChatOpener({openExternal(){},readSelected:()=>'not-a-uuid'}).selectedSession(),null);
-});
 test('failed Cursor selection keeps the reminder and invalid ids never launch',async()=>{
   await assert.rejects(createCursorChatOpener({timeout:30,openExternal(){},readSelected:()=>'other'}).open(id),/没有回到/);
   let launched=false;

@@ -18,6 +18,7 @@
 | 游标与长轮询 | `_get_updates`、`_poll_loop` | POST `getupdates`，保存 `get_updates_buf`；超时继续轮询，网络失败退避，`-14` 停止并提示重扫 |
 | 文本回复 | 299–316、970–1053 行 | POST `sendmessage`，`message_type=2`，text item，带最新 context token 和稳定 client ID；按 Unicode 分段 |
 | 会话令牌 | `ContextTokenStore`、890–892 行 | 按账号/发送者保存最新 context token；消息去重与游标持久化后才执行 |
+| 输入状态 | `_get_config`、`_ensure_typing_ticket`、`_set_typing` | `getconfig` 获取 typing_ticket；`sendtyping` 的 status=1 开始、2 停止。按账号/联系人在内存缓存十分钟，停止时也刷新过期票据；任务运行中每两秒刷新，问答/审批等待时暂停。状态请求串行且有超时，失败不影响任务或结果投递，不发送普通收件回执 |
 
 服务端 base URL 与扫码跳转仅接受微信 HTTPS 域名；HTTP 重定向不会携带认证自动跟随。二维码由本机 `qrcode` 库生成。未移植 Hermes 的附件、语音、CDN、长期记忆、模型管理及群聊能力。发送遇到 `-14` 或 `-2` 配合 `prepare failed` / `unknown error` 时，按 Hermes 的做法沿用相同 client ID 去掉旧 context token 重发一次；仍失败则暂存待投递结果。限流及网络失败采用退避，不重跑模型任务。
 

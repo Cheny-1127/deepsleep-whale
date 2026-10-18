@@ -1,5 +1,5 @@
 'use strict';
-const {randomUUID}=require('node:crypto');
+const {randomUUID,createHash}=require('node:crypto');
 const fs=require('node:fs');
 const path=require('node:path');
 const {BASE,incoming,splitText}=require('./wechat-api.cjs');
@@ -10,6 +10,8 @@ const {validateClients}=require('../agents/clients.cjs');
 const {listCodexThreads,readCodexThread}=require('../agents/codex-catalog.cjs');
 const {failureDetails}=require('../agents/agent-error.cjs');
 const {normalizeQuestions}=require('../agents/user-input.cjs');
+const {createTitleReader}=require('../clients/chat-metadata.cjs');
+const {discoverRunningClients}=require('../clients/discovery.cjs');
 
 function wait(ms,signal) {
   return new Promise(resolve=>{
@@ -19,6 +21,7 @@ function wait(ms,signal) {
   });
 }
 const HELP='/projects 查看最近项目（next 下一页）\n/project 编号或绝对路径 选择项目\n/chats [条数] 查看已有 Codex 对话（默认 5，最多 20）\n/chats next [条数] 查看下一页（表格中可回复 0 或 0 10）\n/chat 编号 继续已有对话\n/new [项目编号或绝对路径] 新建对话，下一条文字开始执行\n/clients 查看已启用客户端及优先级\n/client 编号或 auto 选择客户端\n/status 查看当前对话和任务\n/stop 停止任务\n/question 查看当前待回答问题\n/answer 问题编号 答案 回答指定问题\n/allow 编号 同意本次审批\n/deny 编号 拒绝审批\n/retry 重发待投递结果\n/help 查看帮助';
+const COMMANDS=new Set(['/projects','/project','/chats','/chat','/new','/clients','/client','/status','/stop','/question','/answer','/allow','/deny','/retry','/help']);
 function parseCommand(text) {
   const input=text.trim(),[raw='']=input.split(/\s+/,1);
   // 只规范指令词，保留任务正文、路径和审批编号的原始内容。
@@ -46,23 +49,75 @@ function replyParts(text) {
   // 编号也占消息长度；预留空间后再分段，原文和编号一同持久化以供断点重投。
   return splitText(value,1768).map((part,index,all)=>`【结果 ${index+1}/${all.length}】\n\n${part}`);
 }
-function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThreads=listCodexThreads,readThread=readCodexThread,onChange=()=>{},loginDelay=1000,pollDelay=500,questionTimeoutMs=300000}) {
-  let state,loadError='',status='disconnected',error='',deliveryError='',deliveryRetryAt=0,deliveryFailures=0,qr=null,loginController,pollController,closed=false,active=null,flushing=false;
+function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThreads=listCodexThreads,readThread=readCodexThread,discoverClients=discoverRunningClients,onChange=()=>{},loginDelay=1000,pollDelay=500,questionTimeoutMs=300000}) {
+  let state,loadError='',status='disconnected',error='',deliveryError='',failedDeliveryId='',deliveryRetryAt=0,deliveryFailures=0,qr=null,loginController,pollController,closed=false,active=null,flushing=false;
   const approvals=new Map(),inputs=new Map();
+  const titleReaders=new Map();
+  let typing=null,typingQueue=Promise.resolve();
   const menus=new Map(),commands=new Map(),queryContexts=new Map();let queryEpoch=0;
   try {state=migrate(store.load());}catch(e){state=fresh();loadError=e.message;}
   // 已启动的任务绝不因应用重启重放；未能确认完成的任务标记中断。
-  for(const job of state.jobs)if(['running','queued','approval','question'].includes(job.state)){job.state='interrupted';job.finishedAt=Date.now();delete job.text;}
+  for(const job of state.jobs)if(['running','queued','approval','question'].includes(job.state)){if(typeof job.text==='string')job.exchange??={request:job.text};job.state='interrupted';job.finishedAt=Date.now();delete job.text;}
   // 问题只能交回仍在运行的原请求；重启不重发已经失效的提问。
   state.outbox=state.outbox.filter(item=>!item.questionId);
+  function jobChat(job,cache) {
+    const route=job.route||{},settings=route.settings||{};
+    const binding=state.account?state.bindings[bindingKey(state.account.id,job.sender)]:null;
+    // 排队消息只继承仍有效的原绑定；已结束但未建立对话的任务不能事后挂到新对话。
+    const threadId=route.threadId||(job.state==='queued'&&binding?.id===route.bindingId?binding.threadId:'')||'';
+    // 对话标题可重复；聚合键包含客户端和配置目录，防止不同实例的同名对话混在一起。
+    const identity=[route.clientId,settings.backend,settings.binary,settings.configHome,settings.profile,threadId||route.bindingId||job.id];
+    const key=createHash('sha256').update(JSON.stringify(identity)).digest('hex');
+    if(cache.has(key))return cache.get(key);
+    let name=route.threadName||'';
+    if(!closed&&threadId&&settings.backend==='codex') {
+      const home=settings.configHome||'';
+      if(!titleReaders.has(home))titleReaders.set(home,createTitleReader(home||undefined));
+      const local=titleReaders.get(home).lookup(threadId);
+      if(local.kind==='chat'&&local.title)name=local.title;
+    }
+    const chat={key,threadId,name:typeof name==='string'&&name.trim()?name.replace(/\s+/gu,' ').trim().slice(0,160):threadId?'对话 '+threadId.slice(-8):route.bindingId?'尚未建立对话':'未记录对话 · '+String(job.id).slice(-8),
+      project:typeof settings.cwd==='string'?path.basename(settings.cwd):'',
+      clientName:state.clients.find(client=>client.id===route.clientId)?.name||route.clientName||(settings.backend==='cursor'?'Cursor CLI':settings.backend==='codex'?'Codex':'未记录客户端')};
+    cache.set(key,chat);return chat;
+  }
+  function canDeleteJob(job){return active?.job!==job&&(['failed','interrupted','cancelled'].includes(job.state)||(job.state==='completed'&&job.delivery==='failed'));}
   function snapshot() {
+    const chats=new Map();
     return {status,error:loadError||error||deliveryError,storageAvailable:store.available(),enabled:state.enabled,
       account:state.account?{id:state.account.id,owner:state.account.owner}:null,
       qr:qr?{image:qr.image,status:qr.status}:null,clients:state.clients.map(item=>({...item})),allowed:[...state.allowed],pending:[...state.pending],
-      jobs:state.jobs.slice(-8).reverse().map(({id,sender,state:jobState,startedAt,finishedAt,failure})=>({id,sender,state:jobState,startedAt,finishedAt,...(failure?{failure}:{})})),
+      // 展示全部保留的最近记录，避免高频对话的八条任务挤掉其他对话；不暴露正文或客户端配置。
+      jobs:state.jobs.slice(-50).reverse().map(job=>({id:job.id,sender:job.sender,state:job.state,startedAt:job.startedAt,finishedAt:job.finishedAt,chat:jobChat(job,chats),delivery:job.delivery,canDelete:canDeleteJob(job),...(job.failure?{failure:job.failure}:{})})),
       active:active?{id:active.job.id,sender:active.job.sender}:null,outbox:state.outbox.length};
   }
-  function changed(){onChange();}
+  function changed(){updateTyping();onChange();}
+  function sendTyping(entry,enabled) {
+    if(enabled&&entry.pending)return;
+    if(enabled)entry.pending=true;
+    // 串行发送开始/停止，避免上一轮的迟到响应把下一轮输入状态关闭或重新开启。
+    typingQueue=typingQueue.then(async()=>{
+      if(enabled&&typing!==entry)return;
+      if(enabled)entry.started=true;
+      const signal=enabled?AbortSignal.any([entry.controller.signal,AbortSignal.timeout(1500)]):AbortSignal.timeout(1500);
+      const context=state.account===entry.account?state.contexts[entry.sender]||entry.context:entry.context;
+      await api.typing(entry.account,entry.sender,enabled,context,signal);
+    }).catch(()=>{}).finally(()=>{if(enabled)entry.pending=false;});
+  }
+  function stopTyping() {
+    const previous=typing;if(!previous)return;
+    typing=null;clearInterval(previous.timer);previous.controller.abort();
+    if(previous.started)sendTyping(previous,false);
+  }
+  function updateTyping() {
+    const current=active&&!active.stopping&&active.job.state==='running'&&state.enabled&&!closed&&pollController&&!pollController.signal.aborted&&state.allowed.includes(active.job.sender)?active:null;
+    if(typing&&(typing.job!==current?.job||typing.account!==state.account))stopTyping();
+    if(!current||typing||typeof api.typing!=='function')return;
+    // 输入状态只是提示：失败不影响任务、审批或结果投递，也不额外发文字回执。
+    const entry={job:current.job,account:state.account,sender:current.job.sender,context:state.contexts[current.job.sender],controller:new AbortController()};
+    typing=entry;sendTyping(entry,true);
+    entry.timer=setInterval(()=>sendTyping(entry,true),2000);entry.timer.unref?.();
+  }
   function queryContext(key){if(!queryContexts.has(key))queryContexts.set(key,new AbortController());return queryContexts.get(key);}
   function invalidateQueries(){queryEpoch++;for(const controller of queryContexts.values())controller.abort();queryContexts.clear();menus.clear();commands.clear();}
   function persist() {
@@ -73,41 +128,44 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
     }
   }
   function tellError(message){error=message;changed();}
-  function queueReply(sender,text,questionId) {
+  function queueReply(sender,text,questionId,jobId) {
     if(!state.allowed.includes(sender)||!state.account)return;
     if(state.outbox.length>=100)throw new Error('待投递消息过多，请先恢复微信连接');
     // 不截断完整结果；表格沿用完整行分段。每份结果共用一个队列项与稳定投递 ID。
-    state.outbox.push({id:randomUUID(),sender,parts:Array.isArray(text)?text:replyParts(text),index:0,...(questionId?{questionId}:{})});persist();
+    state.outbox.push({id:randomUUID(),sender,parts:Array.isArray(text)?text:replyParts(text),index:0,...(questionId?{questionId}:{}),...(jobId?{jobId}:{})});
+    const job=state.jobs.find(job=>job.id===jobId);if(job)job.delivery='pending';persist();
   }
   async function flush() {
     if(flushing||Date.now()<deliveryRetryAt||!state.enabled||!state.account||!pollController||pollController.signal.aborted)return;
     flushing=true;
-    const deliveryController=pollController,deliveryAccount=state.account;
+    const deliveryController=pollController,deliveryAccount=state.account;let item;
     try {
       while(state.enabled&&state.outbox.length&&pollController===deliveryController&&state.account===deliveryAccount&&!deliveryController.signal.aborted) {
-        const item=state.outbox[0];
+        item=state.outbox[0];
         if(!state.allowed.includes(item.sender)){state.outbox.shift();persist();continue;}
         const account=state.account,controller=pollController;
         await api.send(account,item.sender,item.parts[item.index],state.contexts[item.sender],`${item.id}-${item.index}`,controller.signal);
         // 停用、解绑或换账号期间结束的旧发送不能改写新账号的数据。
         if(controller!==pollController||account!==state.account||controller.signal.aborted)break;
-        if(state.outbox[0]!==item)continue; // 联系人撤权可能在发送途中移除当前消息。
-        deliveryFailures=0;deliveryRetryAt=0;deliveryError='';
-        item.index++;if(item.index>=item.parts.length)state.outbox.shift();persist();changed();
+        if(state.outbox[0]!==item)continue; // 删除记录或联系人撤权可能在发送途中移除当前消息。
+        deliveryFailures=0;deliveryRetryAt=0;deliveryError='';failedDeliveryId='';
+        const job=state.jobs.find(job=>job.id===item.jobId);
+        item.index++;if(item.index>=item.parts.length){state.outbox.shift();if(job)job.delivery='sent';}else if(job)job.delivery='pending';persist();changed();
         await wait(300,controller.signal);
       }
     }catch(e){
-      if(deliveryController!==pollController||deliveryAccount!==state.account)return;
-      if(e.code===-14)expire();
+      if(deliveryController!==pollController||deliveryAccount!==state.account||!state.outbox.includes(item))return;
+      if(e.code===-14){failedDeliveryId=item.id;const job=state.jobs.find(job=>job.id===item.jobId);if(job)job.delivery='failed';expire();}
       else if(e.code!=='STORAGE'&&pollController&&!pollController.signal.aborted&&e.name!=='AbortError'){
         deliveryFailures++;deliveryRetryAt=Date.now()+Math.min(60000,5000*2**Math.min(deliveryFailures-1,4));
+        failedDeliveryId=item.id;const job=state.jobs.find(job=>job.id===item.jobId);if(job){job.delivery='failed';try{persist();}catch{return;}}
         deliveryError=e.code?e.message:'微信结果尚未送达，可稍后重试；任务不会重跑';changed();
       }
-    }finally{flushing=false;}
+    }finally{flushing=false;if(item&&!state.outbox.includes(item)&&state.outbox.length)void flush();}
   }
-  function reply(sender,text){queueReply(sender,text);void flush();}
+  function reply(sender,text,jobId){queueReply(sender,text,undefined,jobId);void flush();}
   function denyApprovals() {for(const approval of approvals.values()){clearTimeout(approval.timer);approval.resolve(false);}approvals.clear();}
-  function stopTask() {denyApprovals();for(const entry of [...inputs.values()])finishInput(entry,null,false);active?.handle?.cancel();}
+  function stopTask() {if(active)active.stopping=true;stopTyping();denyApprovals();for(const entry of [...inputs.values()])finishInput(entry,null,false);active?.handle?.cancel();}
   function currentInput(sender){return [...inputs.values()].find(entry=>entry.sender===sender&&entry.job===active?.job);}
   // 编号包含当前题序；上一题的显式回复不能误答下一题。
   function inputToken(entry){return `${entry.id}-${entry.index+1}`;}
@@ -115,11 +173,13 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
     if(active?.job===job&&['running','approval','question'].includes(job.state))job.state=[...approvals.values()].some(entry=>entry.jobId===job.id)?'approval':[...inputs.values()].some(entry=>entry.job===job)?'question':'running';
   }
   function discardPrompt(entry){state.outbox=state.outbox.filter(item=>item.questionId!==entry.prompt);entry.prompt='';}
-  function showQuestion(entry) {
+  function showQuestion(entry,{details=false}={}) {
     discardPrompt(entry);entry.prompt=inputToken(entry);
     const question=entry.questions[entry.index];
     const options=question.options.map((option,index)=>`${index+1}. ${option.label}${option.description?'\n   '+option.description:''}`).join('\n');
-    queueReply(entry.sender,`Codex 需要你回答（第 ${entry.index+1}/${entry.questions.length} 题）\n${question.header?question.header+'\n':''}\n${question.question}${options?'\n\n'+options:''}\n\n${options?'回复选项编号，也可以直接输入自己的答案。':'请直接输入答案。'}\n也可发送 /answer ${entry.prompt} 答案\n发送 /question 查看当前问题，/stop 停止任务。`,entry.prompt);
+    const instruction=options?'直接回复一个选项编号，例如：1。\n也可以用自己的话说明选择、要求或疑问。':'直接回复你的答案；不清楚时，也可以直接说出你的疑问。';
+    // 问题与操作说明分开；正常回答不用复制问题或填写内部编号。
+    queueReply(entry.sender,`Codex 需要你回答（第 ${entry.index+1}/${entry.questions.length} 题）\n${question.header?'\n'+question.header+'\n':''}\n【问题】\n${question.question}${options?'\n\n【选项】\n'+options:''}\n\n【回复方式】\n${instruction}\n你的下一条文字会作为本题回答，交回当前任务。\n\n重看问题：/question\n取消任务：/stop${details?'\n指定这道题作答：/answer '+entry.prompt+' 你的答案':''}`,entry.prompt);
     void flush();
   }
   function finishInput(entry,response,advance=true) {
@@ -160,9 +220,9 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
     Object.defineProperty(entry.answers,question.id,{value:{answers:[option?option.label:value]},enumerable:true,configurable:true});
     discardPrompt(entry);entry.index++;
     if(entry.index<entry.questions.length)showQuestion(entry);
-    else{finishInput(entry,{answers:entry.answers});reply(sender,'已收到答案，正在交给 Codex 继续处理。');}
+    else finishInput(entry,{answers:entry.answers});
   }
-  function stopPoll(){pollController?.abort();pollController=null;}
+  function stopPoll(){pollController?.abort();pollController=null;stopTyping();}
   function expire() {
     state.enabled=false;status='expired';error='微信登录已失效，请重新扫码';stopPoll();stopTask();invalidateQueries();
     try{persist();}catch{}changed();
@@ -185,6 +245,7 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
     // 绑定可能已被后续选择替换；只有同一绑定才能继承执行期间新建的会话。
     const session=job.route.threadId||(binding?.id===job.route.bindingId?binding.threadId:'');
     const transport=settings.backend==='codex'&&session?(job.route.transport||(binding?.id===job.route.bindingId?binding.transport:null)||'desktop'):'local';
+    if(session)job.route.threadId=session;
     job.state='running';job.startedAt=Date.now();persist();
     const current={job,handle:null};active=current;changed();
     try {
@@ -192,17 +253,18 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
         onSession:id=>{if(active===current){job.route.threadId=id;job.route.transport=transport;if(state.bindings[key]?.id===job.route.bindingId){state.bindings[key].threadId=id;state.bindings[key].transport=transport;}persist();}},onApproval:request=>requestApproval(job,request),onUserInput:request=>requestInput(job,request)});
       void current.handle.promise.then(result=>{
         if(active!==current)return;
-        job.state='completed';job.finishedAt=Date.now();delete job.text;
-        queueReply(job.sender,result.text);persist();
+        // 完整问答随任务加密保存，仅主动查看详情时读取；持续广播的快照只包含摘要。
+        job.state='completed';job.finishedAt=Date.now();job.exchange={request:job.text,response:result.text};delete job.text;
+        queueReply(job.sender,result.text,undefined,job.id);persist();
       },cause=>{
         if(active!==current)return;
         job.failure=failureDetails(cause);job.state=job.failure.code==='CANCELLED'?'cancelled':'failed';job.finishedAt=Date.now();delete job.text;
-        queueReply(job.sender,job.failure.message+'\n不会自动重新执行，可发送 /status 查看。');
+        queueReply(job.sender,job.failure.message+'\n不会自动重新执行，可发送 /status 查看。',undefined,job.id);
       }).catch(()=>{state.enabled=false;status='error';error='任务状态无法保存，已暂停微信执行';stopPoll();})
         .finally(()=>{if(active===current){denyApprovals();for(const entry of [...inputs.values()])try{finishInput(entry,null,false);}catch{}active=null;try{persist();}catch{}changed();void flush();schedule();}});
     }catch(cause) {
       job.failure=failureDetails(cause);job.state='failed';job.finishedAt=Date.now();delete job.text;active=null;
-      try{reply(job.sender,job.failure.message+'\n没有切换其他实例或重新执行。');persist();}catch{}changed();schedule();
+      try{reply(job.sender,job.failure.message+'\n没有切换其他实例或重新执行。',job.id);persist();}catch{}changed();schedule();
     }
   }
   function enabledClients(){return state.clients.filter(client=>client.enabled);}
@@ -286,8 +348,9 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
     const key=bindingKey(state.account.id,sender),binding=state.bindings[key],menu=menuFor(key);
     // 回答优先于聊天/客户端菜单，不能把数字答案解释成切换选择或新任务。
     if(command==='/answer'){const match=token.match(/^(\S+)(?:\s+([\s\S]*))?$/);answerInput(sender,match?.[2]||'',match?.[1]);return;}
-    if(command==='/question'){const entry=currentInput(sender);if(entry)showQuestion(entry);else reply(sender,'当前没有等待你回答的问题。');return;}
-    if(currentInput(sender)&&!command.startsWith('/')){answerInput(sender,text);return;}
+    if(command==='/question'){const entry=currentInput(sender);if(entry)showQuestion(entry,{details:true});else reply(sender,'当前没有等待你回答的问题。');return;}
+    // 等待回答时仅保留已知控制指令；绝对路径等以 / 开头的文字仍是答案。
+    if(currentInput(sender)&&!COMMANDS.has(command)){answerInput(sender,text);return;}
     // 0 只在菜单中作为翻页操作；选中会话后清除 choice，数字恢复为原始任务正文。
     if(menu.choice&&menu.choice!=='chat'&&/^0(?:\s|$)/.test(text.trim())){reply(sender,'0 翻页仅用于对话表格。请先发送 /chats。');return;}
     if(menu.choice==='chat'&&/^(?:0|下一页|next)(?:\s|$)/i.test(text.trim())){command='/chats';token=text.trim().replace(/^(?:0|下一页|next)/i,'next');}
@@ -329,7 +392,7 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
         try{thread=await readThread(client,entry.id,{signal:queryContext(key).signal});}catch{if(valid())reply(sender,'对话查询失败，请重新发送 /chats；没有启动任务。');return;}
         if(!valid())return;
         const cwd=projectPath(thread.cwd,{});
-        chooseBinding(key,{clientId:client.id,cwd,threadId:thread.id,transport:'desktop',automatic:false});
+        chooseBinding(key,{clientId:client.id,cwd,threadId:thread.id,threadName:thread.name,transport:'desktop',automatic:false});
         reply(sender,`已选择 ${thread.name} · ${client.name}\n${cwd}\n直接发消息，我会原样转给这个桌面对话，并把本轮回复发回来。桌面正在回复时会先等待。`);return;
       }
       const cwd=token?projectPath(token,menu):binding?.cwd;
@@ -353,8 +416,10 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
     delete menu.choice;
     if(!binding.id)binding.id=randomUUID();
     if(!binding.clientId)binding.clientId=client.id;
-    state.jobs.push({id:randomUUID(),sender,text,state:'queued',startedAt:Date.now(),route:{clientId:client.id,settings,threadId:binding.threadId||'',transport:binding.transport||'',bindingId:binding.id}});
-    state.jobs=state.jobs.slice(-50);persist();reply(sender,`收到，${binding.threadId&&binding.transport!=='local'&&client.backend==='codex'?'将原文转给 '+client.name+' 的所选桌面对话，等待本轮回复。':'使用 '+client.name+' 处理。'}可发送 /status 查看状态，/stop 停止。`);schedule();
+    const notifyQueue=active&&!state.jobs.some(job=>job.sender===sender&&job.state==='queued');
+    // 入队时保留原文与路由快照，后续切换项目或客户端不能改变已排队消息的执行目标。
+    state.jobs.push({id:randomUUID(),sender,text,exchange:{request:text},state:'queued',startedAt:Date.now(),route:{clientId:client.id,clientName:client.name,settings,threadId:binding.threadId||'',threadName:binding.threadId?binding.threadName||'':'',transport:binding.transport||'',bindingId:binding.id}});
+    state.jobs=state.jobs.slice(-50);persist();if(notifyQueue)reply(sender,'消息已排队，前面的任务结束后会继续处理。');schedule();
   }
   function accept(raw) {
     const message=incoming(raw,state.account.id);if(!message||state.seen.includes(message.id))return;
@@ -373,7 +438,7 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
     const valid=()=>!closed&&state.enabled&&state.account===account&&epoch===queryEpoch&&queryContexts.get(key)===context&&state.allowed.includes(message.sender);
     // 每位发送者按收件顺序处理选择与任务，异步查询不能让下一条文字跑进旧对话。
     // 停止、审批和状态不能被缓慢的目录查询阻塞；停止同时废弃尚未处理的旧消息。
-    const urgent=['/stop','/allow','/deny','/status','/answer','/question'].includes(command)||Boolean(currentInput(message.sender)&&!command.startsWith('/'));
+    const urgent=['/stop','/allow','/deny','/status','/answer','/question'].includes(command)||Boolean(currentInput(message.sender)&&!COMMANDS.has(command));
     const pending=(urgent?Promise.resolve():commands.get(key)||Promise.resolve()).then(()=>{if(valid())return route(message,valid);})
       .catch(e=>{if(valid()&&e.code!=='STORAGE'){try{reply(message.sender,'操作未完成：'+(e.message||'请重试'));}catch{}}})
       .finally(()=>{if(commands.get(key)===pending)commands.delete(key);changed();});
@@ -424,7 +489,7 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
           if(result.status==='confirmed') {
             if(!result.ilink_bot_id||!result.bot_token)throw new Error('微信确认信息缺少账号凭据');
             const id=String(result.ilink_bot_id),same=state.account?.id===id;
-            if(!same){const clients=state.clients;state=fresh();state.clients=clients;invalidateQueries();deliveryError='';deliveryRetryAt=0;deliveryFailures=0;}
+            if(!same){const clients=state.clients;state=fresh();state.clients=clients;invalidateQueries();deliveryError='';failedDeliveryId='';deliveryRetryAt=0;deliveryFailures=0;}
             state.account={id,token:String(result.bot_token),baseUrl:api.validate(result.baseurl||BASE),owner:String(result.ilink_user_id||'')};
             if(state.account.owner&&!state.allowed.includes(state.account.owner))state.allowed.push(state.account.owner);
             state.enabled=true;persist();qr=null;loginController=null;startPoll();return;
@@ -450,7 +515,7 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
         const identity=client=>JSON.stringify([client.backend,client.binary,client.configHome,client.profile]);
         for(const binding of Object.values(state.bindings)) {
           const before=state.clients.find(client=>client.id===binding.clientId),after=clients.find(client=>client.id===binding.clientId);
-          if(before&&after&&identity(before)!==identity(after)){binding.threadId='';delete binding.transport;binding.id=randomUUID();}
+          if(before&&after&&identity(before)!==identity(after)){binding.threadId='';delete binding.threadName;delete binding.transport;binding.id=randomUUID();}
         }
         state.clients=clients;invalidateQueries();persist();changed();
       }
@@ -460,6 +525,8 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
         for(const client of clients)resolveBinary(validateSettings(client,{requireCwd:false}));
         error='';changed();return '已找到客户端；沿用本机配置，实际登录与服务连接会在首次任务时验证。';
       }
+      // 发现操作只返回本机候选项，不启用、不保存，也不启动模型任务。
+      else if(name==='discover-clients')return discoverClients();
       else if(name==='enable') {
         if(typeof value!=='boolean')throw new Error('连接设置无效');
         if(value&&!state.account)throw new Error('请先扫码连接微信');
@@ -474,15 +541,28 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
         if(active?.job.sender===value)stopTask();
         for(const job of state.jobs)if(job.sender===value&&job.state==='queued'){job.state='cancelled';delete job.text;}
         state.outbox=state.outbox.filter(item=>item.sender!==value);persist();changed();
+      } else if(name==='task-detail') {
+        const job=state.jobs.find(job=>job.id===value);if(!job)throw new Error('任务记录不存在或已清理');
+        // 正文只响应小屋的主动查看，不进入每 200ms 广播的快照，也不读取客户端其他轮次。
+        return {id:job.id,request:job.exchange?.request??job.text??null,response:job.exchange?.response??null};
+      } else if(name==='delete-task') {
+        const job=state.jobs.find(job=>job.id===value);if(!job)throw new Error('任务记录不存在或已清理');
+        if(active?.job===job||['queued','running','approval','question'].includes(job.state))throw new Error('请等待任务结束后再删除记录');
+        if(!canDeleteJob(job))throw new Error('仅可删除失败、中断或取消的任务记录');
+        // 同时移除该任务尚未发出的结果，保留去重游标与其他任务，避免删除后重发或重跑。
+        const removed=state.outbox.filter(item=>item.jobId===job.id);
+        state.outbox=state.outbox.filter(item=>item.jobId!==job.id);state.jobs=state.jobs.filter(item=>item!==job);
+        if(removed.some(item=>item.id===failedDeliveryId)){deliveryError='';failedDeliveryId='';deliveryRetryAt=0;deliveryFailures=0;}
+        persist();changed();void flush();
       } else if(name==='retry'){deliveryError='';deliveryRetryAt=0;void flush();changed();}
       else if(name==='forget') {
         const clients=state.clients;
-        loginController?.abort();loginController=null;stopPoll();stopTask();invalidateQueries();active=null;qr=null;store.remove();state=fresh();state.clients=clients;loadError='';error='';deliveryError='';deliveryRetryAt=0;deliveryFailures=0;status='disconnected';
+        loginController?.abort();loginController=null;stopPoll();stopTask();invalidateQueries();active=null;qr=null;store.remove();state=fresh();state.clients=clients;loadError='';error='';deliveryError='';failedDeliveryId='';deliveryRetryAt=0;deliveryFailures=0;status='disconnected';
         if(store.available())persist();changed();
       }else throw new Error('未知微信操作');
       return snapshot();
     },
-    close(){closed=true;loginController?.abort();stopPoll();stopTask();invalidateQueries();}
+    close(){closed=true;loginController?.abort();stopPoll();stopTask();invalidateQueries();for(const reader of titleReaders.values())reader.close();titleReaders.clear();}
   };
 }
 module.exports={createWechatGateway,HELP,wait};

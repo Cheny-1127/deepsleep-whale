@@ -58,6 +58,8 @@ actionTabs.forEach((tab,index)=>{
 });
 function render(data) {
   lastData=data;
+  // 以原生窗口状态为准，托盘或右键隐藏桌宠后，小屋按钮也会同步。
+  if($('pet-visibility-toggle'))$('pet-visibility-toggle').textContent=data.petVisible?'↙ 隐藏桌宠':'↗ 显示桌宠';
   hooksView.render(data);
   remindersView.render(data);
   wechatView.render(data.wechat);

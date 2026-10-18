@@ -60,7 +60,7 @@ function incoming(message,accountId) {
     text:items.filter(item=>item.type===1&&typeof item.text_item?.text==='string').map(item=>item.text_item.text).join('\n').slice(0,16000)};
 }
 function createWechatApi({fetchImpl=globalThis.fetch,base=BASE}={}) {
-  const validate=trustedBase;
+  const validate=trustedBase,typingTickets=new WeakMap();
   async function request(endpoint,{account,body,signal,timeout=40000,host}={}) {
     const headers={'iLink-App-Id':'bot','iLink-App-ClientVersion':String(CLIENT_VERSION)};
     if(body) {
@@ -83,6 +83,23 @@ function createWechatApi({fetchImpl=globalThis.fetch,base=BASE}={}) {
     qr:signal=>request('get_bot_qrcode?bot_type=3',{signal}),
     qrStatus:(code,host,signal)=>request('get_qrcode_status?qrcode='+encodeURIComponent(code),{host,signal}),
     updates:(account,cursor,signal)=>request('getupdates',{account,body:{get_updates_buf:cursor||''},signal}),
+    async typing(account,to,enabled,context,signal) {
+      signal?.throwIfAborted();
+      // 票据按账号对象和联系人隔离，仅在内存缓存十分钟；停止时过期也要重新获取。
+      if(!typingTickets.has(account))typingTickets.set(account,new Map());
+      const cache=typingTickets.get(account);let ticket=cache.get(to);
+      if(!ticket||ticket.expires<=Date.now()) {
+        const config=await request('getconfig',{account,signal,timeout:10000,body:{ilink_user_id:to,...(context?{context_token:context}:{})}});
+        signal?.throwIfAborted();
+        if(typeof config.typing_ticket!=='string'||!config.typing_ticket)return false;
+        ticket={value:config.typing_ticket,expires:Date.now()+600000};
+        if(cache.size>=128)cache.delete(cache.keys().next().value);
+        cache.set(to,ticket);
+      }
+      signal?.throwIfAborted();
+      await request('sendtyping',{account,signal,timeout:10000,body:{ilink_user_id:to,typing_ticket:ticket.value,status:enabled?1:2}});
+      return true;
+    },
     async send(account,to,text,context,clientId=randomUUID(),signal) {
       const deliver=token=>request('sendmessage',{account,signal,timeout:20000,body:{msg:{
         from_user_id:'',to_user_id:to,client_id:clientId,message_type:2,message_state:2,

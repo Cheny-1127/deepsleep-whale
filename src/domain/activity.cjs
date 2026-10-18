@@ -79,7 +79,7 @@ class Activity {
     return before!==JSON.stringify(this.notices);
   }
   markRead(id) { this.notices=this.notices.filter(item=>item.id!==id); }
-  // 用户已经回到这个 Cursor 对话；只清该对话的完成提醒，其他聊天保持原样。
+  // 用户明确点击提醒并确认跳转后，只清该 Cursor 对话；后台选中记录不能调用此方法。
   acknowledgeCursor(sessionId) {
     if(typeof sessionId!=='string'||!sessionId.startsWith('cursor:')||!this.notices.some(item=>item.session_id===sessionId))return false;
     this.notices=this.notices.filter(item=>item.session_id!==sessionId);
