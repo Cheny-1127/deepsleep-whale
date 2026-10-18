@@ -29,7 +29,20 @@ function checkResult(data) {
 }
 function splitText(text,limit=1800) {
   const chars=Array.from(String(text)),parts=[];
-  while(chars.length)parts.push(chars.splice(0,limit).join(''));
+  for(let start=0;start<chars.length;) {
+    let end=Math.min(start+limit,chars.length);
+    if(end<chars.length) {
+      // 优先在后半段的段落或换行处断开，保留所有空白；长行才按 Unicode 字符硬拆。
+      let line=0,paragraph=0;
+      for(let i=end-1;i>=start+Math.floor(limit/2);i--)if(chars[i]==='\n') {
+        if(!line)line=i+1;
+        if(chars[i-1]==='\n'){paragraph=i+1;break;}
+      }
+      end=paragraph||line||end;
+      if(chars[end-1]==='\r'&&chars[end]==='\n'&&end>start+1)end--;
+    }
+    parts.push(chars.slice(start,end).join(''));start=end;
+  }
   return parts;
 }
 function parseResponse(text) {

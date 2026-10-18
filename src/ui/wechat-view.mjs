@@ -1,6 +1,6 @@
 const $=id=>document.getElementById('wechat-'+id);
 const statuses={disconnected:'未连接','logging-in':'正在扫码',connecting:'连接中',connected:'已连接',reconnecting:'正在重连',paused:'已暂停',expired:'登录失效',error:'连接异常'};
-const jobs={queued:'排队中',running:'排查中',approval:'等待审批',completed:'已完成',failed:'未完成',interrupted:'已中断',cancelled:'已取消'};
+const jobs={queued:'排队中',running:'排查中',approval:'等待审批',question:'等待回答',completed:'已完成',failed:'未完成',interrupted:'已中断',cancelled:'已取消'};
 export function createWechatView() {
   if(!$('view'))return {render(){}};
   let latest,dirty=false,busy=false,rowsKey='',clientKey='',draft=[];

@@ -92,6 +92,53 @@ test('a desktop-resolved request cannot be approved again by a late WeChat respo
   desktop.state.requests=[];desktop.snapshot();decide(true);desktop.complete();await task.promise;
   assert.equal(desktop.wire.some(m=>m.method==='thread-follower-command-approval-decision'),false);
 });
+test('desktop questions submit one answer to their pinned owner and original request',async t=>{
+  const {desktop,run}=await setup(t),asked=[];
+  const task=run({onUserInput:async request=>{asked.push(request);return {answers:{mode:{answers:['修复']}}};}});
+  await until(()=>desktop.wire.some(m=>m.method==='thread-follower-start-turn'));
+  desktop.state.requests=[{id:17,method:'item/tool/requestUserInput',params:{threadId:'desktop-fixture',turnId:'forwarded-turn',itemId:'q',questions:[{id:'mode',question:'怎样处理？',options:[{label:'分析'},{label:'修复'}]}]}}];
+  desktop.snapshot();desktop.snapshot();await until(()=>desktop.wire.some(m=>m.method==='thread-follower-submit-user-input'));
+  assert.equal(asked.length,1);assert.equal(asked[0].questions[0].question,'怎样处理？');
+  const response=desktop.wire.find(m=>m.method==='thread-follower-submit-user-input');assert.equal(response.version,1);assert.equal(response.targetClientId,'desktop-owner');
+  assert.deepEqual(response.params,{conversationId:'desktop-fixture',requestId:17,response:{answers:{mode:{answers:['修复']}}}});
+  desktop.complete();await task.promise;
+});
+test('desktop withdrawal aborts the question and late answers are never submitted',async t=>{
+  const {desktop,run}=await setup(t);let answer,signal;
+  const task=run({onUserInput:request=>{signal=request.signal;return new Promise(resolve=>{answer=resolve;});}});
+  await until(()=>desktop.wire.some(m=>m.method==='thread-follower-start-turn'));
+  desktop.state.requests=[{id:'q',method:'item/tool/requestUserInput',params:{threadId:'desktop-fixture',turnId:'forwarded-turn',questions:[{id:'mode',question:'怎样处理？'}]}}];
+  desktop.snapshot();await until(()=>answer);
+  desktop.state.requests=[];desktop.snapshot();await until(()=>signal.aborted);answer({answers:{mode:{answers:['晚到答案']}}});
+  desktop.complete();await task.promise;assert.equal(desktop.wire.some(m=>m.method==='thread-follower-submit-user-input'),false);
+});
+test('desktop asynchronous agent questions use question IDs and steer the same active turn',async t=>{
+  const {desktop,run}=await setup(t),asked=[];
+  const task=run({onUserInput:async request=>{asked.push(request);return {answers:{[request.questions[0].id]:{answers:['修复']}}};}});
+  void task.promise.catch(()=>{});
+  await until(()=>desktop.wire.some(m=>m.method==='thread-follower-start-turn'));
+  desktop.state.turnHistory.history.entitiesByKey.old.items.push({id:'old-question',type:'agentMessage',questions:[{title:'不要转发旧问题',options:['旧选项']}]});
+  desktop.patch([{op:'replace',path:['turnHistory','history','entitiesByKey','current','items'],value:[{id:'async-q',type:'agentMessage',phase:'commentary',text:'问题',questions:[{title:'怎样处理？',options:['分析','修复']}]}]}]);
+  await until(()=>desktop.wire.some(m=>m.method==='thread-follower-steer-turn'));
+  assert.equal(asked.length,1);assert.equal(asked[0].questions[0].id,JSON.stringify(['request_user_input_async','async-q',0]));
+  const response=desktop.wire.find(m=>m.method==='thread-follower-steer-turn');assert.equal(response.version,1);assert.equal(response.targetClientId,'desktop-owner');
+  assert.equal(response.params.conversationId,'desktop-fixture');assert.match(response.params.input[0].text,/<send_user_message_question_reply>/);assert.ok(response.params.input[0].text.includes('修复'));
+  const restore=response.params.restoreMessage;
+  assert.equal(restore?.id,response.params.clientUserMessageId);assert.equal(restore?.text,response.params.input[0].text);
+  assert.deepEqual(restore?.context.workspaceRoots,[fs.realpathSync(desktop.state.cwd)]);assert.equal(restore?.context.prompt,restore.text);
+  await until(()=>desktop.state.turnHistory.history.entitiesByKey.current.items.some(item=>item.type==='steeringUserMessage'&&item.status==='accepted'));
+  desktop.complete();await task.promise;
+});
+test('desktop answers to an async question withdraw the WeChat prompt before any late steer',async t=>{
+  const {desktop,run}=await setup(t);let answer,signal;
+  const task=run({onUserInput:request=>{signal=request.signal;return new Promise(resolve=>{answer=resolve;});}});
+  await until(()=>desktop.wire.some(m=>m.method==='thread-follower-start-turn'));
+  const items=desktop.state.turnHistory.history.entitiesByKey.current.items;
+  items.push({id:'async-q',type:'agentMessage',questions:[{title:'怎样处理？',options:['分析','修复']}]});desktop.snapshot();await until(()=>answer);
+  items.push({id:'desktop-answer',type:'steeringUserMessage',status:'accepted',input:[{type:'text',text:'<send_user_message_question_reply>'+JSON.stringify([{questionItemId:JSON.stringify(['request_user_input_async','async-q',0]),question:'怎样处理？',answer:'分析'}])+'</send_user_message_question_reply>'}]});
+  desktop.snapshot();await until(()=>signal.aborted);answer({answers:{[JSON.stringify(['request_user_input_async','async-q',0])]:{answers:['修复']}}});
+  desktop.complete();await task.promise;assert.equal(desktop.wire.some(m=>m.method==='thread-follower-steer-turn'),false);
+});
 test('waiting timeout does not interrupt somebody elses desktop turn, and rejected delivery never leaks raw errors',async t=>{
   const first=await setup(t,{busy:true});await assert.rejects(first.run({timeoutMs:30}).promise,e=>e.code==='TIMEOUT');
   assert.equal(first.desktop.wire.some(m=>m.method==='thread-follower-interrupt-turn'||m.method==='thread-follower-start-turn'),false);

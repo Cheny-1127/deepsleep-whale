@@ -5,6 +5,7 @@ const path=require('node:path');
 const os=require('node:os');
 const {findCodex}=require('../hooks/availability.cjs');
 const {AgentError,rpcFailure}=require('./agent-error.cjs');
+const {normalizeQuestions,normalizeAnswer,asyncQuestions,asyncReply}=require('./user-input.cjs');
 function executable(file) {try {return path.isAbsolute(file)&&fs.statSync(file).isFile()&&(fs.accessSync(file,fs.constants.X_OK)===undefined);}catch{return false;}}
 function resolveBinary(settings) {
   if(settings.binary) {if(!executable(settings.binary))throw new Error('客户端可执行文件不存在或不可执行');return settings.binary;}
@@ -26,9 +27,9 @@ function validateSettings(value,{requireCwd=true,checkPaths=true}={}) {
   if(settings.binary&&(!path.isAbsolute(settings.binary)||(checkPaths&&!executable(settings.binary))))throw new Error('客户端路径必须指向可执行文件');
   return settings;
 }
-function startLocalAgent({settings,text,session,onSession=()=>{},onApproval=async()=>false,spawnImpl=spawn,timeoutMs=600000}) {
+function startLocalAgent({settings,text,session,onSession=()=>{},onApproval=async()=>false,onUserInput,spawnImpl=spawn,timeoutMs=600000}) {
   let child,threadId=session||'',turnId='',cancelled=false,done=false,resolveResult,rejectResult,sequence=0,output='',buffer='',stage='spawn',turnFailure;
-  const pending=new Map(),messages=new Map(),fileChanges=new Map();
+  const pending=new Map(),messages=new Map(),fileChanges=new Map(),userInputs=new Map();
   const promise=new Promise((resolve,reject)=>{resolveResult=resolve;rejectResult=reject;});
   let timeout;
   function stopProcess() {
@@ -39,6 +40,7 @@ function startLocalAgent({settings,text,session,onSession=()=>{},onApproval=asyn
   }
   function finish(error,result) {
     if(done)return;done=true;clearTimeout(timeout);
+    for(const controller of userInputs.values())controller.abort();userInputs.clear();
     for(const {reject,timer,method} of pending.values()){clearTimeout(timer);reject(new AgentError('CONNECTION',method));}pending.clear();
     stopProcess();error?rejectResult(error instanceof AgentError?error:new AgentError('UNKNOWN',stage)):resolveResult({text:result||'本轮没有返回文本结果。',session:threadId});
   }
@@ -50,6 +52,16 @@ function startLocalAgent({settings,text,session,onSession=()=>{},onApproval=asyn
       const timer=setTimeout(()=>{pending.delete(id);reject(new AgentError('RPC_TIMEOUT',method));},20000);timer.unref?.();
       pending.set(id,{resolve,reject,timer,method});send({id,method,params});
     });
+  }
+  async function askInput(key,questions,submit) {
+    if(userInputs.has(key))return;
+    if(!onUserInput)throw new AgentError('INTERACTION','turn');
+    const controller=new AbortController();userInputs.set(key,controller);
+    try{
+      const response=await onUserInput({questions,signal:controller.signal});
+      if(done||controller.signal.aborted)return;
+      await submit(normalizeAnswer(response,questions));
+    }finally{if(userInputs.get(key)===controller)userInputs.delete(key);controller.abort();}
   }
   async function receive(data) {
     if(done)return;
@@ -70,12 +82,18 @@ function startLocalAgent({settings,text,session,onSession=()=>{},onApproval=asyn
           detail:[detail,params.reason,params.networkApprovalContext?`网络：${params.networkApprovalContext.protocol}://${params.networkApprovalContext.host}`:''].filter(Boolean).join('\n'),cwd:params.cwd||settings.cwd});
         send({id:data.id,result:{decision:accepted?'accept':'decline'}});
       } else if(data.method==='item/permissions/requestApproval')send({id:data.id,result:{permissions:{},scope:'turn'}});
-      else if(data.method==='item/tool/requestUserInput')send({id:data.id,result:{answers:{}}});
+      else if(data.method==='item/tool/requestUserInput'){
+        if(!turnId||params.turnId!==turnId){send({id:data.id,error:{code:-32602,message:'Unbound turn'}});return;}
+        // 阻塞式问题直接响应原 RPC 请求 ID，不能另开一轮或先用空答案结束请求。
+        await askInput('request:'+data.id,normalizeQuestions(params.questions),response=>send({id:data.id,result:response}));
+      }
       else send({id:data.id,error:{code:-32601,message:'Unsupported remote interaction'}});
       return;
     }
     const params=data.params||{};
     if(params.threadId!==threadId)return;
+    // 客户端撤销请求后同步撤销微信提问，迟到的答案不能再交回该请求。
+    if(data.method==='serverRequest/resolved'){const key='request:'+params.requestId;userInputs.get(key)?.abort();userInputs.delete(key);return;}
     if(data.method==='turn/started'){turnId=params.turn?.id||turnId;stage='turn';}
     if(data.method==='error'&&params.willRetry!==true&&(!params.turnId||!turnId||params.turnId===turnId))turnFailure=rpcFailure(params.error,'turn');
     if(data.method==='item/started'&&params.item?.type==='fileChange')fileChanges.set(params.item.id,(params.item.changes||[]).map(change=>`${change.path}\n${change.diff||''}`).join('\n'));
@@ -83,7 +101,14 @@ function startLocalAgent({settings,text,session,onSession=()=>{},onApproval=asyn
       output+=typeof params.delta==='string'?params.delta:'';
       if(output.length>100000)finish(new AgentError('REPLY_LIMIT','turn'));
     }
-    if(data.method==='item/completed'&&params.item?.type==='agentMessage')messages.set(params.item.id,params.item.text||'');
+    if(data.method==='item/completed'&&params.item?.type==='agentMessage'&&(!params.turnId||params.turnId===turnId)){
+      messages.set(params.item.id,params.item.text||'');
+      if(params.item.questions?.length){
+        const questions=asyncQuestions(params.item),expectedTurnId=turnId;
+        // 异步答案插入原轮次；由服务端核对 expectedTurnId，防止串入后续任务。
+        await askInput('async:'+params.item.id,questions,response=>rpc('turn/steer',{threadId,expectedTurnId,input:[{type:'text',text:asyncReply(questions,response)}]}));
+      }
+    }
     if(data.method==='turn/completed'&&(!turnId||params.turn?.id===turnId)) {
       if(params.turn?.status!=='completed')finish(cancelled?new AgentError('CANCELLED','turn'):params.turn?.error?rpcFailure(params.turn.error,'turn'):turnFailure||new AgentError('TURN_FAILED','turn'));
       else finish(null,[...messages.values()].join('\n\n')||output);

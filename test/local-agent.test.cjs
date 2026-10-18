@@ -33,6 +33,27 @@ test('unapproved Codex requests receive decline rather than a session grant',asy
   const f=fixture(t);await startLocalAgent({...f,text:'approval'}).promise;
   assert.equal(f.read().find(item=>item.approval).approval.decision,'decline');
 });
+test('CLI questions return the users answer to the original request instead of an empty response',async t=>{
+  const f=fixture(t),questions=[];
+  await startLocalAgent({...f,text:'question',onUserInput:async request=>{questions.push(request);return {answers:{mode:{answers:['修改代码']}}};}}).promise;
+  assert.equal(questions.length,1);assert.equal(questions[0].questions[0].question,'如何处理？');
+  assert.deepEqual(f.read().find(item=>item.userInput).userInput,{answers:{mode:{answers:['修改代码']}}});
+});
+test('CLI asynchronous questions steer only their active turn with the original question ID',async t=>{
+  const f=fixture(t);
+  const result=await startLocalAgent({...f,text:'async-question',timeoutMs:1000,onUserInput:async request=>({answers:{[request.questions[0].id]:{answers:['修改代码']}}})}).promise;
+  assert.equal(result.text.includes('Codex fixture'),true);
+  const input=f.read().find(item=>item.steeringInput).steeringInput;
+  assert.equal(input.expectedTurnId,'turn-fixture');assert.equal(input.threadId,'codex-fixture');
+  assert.match(input.input[0].text,/<send_user_message_question_reply>/);assert.ok(input.input[0].text.includes('async-item'));assert.ok(input.input[0].text.includes('修改代码'));
+});
+test('CLI request withdrawal aborts its question callback and foreign turns cannot request answers',async t=>{
+  const f=fixture(t);let signal;
+  await startLocalAgent({...f,text:'withdrawn-question',onUserInput:request=>{signal=request.signal;return new Promise(resolve=>request.signal.addEventListener('abort',()=>resolve(null),{once:true}));}}).promise;
+  assert.equal(signal?.aborted,true);assert.equal(f.read().some(item=>item.userInput),false);
+  const other=fixture(t);await startLocalAgent({...other,text:'foreign-question',onUserInput:()=>assert.fail('foreign turn question')}).promise;
+  assert.equal(other.read().find(item=>item.userInput).userInput.code,-32602);
+});
 test('cancel and timeout terminate only the agent process owned by this request',async t=>{
   const f=fixture(t);const task=startLocalAgent({...f,text:'hang'});
   await new Promise(resolve=>setTimeout(resolve,100));task.cancel();await assert.rejects(task.promise,/停止/);
