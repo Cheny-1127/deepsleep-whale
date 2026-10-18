@@ -29,10 +29,6 @@ function createCursorChatOpener({openExternal,stateFile,readSelected,timeout=800
       } while(Date.now()<=deadline);
       throw new Error('没有回到这个 Cursor 对话。请从智能体列表打开，提醒已保留。');
     },
-    selectedSession() {
-      const id=selected();
-      return typeof id==='string'&&UUID.test(id)?`cursor:${id}`:null;
-    },
     receive() { return false; }
   };
 }

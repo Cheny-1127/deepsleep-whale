@@ -21,6 +21,28 @@ test('iLink wire format retains account, cursor, context and stable delivery ID'
   assert.equal(requests[3].redirect,'error');
   assert.deepEqual(JSON.parse(requests[3].body).msg,{from_user_id:'',to_user_id:'owner',client_id:'delivery-1',message_type:2,message_state:2,item_list:[{type:1,text_item:{text:'你好😀'}}],context_token:'context-1'});
 });
+test('typing uses iLink tickets cached per account and peer and refreshes before stopping after expiry',async t=>{
+  let now=1000,issued=0;t.mock.method(Date,'now',()=>now);
+  const requests=[],api=createWechatApi({fetchImpl:async(url,options)=>{requests.push({url,...options});return {ok:true,text:async()=>JSON.stringify(url.endsWith('/getconfig')?{typing_ticket:'ticket-'+(++issued)}:{ret:0})};}});
+  const account={id:'bot',token:'private-test-token'};
+  await api.typing(account,'owner',true,'ctx-one');await api.typing(account,'owner',true,'ctx-two');await api.typing(account,'owner',false,'ctx-two');
+  assert.deepEqual(requests.map(r=>r.url.split('/').at(-1)),['getconfig','sendtyping','sendtyping','sendtyping']);
+  assert.deepEqual(JSON.parse(requests[0].body),{ilink_user_id:'owner',context_token:'ctx-one',base_info:{channel_version:'2.2.0'}});
+  assert.deepEqual(requests.slice(1).map(r=>JSON.parse(r.body).status),[1,1,2]);
+  assert.ok(requests.slice(1).every(r=>JSON.parse(r.body).typing_ticket==='ticket-1'));
+  now+=600001;await api.typing(account,'owner',false,'ctx-fresh');
+  assert.equal(JSON.parse(requests.at(-2).body).context_token,'ctx-fresh');assert.equal(JSON.parse(requests.at(-1).body).typing_ticket,'ticket-2');
+  await api.typing(account,'other',true,'ctx-other');await api.typing({...account,token:'another-account-token'},'owner',true,'ctx-account');
+  assert.equal(issued,4);assert.equal(requests.at(-1).headers.Authorization,'Bearer another-account-token');
+});
+test('missing typing tickets and cancellation never send a typing-start signal',async()=>{
+  const requests=[],api=createWechatApi({fetchImpl:async(url,options)=>{requests.push(url);return {ok:true,text:async()=>'{}'};}});
+  assert.equal(await api.typing({token:'test'},'owner',true,'ctx'),false);assert.equal(requests.length,1);
+  const controller=new AbortController(),cancelled=[];
+  const interrupted=createWechatApi({fetchImpl:async url=>{cancelled.push(url);controller.abort();return {ok:true,text:async()=>' {"typing_ticket":"late-ticket"}'};}});
+  await assert.rejects(interrupted.typing({token:'test'},'owner',true,'ctx',controller.signal),{name:'AbortError'});
+  assert.equal(cancelled.length,1);
+});
 test('credentials cannot follow untrusted service addresses and API expiry is explicit',()=>{
   for(const value of ['http://ilinkai.weixin.qq.com','https://weixin.qq.com.evil.test','https://user:pass@ilinkai.weixin.qq.com','https://ilinkai.weixin.qq.com/path','https://127.0.0.1'])assert.throws(()=>trustedBase(value));
   assert.equal(trustedBase('https://ilinkai.weixin.qq.com/'),'https://ilinkai.weixin.qq.com');

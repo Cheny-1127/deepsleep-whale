@@ -90,7 +90,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   function snapshot() {
     // 两个窗口共享同一份主进程状态，避免小屋和悬浮桌宠各自计时、各自累计成长。
     const tasks = activity.snapshot();
-    return { wechat:wechat?.snapshot()||null,hookAdapters:hooks.adapters,hookAvailability:hooks.availability,sourceStatus,codexApprovalSync:codexRuntime.snapshot(),clientRunning:{...clientRunning},completionExpanded, busyExpanded, reminderView, settings:hooks.settings, nurture: nurture.snapshot(), activity: tasks, ...behavior.snapshot(), bridge: Boolean(bridge), bridgeError, reminderError };
+    return { petVisible:windows.isPetVisible(),wechat:wechat?.snapshot()||null,hookAdapters:hooks.adapters,hookAvailability:hooks.availability,sourceStatus,codexApprovalSync:codexRuntime.snapshot(),clientRunning:{...clientRunning},completionExpanded, busyExpanded, reminderView, settings:hooks.settings, nurture: nurture.snapshot(), activity: tasks, ...behavior.snapshot(), bridge: Boolean(bridge), bridgeError, reminderError };
   }
   function canObserveCodexApproval() {
     return hooks.settings.sources.codex&&hooks.settings.events.codex?.PermissionRequest!==false&&clientRunning.codex===true&&
@@ -187,6 +187,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     else if (action === 'read-notice' && typeof value === 'string') { activity.markRead(value);saveReminders(); }
     else if (action === 'open-chat') { await openChat(value?.sessionId,value?.noticeId); }
     else if (action === 'panel') showPanel();
+    else if (action === 'toggle-pet') windows.isPetVisible()?windows.hidePet():windows.showPet();
     else if (action === 'show-pet') windows.showPet();
     else if (action === 'hide-pet') windows.hidePet();
     else if (action === 'quit') app.quit();
@@ -263,9 +264,8 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     setInterval(broadcast, 200);
     setInterval(()=>void refreshClients(),1000);
     setInterval(()=>{
-      // 用户在 Cursor 里打开已完成对话时没有新提示词；选中该对话就清掉它的完成提醒。
-      const viewed=clientRunning.cursor===true&&activity.acknowledgeCursor(cursorChats.selectedSession());
-      if(viewed||activity.reconcile(titles.readState())) { saveReminders();broadcast(); }
+      // Cursor 保存的是上次选中项，不能证明用户看过新结果；这里只同步 Codex 原生已读状态。
+      if(activity.reconcile(titles.readState())) { saveReminders();broadcast(); }
     },1000);
     setInterval(() => { nurture.tick(10); broadcast(); }, 10 * 60 * 1000);
   });

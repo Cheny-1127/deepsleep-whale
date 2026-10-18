@@ -1,7 +1,7 @@
 'use strict';
 const { app, BrowserWindow, ipcMain, screen, Menu, Tray, nativeImage } = require('electron');
 const path = require('node:path');
-const SPECIAL_ACTIONS = require('../shared/special-actions.js');
+const {createPetMenu}=require('./pet-menu.cjs');
 
 // 此模块只负责 Electron 窗口、菜单和拖动；任务状态和交互规则由应用层传入。
 function createWindows({ snapshot, performAction, collapseReminders }) {
@@ -12,6 +12,7 @@ function createWindows({ snapshot, performAction, collapseReminders }) {
     win.webContents.setWindowOpenHandler(() => ({ action:'deny' }));
     win.webContents.on('will-navigate', event => event.preventDefault());
   }
+  const petMenu=createPetMenu({getPet:()=>pet,snapshot,performAction,showPanel,restartApp,protect});
   function createPanel() {
     panel = new BrowserWindow({ width:1060, height:770, minWidth:860, minHeight:680, title:'', backgroundColor:'#f5f7f4', webPreferences:preferences() });
     panel.on('page-title-updated', event => { event.preventDefault(); panel.setTitle(''); });
@@ -43,31 +44,19 @@ function createWindows({ snapshot, performAction, collapseReminders }) {
   }
   function createPet() {
     const area = screen.getPrimaryDisplay().workArea;
+    // macOS 无边框窗口还需关闭原生屏幕约束，否则向上移动仍会停在菜单栏下方。
     pet = new BrowserWindow({ width:220, height:320, x:area.x + area.width - 240, y:area.y + area.height - 340,
-      transparent:true, frame:false, resizable:false, hasShadow:false, alwaysOnTop:true, skipTaskbar:true, webPreferences:preferences() });
+      transparent:true, frame:false, resizable:false, enableLargerThanScreen:true, hasShadow:false, alwaysOnTop:true, skipTaskbar:true, webPreferences:preferences() });
     protect(pet);
     pet.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen:true });
     pet.loadFile(path.join(__dirname, '../ui/pet.html'));
     pet.on('show', updateTrayMenu);
-    pet.on('hide', updateTrayMenu);
-    pet.on('blur', collapseReminders);
-    // 每次右键读取最新快照，小屋按钮与菜单共用应用层的动作入口和锁定规则。
-    pet.webContents.on('context-menu', () => {
-      const current = snapshot();
-      const enabled = current.activity.state !== 'approval' && current.state !== 'feed' && !Object.hasOwn(SPECIAL_ACTIONS, current.state);
-      Menu.buildFromTemplate([
-        { label:'互动表情', submenu:[['喂饭','feed'], ['摸头','pat'], ['开心','happy'], ['生气','angry']]
-          .map(([label, action]) => ({ label, enabled, click:() => performAction(action) })) },
-        { label:'小节目', submenu:Object.entries(SPECIAL_ACTIONS)
-          .map(([id, clip]) => ({ label:clip.label, enabled, click:() => performAction(id) })) },
-        { type:'separator' },
-        { label:'打开小屋', click:showPanel },
-        { label:'隐藏桌宠', click:() => pet.hide() },
-        { type:'separator' },
-        { label:'重启', click:restartApp },
-        { label:'退出', click:() => app.quit() }
-      ]).popup({ window:pet });
-    });
+    pet.on('hide', () => {petMenu.close();updateTrayMenu();});
+    // 焦点进入自绘菜单不折叠提醒，避免人物几何在弹出过程中变化。
+    pet.on('blur', () => {if(!petMenu.isOpen())collapseReminders();});
+    pet.on('move',petMenu.close);
+    pet.on('resize',petMenu.close);
+    pet.webContents.on('context-menu',petMenu.open);
     pet.on('close', event => { if (!quitting) { event.preventDefault(); pet.hide(); } });
   }
   function resizePet(data) {
@@ -79,34 +68,33 @@ function createWindows({ snapshot, performAction, collapseReminders }) {
     const width = data.state === 'fireworks' ? 340 : expanded ? 260 : 220;
     const height = expanded ? (count === 1 ? 380 : 440) : 320;
     if (bounds.width === width && bounds.height === height) return;
-    // 提醒向上展开，烟花横向留白；人物倍率和脚底位置保持稳定，并限制在屏幕工作区。
-    const area = screen.getDisplayMatching(bounds).workArea;
-    const x = Math.max(area.x, Math.min(Math.round(bounds.x + (bounds.width - width) / 2), area.x + area.width - width));
-    const y = Math.max(area.y, Math.min(bounds.y + bounds.height - height, area.y + area.height - height));
+    // 提醒向上展开，烟花横向留白；只保持人物中心与脚底，不把用户选择的位置拉回屏幕内。
+    const x = Math.round(bounds.x + (bounds.width - width) / 2);
+    const y = bounds.y + bounds.height - height;
     pet.setBounds({ ...bounds, x, y, width, height });
   }
 
-  // 只接受悬浮窗发起的拖动；屏幕坐标差避免窗口移动后页面坐标发生反馈抖动。
+  // 只接受悬浮窗发起的拖动；按屏幕坐标差自由移动，允许气泡或人物部分移出屏幕。
   let dragOrigin = null;
   ipcMain.on('pet-drag', (event, phase, point) => {
     if (event.sender !== pet?.webContents) return;
     if (phase === 'end') { dragOrigin = null; return; }
     if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
+    // 以按下时的鼠标与窗口位置为基准，避免窗口移动后重复叠加位移造成跳动。
     if (phase === 'start') dragOrigin = { mouse:point, bounds:pet.getBounds() };
     else if (phase === 'move' && dragOrigin) {
-      const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
       const x = Math.round(dragOrigin.bounds.x + point.x - dragOrigin.mouse.x);
       const y = Math.round(dragOrigin.bounds.y + point.y - dragOrigin.mouse.y);
-      const bounds = pet.getBounds();
-      pet.setPosition(Math.max(area.x, Math.min(x, area.x + area.width - bounds.width)), Math.max(area.y, Math.min(y, area.y + area.height - bounds.height)));
+      pet.setPosition(x,y);
     }
   });
   app.on('second-instance', showPanel);
   app.on('activate', showPanel);
-  app.on('before-quit', () => { quitting = true; });
+  app.on('before-quit', () => { quitting = true;petMenu.close(); });
 
   return {
     showPanel, showReminders,
+    isPetVisible:()=>Boolean(pet&&!pet.isDestroyed()&&pet.isVisible()),
     isPanel:sender=>sender===panel?.webContents,
     start() {
       createPanel(); createPet();
@@ -119,6 +107,7 @@ function createWindows({ snapshot, performAction, collapseReminders }) {
     },
     broadcast(data) {
       resizePet(data);
+      petMenu.refresh();
       for (const win of [panel, pet]) if (win && !win.isDestroyed()) win.webContents.send('snapshot', data);
     },
     chime() { pet.webContents.send('chime'); },

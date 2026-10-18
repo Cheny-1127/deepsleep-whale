@@ -11,20 +11,86 @@ function harness(t,initial,options={}) {
   const state=initial||fresh();
   if(!initial){state.account={id:'bot',token:'private-token',owner:'owner'};state.allowed=['owner'];state.bindings[bindingKey('bot','owner')]={id:'owner-binding',cwd:process.cwd(),clientId:'',threadId:'',automatic:true};}
   let saved=structuredClone(state),failStore=false,sendError=null,updateError=null;
-  const batches=[{}],sent=[],runs=[],pending=[];
+  const batches=[{}],sent=[],runs=[],pending=[],typing=[];
   const store={available:()=>true,load:()=>structuredClone(saved),save:value=>{if(failStore)throw Error('disk');saved=structuredClone(value);},remove:()=>{saved=fresh();}};
   const api={validate:value=>value,qr:async()=>({qrcode:'private-poll-code',qrcode_img_content:'https://login.example.test/qr'}),
     qrStatus:async()=>({status:'confirmed',ilink_bot_id:'bot',bot_token:'private-token',ilink_user_id:'owner',baseurl:'https://ilinkai.weixin.qq.com'}),
     async updates(_account,_cursor,signal){if(updateError)throw updateError;if(batches.length)return batches.shift();return new Promise(resolve=>{const done=()=>{const i=pending.indexOf(done);if(i>=0)pending.splice(i,1);resolve(batches.shift()||{});};pending.push(done);signal.addEventListener('abort',done,{once:true});});},
-    async send(_account,sender,text,context,id){if(sendError)throw sendError;sent.push({sender,text,context,id});}};
+    async send(_account,sender,text,context,id){if(sendError)throw sendError;sent.push({sender,text,context,id});},
+    async typing(account,sender,enabled,context){typing.push({account:account.id,sender,enabled,context});return true;}};
   const gateway=createWechatGateway({store,api,makeQr:async()=> 'data:image/png;base64,test',pollDelay:1,loginDelay:1,...options,runAgent:options=>{
     const run={options};runs.push(run);run.promise=new Promise((resolve,reject)=>{run.resolve=text=>resolve({text});run.reject=reject;});run.cancel=()=>{run.cancelled=true;run.reject(Error('cancelled'));};return run;
   }});t.after(()=>gateway.close());
   const message=(id,text,sender='owner')=>({message_id:id,message_type:1,from_user_id:sender,to_user_id:'bot',context_token:'ctx-'+id,item_list:[{type:1,text_item:{text}}]});
   function push(...msgs){batches.push({msgs,get_updates_buf:'cursor-'+msgs[0]?.message_id});pending.shift()?.();}
-  return {gateway,api,runs,sent,message,push,get saved(){return saved;},set failStore(value){failStore=value;},set sendError(value){sendError=value;},set updateError(value){updateError=value;},async login(){await gateway.action('login');await until(()=>gateway.snapshot().status==='connected');}};
+  return {gateway,api,runs,sent,typing,message,push,get saved(){return saved;},set failStore(value){failStore=value;},set sendError(value){sendError=value;},set updateError(value){updateError=value;},async login(){await gateway.action('login');await until(()=>gateway.snapshot().status==='connected');}};
 }
 
+test('running client discovery is read-only, works without enabled clients and preserves state on failure',async t=>{
+  let fail=false,calls=0;
+  const state=fresh();state.clients=[];
+  const discovery={clients:[{key:'local',name:'Codex',backend:'codex',binary:'/bin/codex',configHome:'/home/one',available:true}],defaults:{},message:'发现 1 个'};
+  const h=harness(t,state,{discoverClients:async()=>{calls++;if(fail)throw Error('无法检测');return discovery;}}),before=structuredClone(h.saved);
+  assert.deepEqual(await h.gateway.action('discover-clients'),discovery);assert.equal(calls,1);assert.deepEqual(h.saved,before);assert.equal(h.runs.length,0);
+  fail=true;await assert.rejects(h.gateway.action('discover-clients'),/无法检测/);assert.deepEqual(h.saved,before);assert.equal(h.runs.length,0);
+});
+test('normal tasks and question answers use typing without sending receipt messages',async t=>{
+  const h=harness(t);await h.login();h.push(h.message('task','检查项目'));await until(()=>h.runs.length===1);await tick();
+  assert.deepEqual(h.typing.map(x=>x.enabled),[true]);assert.equal(h.sent.length,0);assert.equal(h.saved.outbox.length,0);
+  const answer=h.runs[0].options.onUserInput({questions:[{id:'mode',question:'怎么处理？',options:[{label:'仅分析'},{label:'修复'}]}]});
+  await until(()=>h.typing.at(-1)?.enabled===false);await until(()=>h.sent.some(x=>x.text.includes('怎么处理？')));
+  h.push(h.message('answer','1'));assert.deepEqual(await answer,{answers:{mode:{answers:['仅分析']}}});
+  await until(()=>h.typing.at(-1)?.enabled===true);assert.equal(h.runs.length,1);
+  h.runs[0].resolve('分析结果');await until(()=>h.saved.jobs[0].state==='completed'&&h.saved.outbox.length===0);await until(()=>h.typing.at(-1)?.enabled===false);
+  assert.deepEqual(h.sent.map(x=>x.text).filter(x=>!x.includes('怎么处理？')),['分析结果']);
+});
+test('typing refreshes while working and stays stopped through approval and question waits',async t=>{
+  t.mock.timers.enable({apis:['setInterval']});
+  const h=harness(t);await h.login();h.push(h.message('task','检查'));await until(()=>h.typing.length===1);
+  t.mock.timers.tick(2000);await until(()=>h.typing.length===2);assert.equal(h.typing.at(-1).enabled,true);
+  const input=h.runs[0].options.onUserInput({questions:[{id:'q',question:'是否继续？',options:[]}]});
+  const approval=h.runs[0].options.onApproval({kind:'command',detail:'pwd',cwd:process.cwd()});
+  await until(()=>h.typing.at(-1).enabled===false);const count=h.typing.length;
+  t.mock.timers.tick(4000);await tick();assert.equal(h.typing.length,count);
+  const notice=[...h.sent.map(x=>x.text),...h.saved.outbox.flatMap(x=>x.parts)].find(x=>x.includes('/allow '));
+  h.push(h.message('allow','/allow '+notice.match(/\/allow ([\w-]+)/)[1]));assert.equal(await approval,true);await tick();assert.equal(h.typing.length,count);
+  h.push(h.message('answer','继续'));await input;await until(()=>h.typing.at(-1).enabled===true);
+  h.runs[0].resolve('完成');await until(()=>!h.gateway.snapshot().active);await until(()=>h.typing.at(-1).enabled===false);
+  const stopped=h.typing.length;t.mock.timers.tick(4000);await tick();assert.equal(h.typing.length,stopped);
+});
+test('typing is stopped on failure, cancellation, pause, expiry, revoke, forget and close',async t=>{
+  for(const end of ['failure','stop','pause','expiry','revoke','forget','close'])await t.test(end,async t=>{
+    const h=harness(t);await h.login();h.push(h.message('task','检查'));await until(()=>h.typing.length===1);
+    if(end==='failure')h.runs[0].reject(new AgentError('TURN_FAILED','turn'));
+    else if(end==='stop')h.push(h.message('stop','/stop'));
+    else if(end==='pause')await h.gateway.action('enable',false);
+    else if(end==='expiry'){h.updateError=Object.assign(Error('expired'),{code:-14});h.push();}
+    else if(end==='revoke')await h.gateway.action('remove-user','owner');
+    else if(end==='forget')await h.gateway.action('forget');
+    else h.gateway.close();
+    await until(()=>h.typing.at(-1)?.enabled===false);assert.equal(h.typing.at(-1).account,'bot');assert.equal(h.typing.at(-1).sender,'owner');
+  });
+});
+test('a late typing-start is stopped before the next job starts typing without delaying the jobs',async t=>{
+  const h=harness(t);let release;const calls=[];
+  h.api.typing=async(_account,_sender,enabled)=>{calls.push(enabled);if(calls.length===1)await new Promise(resolve=>{release=resolve;});};
+  await h.login();h.push(h.message('one','第一条'));await until(()=>release);
+  h.push(h.message('stop','/stop'));await until(()=>!h.gateway.snapshot().active);
+  h.push(h.message('two','第二条'));await until(()=>h.runs.length===2);assert.deepEqual(calls,[true]);
+  release();await until(()=>calls.length===3);assert.deepEqual(calls,[true,false,true]);
+  h.runs[1].resolve('完成');await until(()=>calls.at(-1)===false);
+});
+test('typing failures do not fail or replay tasks or add chat messages',async t=>{
+  const h=harness(t);h.api.typing=async()=>{throw Error('typing unavailable');};await h.login();
+  h.push(h.message('task','检查'));await until(()=>h.runs.length===1);h.runs[0].resolve('结果');await until(()=>h.sent.length===1);
+  assert.deepEqual(h.sent.map(x=>x.text),['结果']);assert.equal(h.runs.length,1);assert.equal(h.gateway.snapshot().error,'');
+});
+test('only the first queued message gets a queue notice while the active job keeps typing',async t=>{
+  const h=harness(t);await h.login();h.push(h.message('one','正在处理的任务'));await until(()=>h.typing.length===1);
+  h.push(h.message('two','后续问题一'),h.message('three','后续问题二'));
+  await until(()=>h.saved.jobs.filter(j=>j.state==='queued').length===2);await until(()=>h.sent.length===1);
+  assert.match(h.sent[0].text,/消息已排队/);assert.equal(h.saved.outbox.length,0);assert.deepEqual(h.typing.map(x=>x.enabled),[true]);
+});
 test('scan login hides credentials; strangers need explicit authorization and a new message',async t=>{
   const h=harness(t);await h.login();
   assert.ok(!JSON.stringify(h.gateway.snapshot()).includes('private-token'));
@@ -44,10 +110,54 @@ test('dedup and restart never replay work; conversations resume only within thei
 test('delivery failure retains stable IDs, retry sends results without repeating the agent',async t=>{
   const h=harness(t);let attempts=0;const send=h.api.send;h.api.send=(...args)=>{attempts++;return send(...args);};
   h.sendError=Error('offline');await h.login();h.push(h.message('1','排查'));await until(()=>h.runs.length===1);
-  h.runs[0].resolve('完成结果');await until(()=>h.gateway.snapshot().outbox===2);const id=h.saved.outbox[0].id;
+  h.runs[0].resolve('完成结果');await until(()=>h.gateway.snapshot().outbox===1);const id=h.saved.outbox[0].id;
   h.push();await tick();h.push();await tick();assert.equal(attempts,1,'failed delivery must back off while polling continues');
   h.sendError=null;await h.gateway.action('retry');await until(()=>h.gateway.snapshot().outbox===0);
   assert.equal(h.runs.length,1);assert.equal(h.sent[0].id,id+'-0');assert.equal(h.sent.at(-1).text,'完成结果');assert.equal(h.sent.at(-1).context,'ctx-1');
+});
+test('task details retain exact questions and full replies after delivery and restart without broadcasting content',async t=>{
+  const h=harness(t);await h.login();const request='私密问题\n  保留空格  ',response='私密回复😀\n'.repeat(1000)+'完整结束';
+  h.push(h.message('detail',request));await until(()=>h.runs.length===1);
+  const id=h.saved.jobs[0].id;h.runs[0].resolve(response);
+  await until(()=>!h.gateway.snapshot().active&&h.saved.outbox.length===0,1000);
+  assert.equal(h.gateway.snapshot().jobs[0].delivery,'sent');
+  assert.ok(!JSON.stringify(h.gateway.snapshot()).includes('私密'));assert.ok(!('text' in h.saved.jobs[0]));
+  assert.deepEqual(await h.gateway.action('task-detail',id),{id,request,response});
+  h.gateway.close();const reboot=harness(t,h.saved);
+  assert.deepEqual(await reboot.gateway.action('task-detail',id),{id,request,response});assert.equal(reboot.runs.length,0);
+  const legacy=fresh();legacy.jobs=[{id:'legacy',state:'completed'}];
+  assert.deepEqual(await harness(t,legacy).gateway.action('task-detail','legacy'),{id:'legacy',request:null,response:null});
+});
+test('deleting a failed task removes only its record and pending reply and preserves dedup',async t=>{
+  const h=harness(t);h.sendError=Error('offline');await h.login();
+  const message=h.message('delete-failed','失败问题');h.push(message);await until(()=>h.runs.length===1);
+  const id=h.saved.jobs[0].id;await assert.rejects(h.gateway.action('delete-task',id),/任务结束/);
+  h.runs[0].reject(new AgentError('RPC_REJECTED','turn/start',-32602));
+  await until(()=>!h.gateway.snapshot().active&&h.gateway.snapshot().error);
+  h.push(h.message('other','另一条问题'));await until(()=>h.runs.length===2);h.runs[1].resolve('另一条回复');await until(()=>!h.gateway.snapshot().active);
+  const other=h.saved.jobs[1].id;
+  await h.gateway.action('delete-task',id);
+  assert.deepEqual(h.saved.jobs.map(job=>job.id),[other]);assert.equal(h.saved.outbox.length,1);assert.equal(h.saved.outbox[0].jobId,other);
+  await assert.rejects(h.gateway.action('task-detail',id),/不存在/);
+  h.sendError=null;await h.gateway.action('retry');await until(()=>h.saved.outbox.length===0);
+  assert.deepEqual(h.sent.map(item=>item.text),['另一条回复']);h.push(message);await tick();assert.equal(h.runs.length,2);
+});
+test('deleting a failed delivery during retry cannot consume or fail the next task reply',async t=>{
+  const state=fresh();state.enabled=true;state.account={id:'bot',token:'test',owner:'owner'};state.allowed=['owner'];
+  state.jobs=[{id:'failed-delivery',state:'completed',delivery:'failed',exchange:{request:'第一问',response:'第一答'}},{id:'kept',state:'completed',delivery:'pending'}];
+  state.outbox=[{id:'first',jobId:'failed-delivery',sender:'owner',parts:['第一答'],index:0},{id:'second',jobId:'kept',sender:'owner',parts:['第二答'],index:0}];
+  const h=harness(t,state),send=h.api.send;let reject;
+  h.api.send=(...args)=>args[4]==='first-0'?new Promise((_,fail)=>{reject=fail;}):send(...args);
+  h.gateway.start();await until(()=>reject);await h.gateway.action('delete-task','failed-delivery');reject(Error('late offline'));
+  await until(()=>h.saved.outbox.length===0);assert.deepEqual(h.sent.map(item=>item.text),['第二答']);assert.equal(h.gateway.snapshot().error,'');
+  assert.deepEqual(h.saved.jobs.map(job=>job.id),['kept']);assert.equal(h.saved.jobs[0].delivery,'sent');
+  await assert.rejects(h.gateway.action('delete-task','kept'),/失败/);assert.equal(h.runs.length,0);
+});
+test('a delivery failure whose status cannot be saved pauses safely without an unhandled rejection',async t=>{
+  const h=harness(t);await h.login();h.push(h.message('disk-failure','检查'));await until(()=>h.runs.length===1);
+  h.api.send=async()=>{h.failStore=true;throw Error('offline');};h.runs[0].resolve('完整结果');
+  await until(()=>h.gateway.snapshot().status==='error');await tick();
+  assert.equal(h.gateway.snapshot().enabled,false);assert.match(h.gateway.snapshot().error,/安全保存/);assert.equal(h.runs.length,1);
 });
 test('long completed results retain all content including the tail beyond 60000 characters',async t=>{
   const h=harness(t);h.sendError=Error('offline');await h.login();
@@ -60,6 +170,7 @@ test('long completed results retain all content including the tail beyond 60000 
   const reassembled=delivery.parts.map(part=>part.replace(/^【结果 \d+\/\d+】\n\n/,'')).join('');
   assert.equal(reassembled.length,result.length);assert.ok(reassembled===result,'reassembling every numbered part must preserve the full original result');
   assert.ok(delivery.parts.every(part=>Array.from(part).length<=1800));
+  assert.equal((await h.gateway.action('task-detail',h.saved.jobs[0].id)).response,result);
   assert.equal(h.runs.length,1);
 });
 test('restart resumes a partially delivered result with the same part IDs and no agent replay',async t=>{
@@ -92,12 +203,16 @@ test('question answers select labels or preserve free text and continue the orig
     {id:'notes',header:'补充',question:'还有哪些要求？',options:[]}
   ]});
   await until(()=>h.saved.jobs[0].state==='question');
-  const first=[...h.sent.map(x=>x.text),...h.saved.outbox.flatMap(x=>x.parts)].find(x=>x.includes('如何处理？'));
+  h.push(h.message('question-one','/question'));
+  await until(()=>[...h.sent.map(x=>x.text),...h.saved.outbox.flatMap(x=>x.parts)].some(x=>x.includes('如何处理？')&&x.includes('/answer ')));
+  const first=[...h.sent.map(x=>x.text),...h.saved.outbox.flatMap(x=>x.parts)].find(x=>x.includes('如何处理？')&&x.includes('/answer '));
   const token=first.match(/\/answer ([\w-]+)/)[1];
   const choice=h.message('answer-one','2');h.push(choice,choice);
   await until(()=>[...h.sent.map(x=>x.text),...h.saved.outbox.flatMap(x=>x.parts)].some(x=>x.includes('还有哪些要求？')));
   h.push(h.message('stale','/answer '+token+' 1'));await tick();assert.equal(h.runs.length,1);
-  const second=[...h.sent.map(x=>x.text),...h.saved.outbox.flatMap(x=>x.parts)].find(x=>x.includes('还有哪些要求？')).match(/\/answer ([\w-]+)/)[1];
+  h.push(h.message('question-two','/question'));
+  await until(()=>[...h.sent.map(x=>x.text),...h.saved.outbox.flatMap(x=>x.parts)].some(x=>x.includes('还有哪些要求？')&&x.includes('/answer ')));
+  const second=[...h.sent.map(x=>x.text),...h.saved.outbox.flatMap(x=>x.parts)].find(x=>x.includes('还有哪些要求？')&&x.includes('/answer ')).match(/\/answer ([\w-]+)/)[1];
   h.push(h.message('answer-two','/answer '+second+' 保持已有配置，路径 /tmp/example  不要改\n保留换行'));
   assert.deepEqual(await decision,{answers:{mode:{answers:['修改代码']},notes:{answers:['保持已有配置，路径 /tmp/example  不要改\n保留换行']}}});
   assert.equal(h.runs.length,1);assert.equal(h.saved.jobs[0].state,'running');
@@ -110,6 +225,14 @@ test('pending questions take precedence over menus and only their sender can ans
   h.push(h.message('menu','/clients'),h.message('stranger','1','stranger'));await until(()=>h.saved.pending.includes('stranger'));assert.equal(answered,false);
   h.push(h.message('invalid','9'));await tick();assert.equal(answered,false);
   h.push(h.message('answer','1'));assert.deepEqual(await answer,{answers:{q:{answers:['继续']}}});assert.equal(h.runs.length,1);
+});
+test('a path sent directly answers the pending question without a command prefix or a new task',async t=>{
+  const h=harness(t);await h.login();h.push(h.message('task','确认项目位置'));await until(()=>h.runs.length===1);
+  let response;const answer=h.runs[0].options.onUserInput({questions:[{id:'path',question:'要处理哪个项目？',options:[]}]}).then(value=>{response=value;return value;});
+  const text='/Users/you/WorkSpace/my project\n保留现有配置';
+  h.push(h.message('path-answer',text));await until(()=>h.saved.seen.includes('path-answer'));await tick();
+  assert.deepEqual(response,{answers:{path:{answers:[text]}}});
+  await answer;assert.equal(h.runs.length,1);assert.equal(h.saved.jobs[0].state,'running');
 });
 test('withdrawn questions cannot accept old answers and their unsent prompts are removed',async t=>{
   const h=harness(t);h.sendError=Error('offline');await h.login();h.push(h.message('task','排查'));await until(()=>h.runs.length===1);
@@ -192,6 +315,7 @@ test('desktop conversation selection is scoped to sender and instance; selection
   await h.login();h.push(h.message('list','/chats'),h.message('select','/chat 1'),h.message('task','继续桌面的任务'));await until(()=>finishRead);
   assert.equal(h.runs.length,0);finishRead();await until(()=>h.runs.length===1);assert.equal(h.runs[0].options.session,'desktop-thread');assert.equal(reads[0].client.id,'codex-default');
   assert.equal(h.runs[0].options.transport,'desktop');assert.equal(h.runs[0].options.text,'继续桌面的任务');
+  assert.equal(h.gateway.snapshot().jobs[0].chat.name,'桌面里的对话');
   h.push(h.message('s','hello','stranger'));await until(()=>h.gateway.snapshot().pending.includes('stranger'));await h.gateway.action('allow-user','stranger');
   h.push(h.message('s2','/chat 1','stranger'));await until(()=>h.sent.some(item=>item.sender==='stranger')||h.saved.outbox.some(item=>item.sender==='stranger'));assert.equal(h.runs.length,1);
 });
@@ -209,7 +333,47 @@ test('queued work freezes its route and shares only its own new conversation',as
   const queued=h.saved.jobs.find(job=>job.state==='queued');assert.equal(queued.route.settings.cwd,process.cwd());
   await assert.rejects(h.gateway.action('save-clients',[]),/任务结束/);
   h.push(h.message('select','/new'));await tick();assert.equal(h.runs.length,1);
-  h.runs[0].options.onSession('new-thread');h.runs[0].resolve('done');await until(()=>h.runs.length===2);assert.equal(h.runs[1].options.session,'new-thread');assert.equal(h.runs[1].options.transport,'local');
+  h.runs[0].options.onSession('new-thread');
+  const waiting=h.gateway.snapshot().jobs;assert.equal(waiting[0].chat.key,waiting[1].chat.key);assert.equal(waiting[0].chat.threadId,'new-thread');
+  h.runs[0].resolve('done');await until(()=>h.runs.length===2);assert.equal(h.runs[1].options.session,'new-thread');assert.equal(h.runs[1].options.transport,'local');
+});
+
+test('task history identifies actual chats across instances and keeps older chats beyond the latest eight jobs',t=>{
+  const state=fresh(),settings={backend:'codex',cwd:process.cwd(),binary:'',configHome:'',profile:'private-profile'};
+  const route={clientId:'codex-default',clientName:'原客户端',settings,threadId:'same-thread',threadName:'实际对话',bindingId:'binding-one'};
+  state.account={id:'bot'};state.bindings[bindingKey('bot','owner')]={id:'binding-one',threadId:'same-thread'};
+  state.jobs=[{id:'older-chat',state:'completed',startedAt:1,route:{...route,threadId:'older-thread',threadName:'较早的对话'}},
+    ...Array.from({length:9},(_,i)=>({id:'recent-'+i,state:'completed',startedAt:i+2,route,text:'private-task-content'})),
+    {id:'other-client',state:'completed',startedAt:11,route:{...route,clientId:'other'}},
+    {id:'other-profile',state:'completed',startedAt:12,route:{...route,settings:{...settings,profile:'other'}}},
+    {id:'legacy',state:'completed',startedAt:13},
+    {id:'uncreated',sender:'owner',state:'failed',startedAt:14,route:{...route,threadId:'',threadName:''}}];
+  const h=harness(t,state),history=h.gateway.snapshot().jobs;
+  assert.equal(history.length,14);assert.equal(history.at(-1).chat.name,'较早的对话');
+  const byId=id=>history.find(job=>job.id===id).chat;
+  assert.equal(byId('recent-0').name,'实际对话');assert.equal(byId('recent-0').key,byId('recent-8').key);
+  assert.notEqual(byId('recent-0').key,byId('other-client').key);assert.notEqual(byId('recent-0').key,byId('other-profile').key);
+  assert.equal(byId('uncreated').threadId,'');assert.notEqual(byId('uncreated').key,byId('recent-0').key);
+  assert.match(byId('legacy').name,/未记录对话/);assert.equal(byId('recent-0').project,path.basename(process.cwd()));
+  assert.ok(!JSON.stringify(history).includes('private-profile'));assert.ok(!JSON.stringify(history).includes('private-task-content'));
+});
+test('historical chat names come from each clients read-only local metadata and follow renames',t=>{
+  const fs=require('node:fs'),{DatabaseSync}=require('node:sqlite');
+  const dir=fs.mkdtempSync('/tmp/whale-history-');t.after(()=>fs.rmSync(dir,{recursive:true}));
+  const threadId='01a140a5-e74b-7193-9471-31cd59c28b2a',databases=[],files=[];
+  const state=fresh();
+  for(const client of ['one','two']){
+    const home=path.join(dir,client);fs.mkdirSync(home);const file=path.join(home,'state_5.sqlite'),db=new DatabaseSync(file);databases.push(db);files.push(file);t.after(()=>db.close());
+    db.exec('CREATE TABLE threads(id TEXT PRIMARY KEY,title TEXT,name TEXT,thread_source TEXT)');
+    db.prepare('INSERT INTO threads VALUES (?,?,?,?)').run(threadId,'private raw prompt',client+'的侧栏名称','user');
+    state.jobs.push({id:client,state:'completed',startedAt:1,route:{clientId:client,threadId,settings:{backend:'codex',cwd:dir,configHome:home}}});
+  }
+  const h=harness(t,state),before=files.map(file=>fs.readFileSync(file));
+  assert.deepEqual(h.gateway.snapshot().jobs.map(job=>job.chat.name),['two的侧栏名称','one的侧栏名称']);
+  assert.ok(!JSON.stringify(h.gateway.snapshot().jobs).includes('private raw prompt'));
+  for(const [i,file]of files.entries())assert.deepEqual(fs.readFileSync(file),before[i]);
+  databases[0].prepare('UPDATE threads SET name=? WHERE id=?').run('改名后的对话',threadId);
+  assert.equal(h.gateway.snapshot().jobs.find(job=>job.id==='one').chat.name,'改名后的对话');
 });
 test('disabled pinned clients require an explicit selection; editing an instance cannot resume an old account thread',async t=>{
   const h=harness(t);await h.login();h.push(h.message('1','检查'));await until(()=>h.runs.length===1);h.runs[0].options.onSession('old-account');h.runs[0].resolve('done');await until(()=>!h.gateway.snapshot().active);

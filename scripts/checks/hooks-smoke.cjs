@@ -89,9 +89,14 @@ async function refreshCodex() {
  await send('codex','UserPromptSubmit');await send('cursor','beforeSubmitPrompt');
  await wait(async()=>(await window.whale.snapshot()).activity.working===2);
  const mixed=await snapshot();assert.equal(new Set(mixed.activity.sessions.map(item=>item.session_id)).size,2,'same original ID cannot collide across sources');
+ // Cursor 留存的选中记录早于任务完成，不能用它证明用户看过新结果。
+ const selectedDb=new DatabaseSync(cursorState);selectedDb.prepare('INSERT OR REPLACE INTO ItemTable VALUES (?,?)').run('cursor/glass.selectedAgent',ids[0]);selectedDb.close();
  await send('cursor','stop',0,'turn-1',{status:'completed'});
  await send('cursor','beforeSubmitPrompt',1);
  await wait(async()=>{const data=await window.whale.snapshot();return data.activity.working===2&&data.activity.unread===1;});
+ await app.evaluate(async()=>{await new Promise(resolve=>setTimeout(resolve,2200));});
+ assert.equal((await snapshot()).activity.unread,1,'a remembered Cursor selection must not consume an unviewed completion during background polling');
+ assert.ok(JSON.parse(fs.readFileSync(path.join(dir,'reminders.json'),'utf8')).notices.some(item=>item.session_id==='cursor:'+ids[0]),'the unread completion must remain on disk');
  await panel.locator('#source-enabled-cursor').uncheck();
  let state=await snapshot();assert.equal(state.activity.working,1);assert.equal(state.activity.unread,1);
  const before={activity:state.activity,nurture:state.nurture,notices:await app.evaluate(()=>global.testNotices.length)};
@@ -226,5 +231,5 @@ async function refreshCodex() {
  await panel.locator('#unread-list .chat-row button').nth(1).click();
  assert.equal((await snapshot()).activity.unread,0);
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({result:'passed',checks:['cursor-auto-create-and-preserve-existing','cursor-local-receiving-keeps-config','startup-matches-config-and-preferences','malformed-cursor-preserved','navigation-and-event-tables','source-namespace-isolation','paused-events-no-effects','pause-clears-only-source-activity','keeps-completed-reminders','enable-no-backfill','restore-source-settings','settings-write-failure-reverts-toggle','cursor-notices-survive-restart','cursor-agent-jump-confirmed','reminders-return-home','manual-read-cursor'],dataDir:dir}));
+ console.log(JSON.stringify({result:'passed',checks:['cursor-auto-create-and-preserve-existing','cursor-local-receiving-keeps-config','startup-matches-config-and-preferences','malformed-cursor-preserved','navigation-and-event-tables','source-namespace-isolation','remembered-selection-keeps-unread','paused-events-no-effects','pause-clears-only-source-activity','keeps-completed-reminders','enable-no-backfill','restore-source-settings','settings-write-failure-reverts-toggle','cursor-notices-survive-restart','cursor-agent-jump-confirmed','reminders-return-home','manual-read-cursor'],dataDir:dir}));
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{if(app)await app.close();});
