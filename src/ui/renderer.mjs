@@ -2,6 +2,7 @@
 import { createHookSettingsView, showView } from './hooks-view.mjs';
 import { createReminderView } from './reminders-view.mjs';
 import { createWechatView } from './wechat-view.mjs';
+import { createMailView } from './mail-view.mjs';
 
 const $ = id => document.getElementById(id);
 const copy = {
@@ -28,6 +29,7 @@ const floating=document.body.classList.contains('floating');
 const hooksView=createHookSettingsView({render});
 const remindersView=createReminderView({render,action,floating});
 const wechatView=createWechatView();
+createMailView();
 if ($('special-actions')) {
   for (const [id, clip] of Object.entries(SPECIAL_ACTIONS)) {
     const button=document.createElement('button');

@@ -18,6 +18,8 @@ const {createCodexRuntime}=require('../clients/codex-runtime.cjs');
 const {createWechatApi}=require('../channels/wechat-api.cjs');
 const {createWechatStore}=require('../channels/wechat-store.cjs');
 const {createWechatGateway}=require('../channels/wechat-gateway.cjs');
+const {createMailReceiver}=require('../channels/imap-mail.cjs');
+const {createMailStore}=require('../channels/mail-store.cjs');
 const QRCode=require('qrcode');
 
 const dataDir = dataDirectory();
@@ -25,7 +27,7 @@ fs.mkdirSync(dataDir, { recursive: true });
 app.setPath('userData', dataDir);
 app.setName('鲸鱼娘');
 if (!app.requestSingleInstanceLock()) { app.quit(); } else {
-  let bridge,wechat;
+  let bridge,wechat,mail;
   let eventQueue=Promise.resolve();
   const cursorState=process.env.WHALE_CURSOR_STATE_DB||path.join(os.homedir(),'Library','Application Support','Cursor','User','globalStorage','state.vscdb');
   const cursorChats=createCursorChatOpener({stateFile:cursorState,openExternal:url=>shell.openExternal(url)});
@@ -207,7 +209,13 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     try{return {value:await wechat.action(name,value)};}
     catch(error){return {error:error.message};}
   });
-  app.on('before-quit', () => { wechat?.close();codexRuntime.close();bridge?.close(); titles.close();cursorTitles.close(); });
+  // 邮箱列表、正文和主动查看密码仅开放给小屋主框架，不向桌宠窗口或子框架暴露。
+  ipcMain.handle('mail',async(event,name,value)=>{
+    if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋读取邮箱');
+    if(!mail)return {error:'邮箱接入正在初始化'};
+    try{return {value:await mail.action(name,value)};}catch(error){return {error:error.message};}
+  });
+  app.on('before-quit', () => { mail?.close();wechat?.close();codexRuntime.close();bridge?.close(); titles.close();cursorTitles.close(); });
   app.whenReady().then(async () => {
     // 先确认客户端运行状态，再过滤临时会话、同步已读，避免清掉退出时暂存的提醒。
     await refreshClients();
@@ -218,6 +226,14 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
       api:createWechatApi({fetchImpl:(url,options)=>net.fetch(url,options)}),
       makeQr:text=>QRCode.toDataURL(text,{width:256,margin:2,errorCorrectionLevel:'M'}),onChange:broadcast});
     wechat.start();
+    // 邮件提醒只包含数量，正文、主题和发件人不进入系统通知或桌宠广播。
+    mail=createMailReceiver({store:createMailStore({dataDir,safeStorage}),onNew:count=>{
+      if(hooks.settings.notifications&&Notification.isSupported()) {
+        const notice=new Notification({title:'deepsleep · 邮箱',body:`收到 ${count} 封新邮件，打开小屋查看。`,silent:!hooks.settings.sound});
+        notice.on('click',showPanel);notice.show();
+      }
+    }});
+    mail.start();
     for(const source of SOURCES)void hooks.refresh(source);
     try {
       const acceptEvent = event => {
