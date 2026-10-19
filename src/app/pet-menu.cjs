@@ -1,5 +1,5 @@
 'use strict';
-const {app,BrowserWindow,ipcMain,screen}=require('electron');
+const {BrowserWindow,ipcMain,screen}=require('electron');
 const path=require('node:path');
 const SPECIAL_ACTIONS=require('../shared/special-actions.js');
 
@@ -13,7 +13,7 @@ function createPetMenu({getPet,snapshot,performAction,showPanel,restartApp,prote
   // 主进程只执行白名单动作；点击时重查锁定状态，不能依赖菜单打开时的旧状态。
   const actions=new Map([
     ...['feed','pat','happy','angry',...Object.keys(SPECIAL_ACTIONS)].map(id=>[id,()=>{if(enabled())performAction(id);}]),
-    ['panel',showPanel],['hide',()=>getPet()?.hide()],['restart',restartApp],['quit',()=>app.quit()]
+    ['panel',showPanel],['hide',()=>getPet()?.hide()],['restart',restartApp]
   ]);
   const items=[
     {id:'emotions',label:'互动表情',icon:'♡',children:[['喂饭','feed'],['摸头','pat'],['开心','happy'],['生气','angry']].map(([label,id])=>({id,label}))},
@@ -22,8 +22,7 @@ function createPetMenu({getPet,snapshot,performAction,showPanel,restartApp,prote
     {id:'panel',label:'打开小屋',icon:'⌂'},
     {id:'hide',label:'隐藏桌宠',icon:'◌'},
     {separator:true},
-    {id:'restart',label:'重启',icon:'↻'},
-    {id:'quit',label:'退出',icon:'×'}
+    {id:'restart',label:'重启',icon:'↻'}
   ];
   function close() {
     // 同时作废尚未完成的几何读取、页面加载，以及旧菜单发来的布局或点击事件。
