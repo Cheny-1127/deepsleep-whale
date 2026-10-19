@@ -69,9 +69,30 @@ async function send(name, index, turn = 'turn-1') {
 }
 (async () => { try {
   await launch();
-  await send('UserPromptSubmit', 0);
-  assert.equal(await pet.locator('#completion-shell').isHidden(), true, '只有一个执行中时保持安静');
-  await send('Stop', 0);
+  // 覆盖一、三、四条边界及四→三→四切换，防止手动展开状态残留。
+  await send('UserPromptSubmit', 0, 'busy-preview');
+  await wait(() => !document.querySelector('#completion-shell').hidden && !document.querySelector('#completion-bubble').hidden);
+  assert.equal(await pet.locator('.completion-row').textContent(), titles[0], '只有一个执行中也直接展示');
+  assert.equal((await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(win=>win.webContents.getURL().endsWith('/pet.html')).getBounds())).height, 380);
+  for (const i of [1, 2]) await send('UserPromptSubmit', i, 'busy-preview');
+  await wait(() => !document.querySelector('#completion-bubble').hidden && document.querySelectorAll('.completion-row').length === 3);
+  await pet.locator('#busy-alert').click();
+  assert.equal(await pet.locator('#completion-bubble').isVisible(), true, '三条以内点击分类不折叠');
+  await pet.locator('#busy-alert').focus(); await pet.keyboard.press('ArrowDown');
+  assert.equal(await pet.locator('.completion-row').first().evaluate(el => el === document.activeElement), true);
+  await pet.screenshot({ path:path.join(root, 'out/busy-three.png'), omitBackground:true });
+  await send('UserPromptSubmit', 3, 'busy-preview');
+  await wait(() => document.querySelector('#completion-bubble').hidden);
+  assert.equal((await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(win=>win.webContents.getURL().endsWith('/pet.html')).getBounds())).height, 320);
+  await pet.locator('#busy-alert').click();
+  await wait(() => !document.querySelector('#completion-bubble').hidden && document.querySelectorAll('.completion-row').length === 4);
+  await send('Interrupt', 3, 'busy-preview');
+  await wait(() => !document.querySelector('#completion-bubble').hidden && document.querySelectorAll('.completion-row').length === 3);
+  await send('UserPromptSubmit', 3, 'busy-preview-2');
+  await wait(() => document.querySelector('#completion-bubble').hidden);
+  await send('Interrupt', 3, 'busy-preview-2');
+  for (const i of [1, 2]) await send('Interrupt', i, 'busy-preview');
+  await send('Stop', 0, 'busy-preview');
   await wait(() => document.querySelector('#unread-label').textContent === '已完成：1');
   assert.equal(await pet.locator('.completion-row').textContent(), titles[0]);
   assert.equal(await pet.locator('#completion-shell').evaluate(el => el.classList.contains('single-category')), true);

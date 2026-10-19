@@ -29,25 +29,25 @@ export function createReminderView({render,action,floating}) {
   }
   function renderReminders(data) {
     lastData=data;
-    // 待处理按首次收到顺序；1～3 条完成直接显示，超过 3 条才折叠。
+    // 待处理按首次收到顺序；完成或执行中 1～3 条直接显示，超过 3 条才折叠。
     const tasks=data.activity;
     const unread=tasks.unread||0;
     const summary=`${tasks.working} 个进行中 · ${tasks.pending} 个权限检查`;
     if(floating) {
-      const view=data.reminderView||(data.busyExpanded?'busy':tasks.pending?'pending':'completed');
+      const view=data.reminderView||(data.busyExpanded?'busy':tasks.pending?'pending':unread?'completed':tasks.working?'busy':'completed');
       const isBusy=view==='busy';
       const pending=(tasks.sessions||[]).filter(item=>item.state==='approval').sort((a,b)=>(a.approvalSince??a.time)-(b.approvalSince??b.time));
       const count=view==='pending'?pending.length:isBusy?tasks.working:unread;
       const single=count===1;
-      const autoExpanded=view==='completed'&&unread>0&&unread<=3;
-      const expanded=view==='pending'?pending.length>0:isBusy?Boolean(data.busyExpanded):Boolean(data.completionExpanded||autoExpanded);
+      const autoExpanded=count>0&&count<=3;
+      const expanded=view==='pending'?pending.length>0:Boolean((isBusy?data.busyExpanded:data.completionExpanded)||autoExpanded);
       document.body.classList.toggle('single-completion',single&&expanded);
       document.body.classList.toggle('busy-expanded',isBusy);
       document.body.classList.toggle('completions-expanded',expanded);
       const busy=tasks.working;
       const singleCategory=[pending.length,unread,busy].filter(Boolean).length===1;
       $('completion-shell').classList.toggle('single-category',singleCategory);
-      $('completion-shell').hidden=!unread&&!pending.length&&busy<=1;
+      $('completion-shell').hidden=!unread&&!pending.length&&!busy;
       $('pending-alert').hidden=!pending.length;
       $('pending-alert').textContent=`待处理：${pending.length}`;
       $('pending-alert').title='查看待处理任务，按收到顺序排列';
@@ -104,7 +104,8 @@ export function createReminderView({render,action,floating}) {
       if((lastData?.completionExpanded||lastData?.busyExpanded)&&!event.target.closest('#completion-shell'))action('close-completions');
     });
     document.addEventListener('keydown',event=>{
-      if(!lastData?.completionExpanded&&!lastData?.busyExpanded&&!lastData?.activity.pending&&!(lastData?.activity.unread>0&&lastData.activity.unread<=3))return;
+      // 按实际展示状态响应键盘，自动展开的三条以内列表也支持方向键选择。
+      if(!document.body.classList.contains('completions-expanded'))return;
       if(event.key==='Escape') { action('close-completions');return; }
       if(!['ArrowDown','ArrowUp'].includes(event.key))return;
       const buttons=[...$('completion-rows').querySelectorAll('button')];
