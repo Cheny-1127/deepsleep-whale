@@ -97,8 +97,9 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
       hooks.availability.codex.state==='checked'&&hooks.availability.codex.events.PermissionRequest?.available;
   }
   function broadcast() {
+    // 三条以内由界面自动展示；清除手动展开标记，避免再次增到四条时沿用旧的展开状态。
     if (activity.snapshot().unread<=3) completionExpanded=false;
-    if (!activity.snapshot().sessions.some(item=>['thinking','working','approval'].includes(item.state))) busyExpanded=false;
+    if (activity.snapshot().working<=3) busyExpanded=false;
     const tasks=activity.snapshot();
     codexRuntime.setSessions(canObserveCodexApproval()
       ?tasks.sessions.filter(s=>!s.session_id.startsWith('cursor:')&&['working','thinking','approval'].includes(s.state)):[]);
@@ -157,7 +158,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
       hooks.setPreference(action,value);
     } else if (action === 'open-completion') {
       const tasks=activity.snapshot();
-      const switching=(reminderView||(busyExpanded?'busy':tasks.pending?'pending':'completed'))!=='completed';
+      const switching=(reminderView||(busyExpanded?'busy':tasks.pending?'pending':tasks.unread?'completed':tasks.working?'busy':'completed'))!=='completed';
       reminderView='completed';busyExpanded=false;
       const count=tasks.notices.length;
       if(switching) {completionExpanded=count>3;broadcast();return snapshot();}
@@ -172,11 +173,12 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
       reminderView='pending';completionExpanded=false;busyExpanded=false;
     } else if (action === 'open-busy') {
       const tasks=activity.snapshot();
-      const switching=(reminderView||(busyExpanded?'busy':tasks.pending?'pending':'completed'))!=='busy';
+      // 默认分类与浮窗一致：待处理、已完成、执行中；切换分类先展示列表，不直接跳转。
+      const switching=(reminderView||(busyExpanded?'busy':tasks.pending?'pending':tasks.unread?'completed':tasks.working?'busy':'completed'))!=='busy';
       reminderView='busy';completionExpanded=false;
-      if(switching) {busyExpanded=true;broadcast();return snapshot();}
+      if(switching) {busyExpanded=tasks.working>3;broadcast();return snapshot();}
       const busy=activity.snapshot().sessions.filter(item=>['thinking','working'].includes(item.state));
-      if(busy.length>1) busyExpanded=!busyExpanded;
+      if(busy.length>1) busyExpanded=busy.length>3?!busyExpanded:false;
       else if(busy.length===1) {
         busyExpanded=false;
         try { await openChat(busy[0].session_id); }
@@ -262,7 +264,8 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     } catch (error) { bridgeError = error.message; }
     broadcast();
     setInterval(broadcast, 200);
-    setInterval(()=>void refreshClients(),1000);
+    // 每三秒定时检测，减少反复启动 ps 的开销；启动、接收 Hook 和跳转前仍即时检测。
+    setInterval(()=>void refreshClients(),3000);
     setInterval(()=>{
       // Cursor 保存的是上次选中项，不能证明用户看过新结果；这里只同步 Codex 原生已读状态。
       if(activity.reconcile(titles.readState())) { saveReminders();broadcast(); }
