@@ -3,8 +3,8 @@
 /* Let the native GIF movements carry the character; keep idle chrome quiet. */
 .floating .speech{transition:opacity .25s}.floating .speech.quiet{opacity:0;pointer-events:none}
 .speech.attention{border-color:#d1a668;background:#fff9eb;color:#8d612c}
-.floating .pet-controls{opacity:0;transition:opacity .2s}
-.floating:has(.pet-art:hover) .pet-controls,.floating .pet-controls:hover,.floating:has(.pet-art:focus-visible) .pet-controls,.floating .pet-controls:has(:focus-visible){opacity:1}
+.floating .pet-controls{opacity:0;pointer-events:none;transition:opacity .2s}
+.floating:has(.pet-art:hover) .pet-controls,.floating .pet-controls:hover,.floating:has(.pet-art:focus-visible) .pet-controls,.floating .pet-controls:has(:focus-visible){opacity:1;pointer-events:auto}
 .floating .pet-art{cursor:grab;touch-action:none}.floating .pet-art:active{cursor:grabbing}
 .pet-art img{pointer-events:none;user-select:none}.pet-art[data-state="drowsy"]{opacity:.85}
 .demo-row #cycle{background:#d8e7de;color:#316b51}.demo-row #cycle[aria-pressed="true"]{background:#326e5c;color:white}
@@ -19,8 +19,8 @@
 .action-library{margin:18px 0;padding:16px;border:1px solid #dce5de;border-radius:12px;background:#fafbf8}.action-library .section-heading{justify-content:space-between}.action-library button{border-radius:7px;padding:9px 12px;font-size:11px;color:#60765c;background:#e9eee3}.action-library button:hover{background:#dce7d2}.action-library #cycle{font-size:10px;background:transparent}.action-tabs{display:flex;gap:6px;margin:14px 0 12px;padding-bottom:10px;border-bottom:1px solid #e1e7dd}.action-tabs [aria-selected="true"]{background:#326e5c;color:#fff}.action-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;min-height:84px;align-content:start}.action-grid button{min-height:36px}.special-actions button{background:#e6ecf8;color:#4b6191}.special-actions button:hover{background:#d8e2f5}@media(max-width:760px){.action-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
 
 /* 蓝色待查看气泡常驻；普通台词出现时，蓝色气泡向上让位，人物位置不变。 */
-.floating .speech-stack{height:96px;padding:4px 5px 0;display:flex;flex-direction:column;justify-content:flex-end;gap:7px;position:relative;z-index:4}
-.floating .speech-stack .speech{flex-shrink:0;margin:0 auto;max-width:210px;width:max-content;padding:6px 8px;font-size:10px}
+.floating .speech-stack{pointer-events:none;height:96px;padding:4px 5px 0;display:flex;flex-direction:column;justify-content:flex-end;gap:7px;position:relative;z-index:4}
+.floating .speech-stack .speech{pointer-events:auto;flex-shrink:0;margin:0 auto;max-width:210px;width:max-content;padding:6px 8px;font-size:10px}
 .floating .speech-stack .speech.quiet{display:none}
 .reminders{background:#fff;border:1px solid #dce3ef;border-radius:12px;margin-top:16px;padding:16px 20px;scroll-margin:20px}.reminder-count{margin-left:auto;color:#47699e;background:#eaf0fc;padding:4px 8px;border-radius:12px;font-size:10px}.reminders p{font-size:11px;color:#79899a;margin:10px 0}.reminders .reminder-hint{font-size:10px;line-height:1.7;margin-bottom:0}.reminders .reminder-error{color:#a7583a}.chat-row{display:flex;align-items:center;gap:8px;padding:10px 0;border-top:1px solid #e9edf3}.chat-description{flex:1;min-width:0}.chat-description strong,.chat-description span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.chat-description strong{font-size:12px;font-weight:550;color:#435a7c}.chat-description span{font-size:10px;color:#8490a1;margin-top:5px}.chat-row button{flex-shrink:0;font-size:10px;padding:7px 8px;border-radius:6px;color:#47699e;background:#edf2fc}.chat-row button:disabled{opacity:.4}.reminders details{margin-top:10px}.reminders summary{cursor:pointer;font-size:11px;color:#6a7f9d}.reminders:focus{outline:2px solid #91aad9;outline-offset:3px}
 /* 补偿原动画各姿势的顶部透明留白，只移动气泡，不移动人物或脚底。 */
@@ -114,3 +114,5 @@
 .mail-password-control{display:flex;align-items:stretch;position:relative}.mail-password-control input{padding-right:45px}.mail-password-toggle{display:grid;place-items:center;position:absolute;right:2px;top:9px;bottom:2px;width:38px;border-radius:6px;background:transparent;color:#60766b}.mail-password-toggle:hover{background:#e9eeea}
 
 #mail-inbox>summary{font-size:14px;font-weight:650;color:#243b3b}#mail-inbox[open]>summary{margin-bottom:14px}.mail-inbox-toggle{float:right;font-size:11px;font-weight:400;color:#60766b}.mail-inbox-toggle::after{content:"展开"}#mail-inbox[open] .mail-inbox-toggle::after{content:"收起"}
+
+.shortcuts-card .section-heading{margin-bottom:14px}.shortcuts-field{display:flex;flex-direction:column;gap:9px;max-width:420px;margin:24px 0;color:#637b6a;font-size:12px}.shortcuts-field select{font:inherit;color:#243b3b;background:#fafbf9;border:1px solid #d6dfd8;border-radius:8px;padding:11px 13px}.shortcuts-field select:focus-visible{outline:3px solid #6bbcb3;outline-offset:2px}#shortcuts-error{color:#a52e34;background:#fff0ec;border-radius:8px;padding:12px}
