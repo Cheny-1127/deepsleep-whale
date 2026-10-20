@@ -4,9 +4,13 @@ import { createReminderView } from './reminders-view.mjs';
 import { createWechatView } from './wechat-view.mjs';
 import { createMailView } from './mail-view.mjs';
 import { createArcheryView } from './archery-view.mjs';
+import { createQuotaView } from './quota-view.mjs';
+import { createGroupUsageView } from './quota-group-view.mjs';
 import { createPetHitTest } from './pet-hit-test.mjs';
 import { createPetGestures } from './pet-gestures.mjs';
 import { createShortcutsView } from './shortcuts-view.mjs';
+import { createPetQuotaSettingsView } from './pet-quota-settings-view.mjs';
+import { createPetQuotaView } from './pet-quota-view.mjs';
 
 const $ = id => document.getElementById(id);
 const copy = {
@@ -36,6 +40,10 @@ const remindersView=createReminderView({render,action,floating});
 const wechatView=createWechatView();
 createMailView();
 createArcheryView();
+createQuotaView();
+createGroupUsageView();
+createPetQuotaSettingsView();
+createPetQuotaView();
 const shortcutsView=createShortcutsView();
 if ($('special-actions')) {
   for (const [id, clip] of Object.entries(SPECIAL_ACTIONS)) {
