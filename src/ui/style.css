@@ -116,3 +116,10 @@
 #mail-inbox>summary{font-size:14px;font-weight:650;color:#243b3b}#mail-inbox[open]>summary{margin-bottom:14px}.mail-inbox-toggle{float:right;font-size:11px;font-weight:400;color:#60766b}.mail-inbox-toggle::after{content:"展开"}#mail-inbox[open] .mail-inbox-toggle::after{content:"收起"}
 
 .shortcuts-card .section-heading{margin-bottom:14px}.shortcuts-field{display:flex;flex-direction:column;gap:9px;max-width:420px;margin:24px 0;color:#637b6a;font-size:12px}.shortcuts-field select{font:inherit;color:#243b3b;background:#fafbf9;border:1px solid #d6dfd8;border-radius:8px;padding:11px 13px}.shortcuts-field select:focus-visible{outline:3px solid #6bbcb3;outline-offset:2px}#shortcuts-error{color:#a52e34;background:#fff0ec;border-radius:8px;padding:12px}
+
+/* 待审核工单在窄窗口中换行，标题和连接异常均允许长文本折行。 */
+.archery-order{display:flex;align-items:center;justify-content:space-between;gap:18px;border-top:1px solid #e0e8dd;padding:18px 0;color:#354d43}.archery-order>div{min-width:0;overflow-wrap:anywhere}.archery-order strong{font-size:14px}.archery-order p,.archery-order small{font-size:11px;color:#71816f}.archery-order p{margin:8px 0}.archery-order>button{flex-shrink:0;padding:9px 12px;border-radius:8px}.archery-pagination{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:16px}.archery-pagination p{flex:1;text-align:center}.archery-pagination button{padding:8px 12px;border-radius:8px}#archery-error{color:#a52e34;background:#fff0ec;border-radius:8px;padding:12px;overflow-wrap:anywhere}#archery-feedback{font-size:12px;color:#326e5c}#archery-refresh{padding:9px 12px;border-radius:8px}@media(max-width:600px){.archery-order{align-items:flex-start;flex-direction:column}.archery-pagination{flex-wrap:wrap}.archery-pagination p{order:3;flex-basis:100%}}
+
+.archery-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.archery-actions button{white-space:nowrap}
+
+.quota-refresh-toggle{white-space:nowrap;padding:6px 9px;border-radius:6px;border:1px solid #d6dfd8;background:#f5f8f3;color:#326e5c;font-size:10px}.quota-refresh-toggle[aria-checked="false"]{background:#f5f5f3;color:#85928b}.quota-refresh-toggle:disabled{opacity:.55}

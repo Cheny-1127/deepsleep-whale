@@ -6,8 +6,10 @@ const fs=require('node:fs'),path=require('node:path');
 const root=path.resolve(__dirname,'../..');
 const dir=fs.mkdtempSync('/tmp/whale-shortcuts-ui-');
 const bootstrap=path.join(dir,'bootstrap.cjs');
-// 隔离测试数据，不读取真实账号或连接生产服务。
+// 隔离测试数据及 Archery 配置，不读取真实账号或连接生产服务。
 fs.writeFileSync(bootstrap,`const {Notification}=require('electron');Notification.isSupported=()=>false;
+const channel=require(${JSON.stringify(path.join(root,'src/channels/archery-pending.cjs'))}),create=channel.createArcheryPending;
+channel.createArcheryPending=options=>create({...options,readConfig:()=>{throw Object.assign(new Error('测试隔离'),{archeryConfig:true});}});
 require(${JSON.stringify(path.join(root,'src/main.cjs'))});`);
 let app;
 (async()=>{

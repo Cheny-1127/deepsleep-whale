@@ -53,6 +53,16 @@ npm start
 
 验证：`node --test test/imap-mail.test.cjs test/imap-wire.test.cjs test/mail-view.test.cjs`；界面验证：`PLAYWRIGHT_MODULE=/absolute/path/to/playwright npm run test:mail`。使用隔离的模拟 IMAP、真实 TLS 协议会话和测试数据，不访问真实邮箱；实际收件仍需在本机填写自己的邮箱配置后验证。
 
+## Archery 待我审核
+
+小屋左栏“陪伴小屋”下方打开 **Archery**，沿用全局 `$CODEX_HOME/config.toml`（默认 `~/.codex/config.toml`）中的 `mcp_servers.archery` 本地 stdio 配置，包括启动程序、工作目录及账号环境变量。需先安装我们维护的 Archery MCP 并完成全局配置。全局入口停用、配置缺失或账号不完整时，页面给出提示。
+
+标题右侧是自动刷新开关，显示“已连接”或“已暂停”。已连接时桌宠启动立即读取待当前账号审核的数据工单，之后每 5 分钟刷新当前来源页；关闭小屋或切到其他页面仍继续。已暂停后停止定时读取，已有列表保留，仍可立即刷新。开关保存在本机 `archery.json`，重启后保留；保存失败时保持原状态。可以立即刷新、上一页、下一页，每页最多读取 20 条混合来源记录；类型筛选后本页可能为空但仍有下一页，页面不会将来源总数说成数据工单总数。没有后台自动翻页。点击“打开工单”在原 Archery 网页查看详情；点击“审核通过”后，原生确认框逐笔展示编号、标题和目标。默认选择取消，确认只审批这一笔，不请求执行 SQL。
+
+此功能独立连接 MCP，不经过模型，固定读取 `work_order_pending_list`，仅在逐笔确认后调用 `work_order_approve`（一个编号，备注“审核通过”），遵守全局工具启停限制。审批与刷新互斥，列表超过 5 分钟未成功刷新时需先刷新。审批失败不自动重试；结果未知时保留提示，本次运行禁止再次审批该编号，请到原工单核实。凭据只在主进程读取，不传给界面、不复制落盘。仅摘要在内存保留，重启后重新获取；同账号读取失败保留最后成功列表与时间，后续定时重试。全局账号或连接参数变化后丢弃旧会话和摘要；退出停止轮询并关闭子进程。
+
+验证：`node --test test/archery.test.cjs test/archery-view.test.cjs`；界面冒烟：`PLAYWRIGHT_MODULE=/absolute/path/to/playwright npm run test:archery`。自动化测试使用合成配置和本地 MCP 协议替身，不调用真实工单接口。
+
 ## 微信远程排查
 
 小屋左栏打开 **微信接入**，直接点击“扫码连接”，用微信扫描并确认，无需先绑定项目或填写客户端路径。默认使用本机 Codex 的可执行文件、配置和登录；deepsleep 不配置模型 API Key，也不修改客户端的 provider、代理或认证文件。
@@ -101,7 +111,7 @@ Cursor 需要可用且已登录的 **Cursor CLI**，使用 Ask 模式，只读�
 | `src/domain/` | 任务聚合、工具权限状态、动画与互动规则；不依赖 Electron 和脚本 |
 | `src/hooks/` | 客户端事件适配、配置生成与检测、Cursor 配置事务、本地事件桥及发送端 |
 | `src/clients/` | 客户端进程检测、Codex 审批状态观察、只读聊天元数据和原对话跳转 |
-| `src/channels/` / `src/agents/` | 微信协议、加密状态与任务投递 / 独立的本机 Codex、Cursor 执行适配 |
+| `src/channels/` / `src/agents/` | 微信、邮箱、Archery 接入及加密状态 / 独立的本机 Codex、Cursor 执行适配 |
 | `src/ui/` | 页面、样式、受限 preload；提醒与 Hooks 页面各自使用独立渲染模块 |
 | `src/shared/` | 统一事件协议与小节目清单 |
 | `scripts/hooks/` | 配置预览、安装等命令行工具 |
