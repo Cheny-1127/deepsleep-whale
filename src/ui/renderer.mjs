@@ -3,6 +3,7 @@ import { createHookSettingsView, showView } from './hooks-view.mjs';
 import { createReminderView } from './reminders-view.mjs';
 import { createWechatView } from './wechat-view.mjs';
 import { createMailView } from './mail-view.mjs';
+import { createArcheryView } from './archery-view.mjs';
 import { createPetHitTest } from './pet-hit-test.mjs';
 import { createPetGestures } from './pet-gestures.mjs';
 import { createShortcutsView } from './shortcuts-view.mjs';
@@ -34,6 +35,7 @@ const hooksView=createHookSettingsView({render});
 const remindersView=createReminderView({render,action,floating});
 const wechatView=createWechatView();
 createMailView();
+createArcheryView();
 const shortcutsView=createShortcutsView();
 if ($('special-actions')) {
   for (const [id, clip] of Object.entries(SPECIAL_ACTIONS)) {

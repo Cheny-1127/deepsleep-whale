@@ -20,6 +20,7 @@ const {createWechatStore}=require('../channels/wechat-store.cjs');
 const {createWechatGateway}=require('../channels/wechat-gateway.cjs');
 const {createMailReceiver}=require('../channels/imap-mail.cjs');
 const {createMailStore}=require('../channels/mail-store.cjs');
+const {createArcheryPending}=require('../channels/archery-pending.cjs');
 const {createShortcutSettings}=require('./shortcut-settings.cjs');
 const QRCode=require('qrcode');
 
@@ -28,7 +29,7 @@ fs.mkdirSync(dataDir, { recursive: true });
 app.setPath('userData', dataDir);
 app.setName('鲸鱼娘');
 if (!app.requestSingleInstanceLock()) { app.quit(); } else {
-  let bridge,wechat,mail;
+  let bridge,wechat,mail,archery;
   let eventQueue=Promise.resolve();
   const cursorState=process.env.WHALE_CURSOR_STATE_DB||path.join(os.homedir(),'Library','Application Support','Cursor','User','globalStorage','state.vscdb');
   const cursorChats=createCursorChatOpener({stateFile:cursorState,openExternal:url=>shell.openExternal(url)});
@@ -226,7 +227,13 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     if(!mail)return {error:'邮箱接入正在初始化'};
     try{return {value:await mail.action(name,value)};}catch(error){return {error:error.message};}
   });
-  app.on('before-quit', () => { mail?.close();wechat?.close();codexRuntime.close();bridge?.close(); titles.close();cursorTitles.close(); });
+  // Archery 仅向小屋主框架开放，逐笔审批还须由主进程弹框确认。
+  ipcMain.handle('archery',async(event,name,value)=>{
+    if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋查看 Archery');
+    if(!archery)return {error:'Archery 接入正在初始化'};
+    try{return {value:await archery.action(name,value)};}catch(error){return {error:error.message};}
+  });
+  app.on('before-quit', () => { archery?.close();mail?.close();wechat?.close();codexRuntime.close();bridge?.close(); titles.close();cursorTitles.close(); });
   app.whenReady().then(async () => {
     // 先确认客户端运行状态，再过滤临时会话、同步已读，避免清掉退出时暂存的提醒。
     await refreshClients();
@@ -245,6 +252,14 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
       }
     }});
     mail.start();
+    archery=createArcheryPending({settingsFile:path.join(dataDir,'archery.json'),openExternal:url=>shell.openExternal(url),confirmApproval:async item=>{
+      const result=await dialog.showMessageBox({type:'question',title:'确认审核通过',
+        message:`审核通过工单 #${item.id}？`,
+        detail:`${item.title}\n提交人：${item.submitter||'—'}\n实例：${item.instance||'—'}\n数据库：${item.database||'—'}\n\n仅审核这一笔工单，不请求执行 SQL。`,
+        buttons:['取消','审核通过'],defaultId:0,cancelId:0,noLink:true});
+      return result.response===1;
+    }});
+    archery.start();
     for(const source of SOURCES)void hooks.refresh(source);
     try {
       const acceptEvent = event => {

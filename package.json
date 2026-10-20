@@ -19,14 +19,17 @@
     "test:mail": "node scripts/checks/mail-smoke.cjs",
     "hooks:config": "node scripts/hooks/codex-config.cjs",
     "hooks:cursor-config": "node scripts/hooks/cursor-config.cjs",
-    "hooks:install": "node scripts/hooks/install.cjs"
+    "hooks:install": "node scripts/hooks/install.cjs",
+    "test:archery": "node scripts/checks/archery-smoke.cjs"
   },
   "devDependencies": {
     "electron": "44.7.2"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
     "imapflow": "2.5.6",
     "postal-mime": "4.0.11",
-    "qrcode": "^1.5.4"
+    "qrcode": "^1.5.4",
+    "smol-toml": "1.9.1"
   }
 }
