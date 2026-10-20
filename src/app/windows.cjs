@@ -6,6 +6,17 @@ const {createPetMenu}=require('./pet-menu.cjs');
 // 此模块只负责 Electron 窗口、菜单和拖动；任务状态和交互规则由应用层传入。
 function createWindows({ snapshot, performAction, collapseReminders }) {
   let panel, pet, tray, quitting = false;
+  let dragOrigin=null,petInteractive=false,ignoredMouse;
+  const fromPet=event=>Boolean(pet&&!pet.isDestroyed()&&event.sender===pet.webContents&&event.senderFrame===pet.webContents.mainFrame);
+  function updatePetMouse() {
+    if(!pet||pet.isDestroyed())return;
+    const ignore=!petInteractive&&!dragOrigin;
+    if(ignore===ignoredMouse)return;
+    ignoredMouse=ignore;
+    // 保留移动事件，鼠标重新进入人物或气泡时才能恢复点击。
+    pet.setIgnoreMouseEvents(ignore,{forward:true});
+  }
+  function pointerChanged(){if(pet&&!pet.isDestroyed())pet.webContents.send('pet-pointer-changed');}
   const preferences = () => ({ preload:path.join(__dirname, '../ui/preload.cjs'), contextIsolation:true, nodeIntegration:false, sandbox:true });
   function protect(win) {
     // 页面不接收任意导航，也不能借链接打开具有 Node 权限的新窗口。
@@ -48,14 +59,15 @@ function createWindows({ snapshot, performAction, collapseReminders }) {
     pet = new BrowserWindow({ width:220, height:320, x:area.x + area.width - 240, y:area.y + area.height - 340,
       transparent:true, frame:false, resizable:false, enableLargerThanScreen:true, hasShadow:false, alwaysOnTop:true, skipTaskbar:true, webPreferences:preferences() });
     protect(pet);
+    updatePetMouse();
     pet.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen:true });
     pet.loadFile(path.join(__dirname, '../ui/pet.html'));
-    pet.on('show', updateTrayMenu);
-    pet.on('hide', () => {petMenu.close();updateTrayMenu();});
+    pet.on('show', () => {pointerChanged();updateTrayMenu();});
+    pet.on('hide', () => {dragOrigin=null;updatePetMouse();petMenu.close();updateTrayMenu();});
     // 焦点进入自绘菜单不折叠提醒，避免人物几何在弹出过程中变化。
-    pet.on('blur', () => {if(!petMenu.isOpen())collapseReminders();});
-    pet.on('move',petMenu.close);
-    pet.on('resize',petMenu.close);
+    pet.on('blur', () => {dragOrigin=null;updatePetMouse();pointerChanged();if(!petMenu.isOpen())collapseReminders();});
+    pet.on('move',()=>{petMenu.close();pointerChanged();});
+    pet.on('resize',()=>{petMenu.close();pointerChanged();});
     pet.webContents.on('context-menu',petMenu.open);
     pet.on('close', event => { if (!quitting) { event.preventDefault(); pet.hide(); } });
   }
@@ -76,13 +88,21 @@ function createWindows({ snapshot, performAction, collapseReminders }) {
   }
 
   // 只接受悬浮窗发起的拖动；按屏幕坐标差自由移动，允许气泡或人物部分移出屏幕。
-  let dragOrigin = null;
+  ipcMain.on('pet-interactive',(event,value)=>{
+    if(!fromPet(event)||typeof value!=='boolean')return;
+    petInteractive=value;updatePetMouse();
+  });
+  ipcMain.handle('pet-pointer',event=>{
+    if(!fromPet(event)||!pet.isVisible())return null;
+    const point=screen.getCursorScreenPoint(),bounds=pet.getContentBounds();
+    return {x:point.x-bounds.x,y:point.y-bounds.y};
+  });
   ipcMain.on('pet-drag', (event, phase, point) => {
-    if (event.sender !== pet?.webContents) return;
-    if (phase === 'end') { dragOrigin = null; return; }
+    if (!fromPet(event)) return;
+    if (phase === 'end') { dragOrigin = null;updatePetMouse(); return; }
     if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
     // 以按下时的鼠标与窗口位置为基准，避免窗口移动后重复叠加位移造成跳动。
-    if (phase === 'start') dragOrigin = { mouse:point, bounds:pet.getBounds() };
+    if (phase === 'start') {dragOrigin = { mouse:point, bounds:pet.getBounds() };updatePetMouse();}
     else if (phase === 'move' && dragOrigin) {
       const x = Math.round(dragOrigin.bounds.x + point.x - dragOrigin.mouse.x);
       const y = Math.round(dragOrigin.bounds.y + point.y - dragOrigin.mouse.y);
@@ -97,6 +117,7 @@ function createWindows({ snapshot, performAction, collapseReminders }) {
     showPanel, showReminders,
     isPetVisible:()=>Boolean(pet&&!pet.isDestroyed()&&pet.isVisible()),
     isPanel:sender=>sender===panel?.webContents,
+    isPet:sender=>sender===pet?.webContents,
     start() {
       createPanel(); createPet();
       const icon = nativeImage.createFromPath(path.join(__dirname, '../../assets/icon.png')).resize({ width:20, height:20 });

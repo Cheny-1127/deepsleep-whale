@@ -20,6 +20,7 @@ const {createWechatStore}=require('../channels/wechat-store.cjs');
 const {createWechatGateway}=require('../channels/wechat-gateway.cjs');
 const {createMailReceiver}=require('../channels/imap-mail.cjs');
 const {createMailStore}=require('../channels/mail-store.cjs');
+const {createShortcutSettings}=require('./shortcut-settings.cjs');
 const QRCode=require('qrcode');
 
 const dataDir = dataDirectory();
@@ -35,6 +36,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   let bridgeError = '';
   const behavior = new Behavior();
   const hooks=createHookSettings({dataDir,cwd:path.resolve(__dirname,'../../..'),onChange:broadcast});
+  const shortcuts=createShortcutSettings({dataDir});
   const sourceStatus=Object.fromEntries(SOURCES.map(id=>[id,{lastReceivedAt:null,lastAcceptedAt:null,ignored:0}]));
   const titles=createTitleReader();
   const cursorTitles=createCursorTitleReader();
@@ -92,7 +94,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   function snapshot() {
     // 两个窗口共享同一份主进程状态，避免小屋和悬浮桌宠各自计时、各自累计成长。
     const tasks = activity.snapshot();
-    return { petVisible:windows.isPetVisible(),wechat:wechat?.snapshot()||null,hookAdapters:hooks.adapters,hookAvailability:hooks.availability,sourceStatus,codexApprovalSync:codexRuntime.snapshot(),clientRunning:{...clientRunning},completionExpanded, busyExpanded, reminderView, settings:hooks.settings, nurture: nurture.snapshot(), activity: tasks, ...behavior.snapshot(), bridge: Boolean(bridge), bridgeError, reminderError };
+    return { petVisible:windows.isPetVisible(),shortcuts:shortcuts.snapshot(),wechat:wechat?.snapshot()||null,hookAdapters:hooks.adapters,hookAvailability:hooks.availability,sourceStatus,codexApprovalSync:codexRuntime.snapshot(),clientRunning:{...clientRunning},completionExpanded, busyExpanded, reminderView, settings:hooks.settings, nurture: nurture.snapshot(), activity: tasks, ...behavior.snapshot(), bridge: Boolean(bridge), bridgeError, reminderError };
   }
   function canObserveCodexApproval() {
     return hooks.settings.sources.codex&&hooks.settings.events.codex?.PermissionRequest!==false&&clientRunning.codex===true&&
@@ -133,6 +135,11 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   ipcMain.handle('snapshot', () => snapshot());
   // 小屋按钮和右键菜单共用入口，统一动作锁定、成长和窗口同步。
   async function performAction(action, value) {
+    // 连击只提交手势，实际动作以主进程已保存的白名单配置为准。
+    if(action==='shortcut-triple') {
+      const target=shortcuts.snapshot().tripleClick;
+      return target==='none'?snapshot():performAction(target);
+    }
     if (['feed','pat','touch','happy','angry'].includes(action) || Object.hasOwn(SPECIAL_ACTIONS, action)) {
       if (behavior.interact(action)) {
         if (action === 'feed') nurture.feed(); else if (!Object.hasOwn(SPECIAL_ACTIONS, action)) nurture.pat();
@@ -199,6 +206,10 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     return snapshot();
   }
   ipcMain.handle('action', (_event, action, value) => performAction(action, value));
+  ipcMain.handle('shortcut-settings',(event,value)=>{
+    if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋配置快捷操作');
+    shortcuts.update(value);broadcast();return snapshot();
+  });
   ipcMain.handle('wechat', async(event,name,value)=>{
     if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋配置微信');
     if(!wechat)throw new Error('微信接入正在初始化');

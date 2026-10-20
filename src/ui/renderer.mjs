@@ -3,6 +3,9 @@ import { createHookSettingsView, showView } from './hooks-view.mjs';
 import { createReminderView } from './reminders-view.mjs';
 import { createWechatView } from './wechat-view.mjs';
 import { createMailView } from './mail-view.mjs';
+import { createPetHitTest } from './pet-hit-test.mjs';
+import { createPetGestures } from './pet-gestures.mjs';
+import { createShortcutsView } from './shortcuts-view.mjs';
 
 const $ = id => document.getElementById(id);
 const copy = {
@@ -26,10 +29,12 @@ const rice = {idle:'idle',thinking:'thinking',working:'coding',approval:'approva
 for (const file of new Set(Object.values(rice))) { const image=new Image(); image.src=`../../assets/rice-rendered/${file}.webp`; }
 let current='idle',visualKey='',speechUntil=0,phrase=0,lastData;
 const floating=document.body.classList.contains('floating');
+createPetHitTest();
 const hooksView=createHookSettingsView({render});
 const remindersView=createReminderView({render,action,floating});
 const wechatView=createWechatView();
 createMailView();
+const shortcutsView=createShortcutsView();
 if ($('special-actions')) {
   for (const [id, clip] of Object.entries(SPECIAL_ACTIONS)) {
     const button=document.createElement('button');
@@ -65,6 +70,7 @@ function render(data) {
   hooksView.render(data);
   remindersView.render(data);
   wechatView.render(data.wechat);
+  shortcutsView.render(data);
   // 主进程频繁广播状态，只有动作或播放版本变化才重置动画与气泡。
   const nextKey=`${data.state}:${data.revision}:${data.demo}`;
   const previous=current;
@@ -125,28 +131,12 @@ async function action(name,value) { try { render(await window.whale.action(name,
 document.querySelectorAll('[data-action]').forEach(button=>button.addEventListener('click',()=>action(button.dataset.action)));
 document.querySelectorAll('[data-demo]').forEach(button=>button.addEventListener('click',()=>action('demo',button.dataset.demo)));
 if (floating) {
-  // 指针捕获保证拖出人物区域后仍能收尾；移动超过 5 像素才算拖动，松手不再触发摸头。
-  let down=null,moved=false;
-  $('pet-art').addEventListener('pointerdown',event=>{
-    if(event.button!==0) return;
-    down={x:event.screenX,y:event.screenY}; moved=false;
-    $('pet-art').setPointerCapture(event.pointerId);
-    window.whale.drag('start',down);
-  });
-  $('pet-art').addEventListener('pointermove',event=>{
-    if(!down) return;
-    const point={x:event.screenX,y:event.screenY};
-    if(Math.hypot(point.x-down.x,point.y-down.y)>5) moved=true;
-    if(moved) window.whale.drag('move',point);
-  });
-  $('pet-art').addEventListener('pointerup',()=>{
-    if(!down) return;
-    window.whale.drag('end'); down=null;
-    if(!moved) action('touch');
-  });
-  $('pet-art').addEventListener('pointercancel',()=>{ down=null; window.whale.drag('end'); });
-} else $('pet-art').addEventListener('click',()=>action('touch'));
-$('pet-art').addEventListener('keydown',event=>{ if(event.key==='Enter'||event.key===' ') { event.preventDefault(); action('touch'); } });
+  createPetGestures({element:$('pet-art'),action,drag:(...args)=>window.whale.drag(...args),
+    enabled:()=>lastData?.shortcuts?.tripleClick!=='none'});
+} else {
+  $('pet-art').addEventListener('click',()=>action('touch'));
+  $('pet-art').addEventListener('keydown',event=>{ if(event.key==='Enter'||event.key===' ') { event.preventDefault(); action('touch'); } });
+}
 if($('cycle')) {
   for(const setting of ['sound','notifications']) $(setting).addEventListener('change',event=>action(setting,event.target.checked));
   $('cycle').addEventListener('click',()=>action('cycle',!lastData?.cycle));
