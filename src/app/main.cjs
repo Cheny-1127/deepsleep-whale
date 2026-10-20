@@ -21,7 +21,11 @@ const {createWechatGateway}=require('../channels/wechat-gateway.cjs');
 const {createMailReceiver}=require('../channels/imap-mail.cjs');
 const {createMailStore}=require('../channels/mail-store.cjs');
 const {createArcheryPending}=require('../channels/archery-pending.cjs');
+const {createQuotaPanel}=require('../channels/quota-accounts.cjs');
+const {createGroupUsage}=require('../channels/quota-group-usage.cjs');
 const {createShortcutSettings}=require('./shortcut-settings.cjs');
+const {createPetQuotaSettings}=require('./pet-quota-settings.cjs');
+const {createPetQuota}=require('../channels/pet-quota.cjs');
 const QRCode=require('qrcode');
 
 const dataDir = dataDirectory();
@@ -29,7 +33,7 @@ fs.mkdirSync(dataDir, { recursive: true });
 app.setPath('userData', dataDir);
 app.setName('鲸鱼娘');
 if (!app.requestSingleInstanceLock()) { app.quit(); } else {
-  let bridge,wechat,mail,archery;
+  let bridge,wechat,mail,archery,quota,groupUsage,petQuota;
   let eventQueue=Promise.resolve();
   const cursorState=process.env.WHALE_CURSOR_STATE_DB||path.join(os.homedir(),'Library','Application Support','Cursor','User','globalStorage','state.vscdb');
   const cursorChats=createCursorChatOpener({stateFile:cursorState,openExternal:url=>shell.openExternal(url)});
@@ -38,6 +42,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   const behavior = new Behavior();
   const hooks=createHookSettings({dataDir,cwd:path.resolve(__dirname,'../../..'),onChange:broadcast});
   const shortcuts=createShortcutSettings({dataDir});
+  const petQuotaSettings=createPetQuotaSettings({dataDir});
   const sourceStatus=Object.fromEntries(SOURCES.map(id=>[id,{lastReceivedAt:null,lastAcceptedAt:null,ignored:0}]));
   const titles=createTitleReader();
   const cursorTitles=createCursorTitleReader();
@@ -67,7 +72,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   nurture.setSaveDir(dataDir);
   nurture.load();
 
-  const windows=createWindows({snapshot,performAction,collapseReminders:()=>{
+  const windows=createWindows({snapshot,performAction,rankingSnapshot:()=>petQuota.snapshot().ranking,rankingRefresh:()=>petQuota.refreshRanking(),collapseReminders:()=>{
     if(completionExpanded||busyExpanded) { completionExpanded=false;busyExpanded=false;broadcast(); }
   }});
   const {showPanel,showReminders}=windows;
@@ -233,7 +238,41 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     if(!archery)return {error:'Archery 接入正在初始化'};
     try{return {value:await archery.action(name,value)};}catch(error){return {error:error.message};}
   });
-  app.on('before-quit', () => { archery?.close();mail?.close();wechat?.close();codexRuntime.close();bridge?.close(); titles.close();cursorTitles.close(); });
+  // 额度页只读网关已保存的快照，token 不进入渲染进程，也不刷新上游额度。
+  ipcMain.handle('quota',async(event,name,value)=>{
+    if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋查看额度');
+    if(!quota)return {error:'额度页面正在初始化'};
+    if(!['snapshot','refresh','set-refresh','set-list'].includes(name))return {error:'不支持的额度操作'};
+    try{return {value:name==='set-list'?quota.setListSettings(value):name==='set-refresh'?quota.setRefreshEnabled(value):name==='refresh'?await quota.refresh():quota.snapshot()};}catch(error){return {error:error.message};}
+  });
+  ipcMain.handle('quota-group',async(event,name,value)=>{
+    if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋查看分组用量');
+    if(!groupUsage)return {error:'分组用量正在初始化'};
+    if(!['snapshot','open','refresh','select'].includes(name))return {error:'不支持的分组用量操作'};
+    try{return {value:name==='select'?await groupUsage.select(value):name==='refresh'?await groupUsage.refresh(value):name==='open'?await groupUsage.open():groupUsage.snapshot()};}
+    catch{return {error:'无法读取分组用量，请检查组 ID 后重试。'};}
+  });
+  ipcMain.handle('pet-quota',async(event,name,value)=>{
+    const panel=windows.isPanel(event.sender),pet=windows.isPet(event.sender);
+    if((!panel&&!pet)||event.senderFrame!==event.sender.mainFrame)throw Error('不允许读取桌宠额度');
+    if(!petQuota)return {error:'桌宠额度正在初始化'};
+    if(name==='update') {
+      if(!panel)throw Error('仅允许在小屋修改桌宠配置');
+      try {
+        if(value?.accountId!=null&&!quota.snapshot().accounts.some(account=>account.id===value.accountId))throw Error('请选择有效账号');
+        petQuotaSettings.update(value);
+      }catch(error){return {error:error.message};}
+    } else if(name==='ranking'&&pet) {
+      await windows.toggleRanking();return {value:true};
+    } else if(name==='refresh'&&pet) {
+      try{return {value:await petQuota.refresh()};}catch(error){return {error:error.message};}
+    } else if(name!=='snapshot')return {error:'不支持的桌宠额度操作'};
+    const data=petQuota.snapshot();
+    // 账号选项只给小屋；桌宠只拿选中账号和排行前五，不能调用管理或配置接口。
+    if(panel)data.accounts=quota.snapshot().accounts.map(({id,name})=>({id,name}));
+    return {value:data};
+  });
+  app.on('before-quit', () => { petQuota?.close();groupUsage?.close();quota?.close();archery?.close();mail?.close();wechat?.close();codexRuntime.close();bridge?.close(); titles.close();cursorTitles.close(); });
   app.whenReady().then(async () => {
     // 先确认客户端运行状态，再过滤临时会话、同步已读，避免清掉退出时暂存的提醒。
     await refreshClients();
@@ -260,6 +299,9 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
       return result.response===1;
     }});
     archery.start();
+    quota=createQuotaPanel({dataDir,tokenFile:process.env.WHALE_QUOTA_TOKEN_FILE||path.join(__dirname,'../../token'),fetchImpl:(url,options)=>net.fetch(url,options)});
+    groupUsage=createGroupUsage({dataDir,tokenFile:process.env.WHALE_QUOTA_TOKEN_FILE||path.join(__dirname,'../../token'),fetchImpl:(url,options)=>net.fetch(url,options)});
+    petQuota=createPetQuota({settings:petQuotaSettings,quota,groups:groupUsage});petQuota.start();
     for(const source of SOURCES)void hooks.refresh(source);
     try {
       const acceptEvent = event => {

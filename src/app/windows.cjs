@@ -2,9 +2,10 @@
 const { app, BrowserWindow, ipcMain, screen, Menu, Tray, nativeImage } = require('electron');
 const path = require('node:path');
 const {createPetMenu}=require('./pet-menu.cjs');
+const {createPetRanking}=require('./pet-ranking.cjs');
 
 // 此模块只负责 Electron 窗口、菜单和拖动；任务状态和交互规则由应用层传入。
-function createWindows({ snapshot, performAction, collapseReminders }) {
+function createWindows({ snapshot, performAction, collapseReminders, rankingSnapshot, rankingRefresh }) {
   let panel, pet, tray, quitting = false;
   let dragOrigin=null,petInteractive=false,ignoredMouse;
   const fromPet=event=>Boolean(pet&&!pet.isDestroyed()&&event.sender===pet.webContents&&event.senderFrame===pet.webContents.mainFrame);
@@ -24,6 +25,7 @@ function createWindows({ snapshot, performAction, collapseReminders }) {
     win.webContents.on('will-navigate', event => event.preventDefault());
   }
   const petMenu=createPetMenu({getPet:()=>pet,snapshot,performAction,showPanel,restartApp,protect});
+  const petRanking=createPetRanking({getPet:()=>pet,snapshot:rankingSnapshot,refresh:rankingRefresh,protect});
   function createPanel() {
     panel = new BrowserWindow({ width:1060, height:770, minWidth:860, minHeight:680, title:'', backgroundColor:'#f5f7f4', webPreferences:preferences() });
     panel.on('page-title-updated', event => { event.preventDefault(); panel.setTitle(''); });
@@ -63,11 +65,11 @@ function createWindows({ snapshot, performAction, collapseReminders }) {
     pet.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen:true });
     pet.loadFile(path.join(__dirname, '../ui/pet.html'));
     pet.on('show', () => {pointerChanged();updateTrayMenu();});
-    pet.on('hide', () => {dragOrigin=null;updatePetMouse();petMenu.close();updateTrayMenu();});
+    pet.on('hide', () => {dragOrigin=null;updatePetMouse();petMenu.close();petRanking.close();updateTrayMenu();});
     // 焦点进入自绘菜单不折叠提醒，避免人物几何在弹出过程中变化。
-    pet.on('blur', () => {dragOrigin=null;updatePetMouse();pointerChanged();if(!petMenu.isOpen())collapseReminders();});
-    pet.on('move',()=>{petMenu.close();pointerChanged();});
-    pet.on('resize',()=>{petMenu.close();pointerChanged();});
+    pet.on('blur', () => {dragOrigin=null;updatePetMouse();pointerChanged();if(!petMenu.isOpen()&&!petRanking.isOpen())collapseReminders();});
+    pet.on('move',()=>{petMenu.close();petRanking.close();pointerChanged();});
+    pet.on('resize',()=>{petMenu.close();petRanking.close();pointerChanged();});
     pet.webContents.on('context-menu',petMenu.open);
     pet.on('close', event => { if (!quitting) { event.preventDefault(); pet.hide(); } });
   }
@@ -111,13 +113,14 @@ function createWindows({ snapshot, performAction, collapseReminders }) {
   });
   app.on('second-instance', showPanel);
   app.on('activate', showPanel);
-  app.on('before-quit', () => { quitting = true;petMenu.close(); });
+  app.on('before-quit', () => { quitting = true;petMenu.close();petRanking.close(); });
 
   return {
     showPanel, showReminders,
     isPetVisible:()=>Boolean(pet&&!pet.isDestroyed()&&pet.isVisible()),
     isPanel:sender=>sender===panel?.webContents,
     isPet:sender=>sender===pet?.webContents,
+    toggleRanking:()=>{petMenu.close();return petRanking.toggle();},
     start() {
       createPanel(); createPet();
       const icon = nativeImage.createFromPath(path.join(__dirname, '../../assets/icon.png')).resize({ width:20, height:20 });
