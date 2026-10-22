@@ -52,8 +52,9 @@ function createGroupUsage({tokenFile, dataDir, baseUrl = 'https://openai.minitvc
           if (!validGroup(item.groupId) || !/^\d{4}-\d{2}-\d{2}$/.test(item.date) || !Array.isArray(item.users) || item.users.length > 50) throw Error('invalid cache');
           const failedAt = timestamp(item.failedAt), strategy = item.period ?? 'day';
           if (!validPeriod(strategy)) throw Error('invalid period');
+          // 兼容旧版最多 50 人的有序缓存，重启后也立即按 Top 20 展示。
           return {groupId: item.groupId, ...rankingRange(Date.parse(`${item.date}T12:00:00+08:00`), strategy), period: strategy,
-            users: item.users.map(projectUser), checkedAt: timestamp(item.checkedAt), attemptedAt: timestamp(item.attemptedAt), failedAt,
+            users: item.users.map(projectUser).slice(0, 20), checkedAt: timestamp(item.checkedAt), attemptedAt: timestamp(item.attemptedAt), failedAt,
             error: failedAt === null ? '' : '读取用户排行失败，30 分钟后自动重试。'};
         });
         groupId = saved.groupId;
@@ -142,7 +143,7 @@ function createGroupUsage({tokenFile, dataDir, baseUrl = 'https://openai.minitvc
         await loadGroups(signal, Boolean(groupsError));
         signal.throwIfAborted();
         const query = new URLSearchParams({start_date: previous.startDate, end_date: previous.date,
-          timezone: 'Asia/Shanghai', sort_by: 'actual_cost', limit: '50'});
+          timezone: 'Asia/Shanghai', sort_by: 'actual_cost', limit: '20'});
         if (id !== null) query.set('group_id', String(id));
         const response = await fetchImpl(`${origin}/api/v1/admin/dashboard/user-breakdown?${query}`, {headers: {'x-api-key': token}, signal});
         if (!response.ok) throw Error(response.status === 401 ? 'token 无效，无法读取分组用量' : '读取分组用量失败');
@@ -151,7 +152,8 @@ function createGroupUsage({tokenFile, dataDir, baseUrl = 'https://openai.minitvc
         if (closed) return;
         const data = body?.data ?? body;
         if ((body?.code != null && body.code !== 0) || !Array.isArray(data?.users) || data.users.length > 50) throw Error('读取分组用量失败');
-        const users = data.users.map(projectUser).sort((a, b) => (b.actual_cost ?? -1) - (a.actual_cost ?? -1));
+        // 接口未遵守 limit 时仍先按费用排序，再截取前 20 名，避免漏掉高消费用户。
+        const users = data.users.map(projectUser).sort((a, b) => (b.actual_cost ?? -1) - (a.actual_cost ?? -1)).slice(0, 20);
         entries.set(entryKey, {...attempted, users, checkedAt: clock.now(), failedAt: null, error: ''});
       } catch (error) {
         if (closed) return;
