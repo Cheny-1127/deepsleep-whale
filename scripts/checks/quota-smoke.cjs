@@ -56,6 +56,39 @@ let app;
   }
   let {panel,pet,errors}=await launch();
   if(process.env.WHALE_QUOTA_MULTI_ONLY!=='1') {
+  // 使用较长间隔检查三种单位，避免真实计时器干扰后续手动刷新调用数断言。
+  for(const [value,unit] of [['2','hours'],['120','minutes'],['7200','seconds']]) {
+    await panel.locator('#quota-interval-value').fill(value);await panel.locator('#quota-interval-unit').selectOption(unit);
+    await panel.locator('#quota-interval-apply').click();
+    await panel.waitForFunction(()=>document.getElementById('quota-interval-apply').disabled&&document.getElementById('quota-interval-feedback').textContent.includes('已保存'));
+    assert.equal((await panel.evaluate(()=>window.whale.quota('snapshot'))).value.refreshIntervalMs,7200000);
+  }
+  await panel.locator('#quota-interval-value').fill('4');await panel.locator('#quota-interval-apply').click();
+  assert.equal(await panel.locator('#quota-interval-value').evaluate(el=>el.checkValidity()),false);
+  assert.equal((await panel.evaluate(()=>window.whale.quota('snapshot'))).value.refreshIntervalMs,7200000);
+  for(const value of [{value:4,unit:'seconds'},{value:25,unit:'hours'}]) assert.match((await panel.evaluate(value=>window.whale.quota('set-interval',value),value)).error,/5 秒至 24 小时/);
+  await panel.locator('#quota-interval-unit').selectOption('hours');await panel.locator('#quota-interval-value').fill('25');
+  assert.equal(await panel.locator('#quota-interval-value').evaluate(el=>el.checkValidity()),false);
+  await panel.locator('#quota-interval-value').fill('2');await panel.locator('#quota-interval-apply').click();
+  await panel.waitForFunction(()=>document.getElementById('quota-interval-feedback').textContent.includes('2 小时'));
+  assert.equal(await pet.evaluate(async()=>{try{await window.whale.quota('set-interval',{value:5,unit:'seconds'});return 'allowed';}catch{return 'denied';}}),'denied');
+  // 独立验证新增周期功能，避免榜单等无关窗口影响检查结果。
+  if(process.env.WHALE_QUOTA_INTERVAL_ONLY==='1') {
+    assert.deepEqual(errors,[]);await app.close();app=null;
+    ({panel,pet,errors}=await launch());
+    assert.equal(await panel.locator('#quota-interval-value').inputValue(),'2');
+    assert.equal(await panel.locator('#quota-interval-unit').inputValue(),'hours');
+    assert.equal((await panel.evaluate(()=>window.whale.quota('snapshot'))).value.refreshIntervalMs,7200000);
+    assert.deepEqual(await app.evaluate(()=>global.quotaSmoke.calls),[],'重启使用缓存，保留新周期的剩余等待');
+    for(const width of [860,1060]) {
+      await app.evaluate(({BrowserWindow},width)=>BrowserWindow.getAllWindows().find(win=>win.webContents.getURL().endsWith('/index.html')).setSize(width,760),width);
+      assert.equal(await panel.locator('#quota-interval-form').evaluate(el=>el.getBoundingClientRect().right<=innerWidth&&document.documentElement.scrollWidth<=innerWidth),true,'设置区域不溢出');
+      await panel.screenshot({path:`/tmp/whale-quota-interval-${width}.png`});
+    }
+    assert.deepEqual(errors,[]);
+    console.log('Quota interval UI OK: seconds/minutes/hours, bounds, saved schedule, restart, cache, IPC access and 860/1060px layout');
+    return;
+  }
   assert.deepEqual(await panel.locator('.quota-subscription').allTextContents(),['Pro 100','Pro 200']);
   assert.deepEqual(await panel.locator('.quota-reset-count').allTextContents(),['重置次数 0','重置次数 2']);
   assert.equal(await panel.locator('.quota-platform-name').count(),0);
@@ -93,6 +126,9 @@ let app;
   await panel.locator('#quota-heading').hover();
   assert.equal(await tooltip.isVisible(),false,'移开立即隐藏');
   await panel.locator('#quota-columns-button').focus();await panel.keyboard.press('Tab');
+  assert.equal(await panel.locator('#quota-interval-value').evaluate(el=>el===document.activeElement),true);
+  await panel.keyboard.press('Tab');assert.equal(await panel.locator('#quota-interval-unit').evaluate(el=>el===document.activeElement),true);
+  await panel.keyboard.press('Tab');
   assert.equal(await resetTime.evaluate(el=>el.matches(':focus-visible')),true);
   await tooltip.waitFor({state:'visible',timeout:5000});
   await panel.locator('#quota-refresh').focus();
@@ -359,6 +395,7 @@ let app;
   await panel.waitForFunction(()=>document.getElementById('quota-accounts-body').hidden&&document.getElementById('quota-pet-body').hidden);
   assert.equal((await panel.evaluate(()=>window.whale.petQuota('snapshot'))).value.settings.accountId,5,'重启保留跟踪账号');
   await panel.locator('#quota-accounts-toggle').click();await panel.waitForFunction(()=>!document.getElementById('quota-accounts-body').hidden&&!document.getElementById('quota-accounts-toggle').disabled);
+  assert.equal(await panel.locator('#quota-interval-value').inputValue(),'2');assert.equal(await panel.locator('#quota-interval-unit').inputValue(),'hours');
   assert.equal(await panel.locator('#quota-pet-body').isVisible(),false,'独立恢复折叠状态');
   await panel.locator('#quota-pet-toggle').click();await panel.waitForFunction(()=>!document.getElementById('quota-pet-body').hidden&&!document.getElementById('quota-pet-toggle').disabled);
   assert.deepEqual(await app.evaluate(()=>global.quotaSmoke.calls),[],'重启先显示缓存，未满五分钟不发请求');

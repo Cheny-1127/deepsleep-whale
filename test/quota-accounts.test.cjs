@@ -107,9 +107,9 @@ function pollingFixture(t) {
   let now=1000,request=async url=>({ok:true,json:async()=>new URL(url).pathname.endsWith('/5')?{id:5,name:'账号',codex_5h_used_percent:20}:{items:[{id:5,name:'账号',codex_5h_used_percent:20}],pages:1}});
   const jobs=new Set(),calls=[];
   const clock={now:()=>now,setTimeout:(fn,ms)=>{const job={fn,ms};jobs.add(job);return job;},clearTimeout:job=>jobs.delete(job)};
-  const panel=createQuotaPanel({tokenFile,clock,fetchImpl:(url,options)=>{calls.push(options);return request(url,options);}});
+  const panel=createQuotaPanel({tokenFile,dataDir:dir,clock,fetchImpl:(url,options)=>{calls.push(options);return request(url,options);}});
   t.after(()=>{panel.close?.();fs.rmSync(dir,{recursive:true,force:true});});
-  return {panel,jobs,calls,setNow:value=>now=value,setRequest:fn=>request=fn,
+  return {panel,jobs,calls,dir,setNow:value=>now=value,setRequest:fn=>request=fn,
     async fire(ms){const job=[...jobs].find(job=>job.ms===ms);assert.ok(job,`missing ${ms}ms timer`);jobs.delete(job);now+=ms;job.fn();await new Promise(setImmediate);}};
 }
 
@@ -120,6 +120,35 @@ test('quota only starts polling after first refresh and schedules five minutes a
   assert.equal([...f.jobs][0].ms,300000);await f.fire(300000);
   assert.equal(f.calls.length,2);assert.equal(f.panel.snapshot().checkedAt,301000);
   assert.equal(f.panel.snapshot().nextRefreshAt,601000);
+});
+
+test('custom refresh units reschedule from save time without fetching, within five seconds and 24 hours',async t=>{
+  const f=pollingFixture(t);await f.panel.refresh();f.setNow(2000);
+  for (const [value,unit,ms] of [[5,'seconds',5000],[30,'seconds',30000],[2,'minutes',120000],[1,'hours',3600000],[24,'hours',86400000]]) {
+    const state=f.panel.setRefreshInterval({value,unit});
+    assert.deepEqual(state.refreshInterval,{value,unit});assert.equal(state.refreshIntervalMs,ms);assert.equal(state.nextRefreshAt,2000+ms);
+    assert.equal(f.jobs.size,1);assert.equal([...f.jobs][0].ms,ms);assert.equal(f.calls.length,1);
+  }
+  const before=f.panel.snapshot(),file=path.join(f.dir,'quota-refresh.json'),saved=fs.readFileSync(file,'utf8');
+  for(const value of [null,{value:0,unit:'seconds'},{value:4,unit:'seconds'},{value:5.5,unit:'seconds'},
+    {value:'5',unit:'seconds'},{value:86401,unit:'seconds'},{value:1441,unit:'minutes'},{value:25,unit:'hours'},
+    {value:1,unit:'days'},{value:1,unit:['hours']},{value:Infinity,unit:'seconds'}]) assert.throws(()=>f.panel.setRefreshInterval(value),/5 秒至 24 小时/);
+  assert.equal(fs.readFileSync(file,'utf8'),saved);assert.deepEqual(f.panel.snapshot(),before);
+  fs.mkdirSync(file+'.tmp');assert.throws(()=>f.panel.setRefreshInterval({value:10,unit:'seconds'}),/保存失败/);
+  assert.equal(fs.readFileSync(file,'utf8'),saved);assert.deepEqual(f.panel.snapshot(),before);assert.equal(f.jobs.size,1);
+});
+
+test('short refresh periods wait for request completion, merge overlaps, retry failures and keep individual refresh schedules',async t=>{
+  const f=pollingFixture(t);await f.panel.refresh();f.panel.setRefreshInterval({value:5,unit:'seconds'});
+  const scheduled=f.panel.snapshot().nextRefreshAt;await f.panel.refreshAccount(5);assert.equal(f.panel.snapshot().nextRefreshAt,scheduled);
+  let done;f.setRequest(()=>new Promise(resolve=>{done=resolve;}));await f.fire(5000);
+  const task=f.panel.refresh();assert.equal(f.calls.length,3);assert.equal(f.jobs.size,1);assert.equal([...f.jobs][0].ms,60000);
+  assert.throws(()=>f.panel.setRefreshInterval({value:1,unit:'hours'}),/正在刷新/);
+  f.setNow(20000);done({ok:true,json:async()=>({id:5,codex_5h_used_percent:30})});await task;
+  assert.equal(f.panel.snapshot().nextRefreshAt,25000);assert.equal([...f.jobs][0].ms,5000);
+  f.setRequest(async()=>{throw Error('private failure');});await f.fire(5000);
+  assert.equal(f.panel.snapshot().checkedAt,20000);assert.equal(f.panel.snapshot().nextRefreshAt,30000);
+  assert.match(f.panel.snapshot().error,/失败/);assert.doesNotMatch(f.panel.snapshot().error,/5 分钟|private/);
 });
 
 test('manual refresh resets the schedule and overlaps share one request',async t=>{
@@ -227,7 +256,7 @@ test('refresh choices persist and subsequent refreshes only request enabled acco
   assert.deepEqual(f.calls, ['/api/v1/admin/accounts', '/api/v1/admin/accounts/6']);
   assert.deepEqual(f.panel.snapshot().accounts[0], {...original, refreshEnabled: false});
   const saved = JSON.parse(fs.readFileSync(path.join(f.dir, 'quota-refresh.json'), 'utf8'));
-  assert.deepEqual(saved, {disabledAccountIds: [5]});
+  assert.deepEqual(saved, {disabledAccountIds:[5],refreshInterval:{value:5,unit:'minutes'}});
   const restarted = f.create();t.after(() => restarted.close());
   await restarted.refresh();
   assert.equal(restarted.snapshot().accounts[0].refreshEnabled, false);

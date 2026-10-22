@@ -18,7 +18,7 @@ function fixture(t) {
     panels.push(panel);return panel;
   };
   t.after(()=>{panels.forEach(panel=>panel.close());fs.rmSync(dir,{recursive:true,force:true});});
-  return {create,calls,jobs,cacheFile,tokenFile,setNow:value=>{now=value;},offline:()=>{offline=true;},online:()=>{offline=false;},used:value=>{used=value;}};
+  return {create,calls,jobs,cacheFile,tokenFile,dir,setNow:value=>{now=value;},offline:()=>{offline=true;},online:()=>{offline=false;},used:value=>{used=value;}};
 }
 
 test('successful quota data is saved without credentials and restored before any request',async t=>{
@@ -31,6 +31,31 @@ test('successful quota data is saved without credentials and restored before any
   assert.equal(f.calls.length,1);assert.ok([...f.jobs].some(job=>job.ms===299000),'恢复剩余等待时间，不能重新等待完整五分钟');
   const timer=[...f.jobs].find(job=>job.ms===299000);f.jobs.delete(timer);f.setNow(301000);timer.fn();await new Promise(setImmediate);
   assert.equal(f.calls.length,2);assert.equal(restarted.snapshot().checkedAt,301000);
+});
+
+test('custom interval and account switches survive restart without overwriting each other',async t=>{
+  const f=fixture(t),first=f.create();await first.refresh();
+  first.setRefreshInterval({value:2,unit:'hours'});first.setRefreshEnabled({id:5,enabled:false});
+  first.setRefreshInterval({value:30,unit:'seconds'});assert.equal(first.snapshot().nextRefreshAt,null);
+  assert.equal(f.jobs.size,0);assert.equal(f.calls.length,1);first.close();
+  const restored=f.create();assert.deepEqual(restored.snapshot().refreshInterval,{value:30,unit:'seconds'});
+  assert.equal(restored.snapshot().accounts[0].refreshEnabled,false);assert.equal(restored.snapshot().nextRefreshAt,null);
+  f.setNow(2000);restored.setRefreshEnabled({id:5,enabled:true});assert.equal(restored.snapshot().nextRefreshAt,32000);restored.close();
+  f.setNow(3000);const again=f.create();assert.equal(again.snapshot().nextRefreshAt,32000);
+  assert.ok([...f.jobs].some(job=>job.ms===29000));assert.equal(f.calls.length,1);
+});
+
+test('legacy and invalid intervals use the default; independent settings win when a cache write failed',async t=>{
+  const f=fixture(t),first=f.create();await first.refresh();first.close();
+  const settingsFile=path.join(f.dir,'quota-refresh.json');
+  for(const interval of [undefined,{value:4,unit:'seconds'},{value:25,unit:'hours'}]) {
+    fs.writeFileSync(settingsFile,JSON.stringify({disabledAccountIds:[5],refreshInterval:interval}));
+    const restored=f.create();assert.equal(restored.snapshot().refreshIntervalMs,300000);assert.equal(restored.snapshot().accounts[0].refreshEnabled,false);restored.close();
+  }
+  fs.writeFileSync(settingsFile,JSON.stringify({disabledAccountIds:[]}));const panel=f.create();panel.snapshot();
+  fs.mkdirSync(f.cacheFile+'.tmp');panel.setRefreshInterval({value:1,unit:'hours'});
+  assert.match(panel.snapshot().cacheError,/保存失败/);panel.close();
+  const restarted=f.create();assert.equal(restarted.snapshot().refreshIntervalMs,3600000);assert.equal(restarted.snapshot().nextRefreshAt,3601000);
 });
 
 test('a failed first request after restart retains cached data, success time and first failure across restarts',async t=>{

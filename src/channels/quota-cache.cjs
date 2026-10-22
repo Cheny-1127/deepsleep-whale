@@ -37,12 +37,13 @@ function createQuotaCache({dataDir,tokenFile,baseUrl}) {
       if(new Set(accounts.map(item=>item.id)).size!==accounts.length)throw Error('duplicate accounts');
       const failedAt=timestamp(saved.failedAt);
       return {accounts,checkedAt:timestamp(saved.checkedAt),attemptedAt:timestamp(saved.attemptedAt),failedAt,
-        error:failedAt!==null?'读取账号额度失败，5 分钟后自动重试。':'',nextRefreshAt:timestamp(saved.nextRefreshAt)};
+        error:failedAt!==null?'读取账号额度失败，将按刷新间隔自动重试。':'',nextRefreshAt:timestamp(saved.nextRefreshAt),
+        refreshIntervalMs:Number.isSafeInteger(saved.refreshIntervalMs)&&saved.refreshIntervalMs>=5000&&saved.refreshIntervalMs<=86400000?saved.refreshIntervalMs:300000};
     },
     save(state) {
       if(!file)return;
       const saved={version:1,source:source(),accounts:state.accounts.map(cachedAccount),checkedAt:timestamp(state.checkedAt),
-        attemptedAt:timestamp(state.attemptedAt),failedAt:timestamp(state.failedAt),nextRefreshAt:timestamp(state.nextRefreshAt)};
+        attemptedAt:timestamp(state.attemptedAt),failedAt:timestamp(state.failedAt),nextRefreshAt:timestamp(state.nextRefreshAt),refreshIntervalMs:state.refreshIntervalMs};
       // 原子替换：写入失败时，上一次完整缓存仍可使用。
       fs.writeFileSync(file+'.tmp',JSON.stringify(saved),{mode:0o600});
       fs.renameSync(file+'.tmp',file);

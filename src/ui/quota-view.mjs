@@ -68,9 +68,21 @@ function quotaPlatform(account) {
 export function createQuotaView() {
   if (!$('view')) return;
   let latest = null, busy = false, syncing = false, saving = false, listKey = '', sequence = 0, refreshButtons = [], resetLabels = [];
+  let intervalDirty = false;
+  function intervalControls() {
+    const saved = latest?.refreshInterval || {value:5,unit:'minutes'};
+    if (!intervalDirty) {$('interval-value').value = String(saved.value);$('interval-unit').value = saved.unit;}
+    const factor = {seconds:1000,minutes:60000,hours:3600000}[$('interval-unit').value];
+    $('interval-value').min = String(Math.ceil(5000 / factor));$('interval-value').max = String(86400000 / factor);
+    const disabled = busy || saving || latest?.busy || !latest;
+    $('interval-value').disabled = disabled;$('interval-unit').disabled = disabled;
+    $('interval-apply').disabled = disabled || !intervalDirty;
+  }
   function render(data) {
     if (!data) return;
     latest = data;
+    intervalControls();
+    const intervalLabel = data.refreshIntervalLabel || '5 分钟';
     const refreshing = data.busy || busy;
     const accounts = Array.isArray(data.accounts) ? data.accounts : [];
     const paused = accounts.length > 0 && accounts.every(account => account.refreshEnabled === false);
@@ -83,7 +95,7 @@ export function createQuotaView() {
     $('cache-error').hidden = !data.cacheError;
     $('checked').textContent = `刷新时间：${data.checkedAt != null ? new Date(data.checkedAt).toLocaleString('zh-CN') : '尚未刷新'}`;
     $('next').textContent = `下次刷新：${data.nextRefreshAt != null ? new Date(data.nextRefreshAt).toLocaleString('zh-CN') :
-      refreshing ? '本次完成后 5 分钟' : paused ? '已全部关闭' : '打开时检查'}`;
+      refreshing ? `本次完成后 ${intervalLabel}` : paused ? '已全部关闭' : '打开时检查'}`;
     $('count').textContent = `${accounts.length} 个账号`;
     $('table').hidden = !accounts.length;
     $('empty').hidden = Boolean(accounts.length);
@@ -106,7 +118,7 @@ export function createQuotaView() {
     // 本地快照轮询时更新倒计时，不重建未变化的账号行，也不额外请求接口。
     for (const {label, at} of resetLabels) label.textContent = resetCountdown(at);
     for (const button of refreshButtons) button.disabled = refreshing || saving;
-    const key = JSON.stringify([accounts, settings.map(([key]) => data.listSettings?.[key] !== false)]);
+    const key = JSON.stringify([accounts, settings.map(([key]) => data.listSettings?.[key] !== false), intervalLabel]);
     if (key === listKey) return;
     listKey = key;
     refreshButtons = [];
@@ -128,7 +140,7 @@ export function createQuotaView() {
       toggle.setAttribute('aria-label', `${name} · 刷新`);
       toggle.setAttribute('aria-checked', String(enabled));
       toggle.textContent = enabled ? '已开启' : '已关闭';
-      toggle.title = enabled ? '参与每 5 分钟及手动刷新' : '保留已有数据，刷新时跳过此账号';
+      toggle.title = enabled ? `参与每 ${intervalLabel}及手动刷新` : '保留已有数据，刷新时跳过此账号';
       toggle.disabled = refreshing || saving;
       toggle.addEventListener('click', () => void setRefreshEnabled(account.id, !enabled));
       refreshButtons.push(toggle);
@@ -198,7 +210,7 @@ export function createQuotaView() {
         // 重试按后台下次刷新时间判断，独立于标签保留的首次失败时间。
         const lastSync = data.attemptedAt ?? data.checkedAt;
         const due = data.nextRefreshAt != null ? Date.now() >= data.nextRefreshAt :
-          lastSync == null || Date.now() - lastSync >= 5 * 60 * 1000;
+          lastSync == null || Date.now() - lastSync >= (data.refreshIntervalMs ?? 300000);
         const paused = data.accounts?.length > 0 && data.accounts.every(account => account.refreshEnabled === false);
         if (checkFreshness && !data.busy && due && !paused) await refresh();
       }
@@ -240,6 +252,24 @@ export function createQuotaView() {
     }
   }
   $('refresh').addEventListener('click', () => void refresh());
+  for (const [id,event] of [['interval-value','input'],['interval-unit','change']]) $(id).addEventListener(event,() => {
+    const saved = latest?.refreshInterval || {value:5,unit:'minutes'};
+    intervalDirty = Number($('interval-value').value) !== saved.value || $('interval-unit').value !== saved.unit;
+    $('interval-feedback').textContent = '';intervalControls();
+  });
+  $('interval-form').addEventListener('submit',async event => {
+    event.preventDefault();
+    if (busy || saving || latest?.busy || !latest || !intervalDirty) return;
+    const value = {value:Number($('interval-value').value),unit:$('interval-unit').value};
+    sequence++;saving = true;$('settings-error').hidden = true;$('interval-feedback').textContent = '';render(latest);
+    try {
+      const data = await invoke('set-interval',value);
+      intervalDirty = false;render(data);$('interval-feedback').textContent = `已保存：每 ${data.refreshIntervalLabel}刷新`;
+    } catch (error) {
+      $('settings-error').textContent = error.message === '刷新间隔须为正整数，范围为 5 秒至 24 小时。' ? error.message : '刷新间隔保存失败，请重试。';
+      $('settings-error').hidden = false;
+    } finally {saving = false;render(latest);}
+  });
   for (const [key, control] of settings) $(control).addEventListener('change', async () => {
     if (busy || saving || latest?.busy || !latest || $(control).disabled) { if (latest) render(latest);return; }
     const enabled = $(control).checked;
@@ -267,6 +297,6 @@ export function createQuotaView() {
     }
   });
   document.getElementById('nav-quota').addEventListener('click', () => void sync(true));
-  // 此处只同步主进程的内存快照；真正的网络轮询由主进程每 5 分钟调度。
+  // 此处只同步内存快照；网络轮询由主进程按已保存的间隔调度，不覆盖正在编辑的输入。
   setInterval(() => { if (!$('view').hidden) void sync(); }, 5000);
 }

@@ -2,7 +2,13 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const {createQuotaCache}=require('./quota-cache.cjs');
-const REFRESH_MS = 5 * 60 * 1000;
+const DEFAULT_REFRESH_INTERVAL = {value:5, unit:'minutes'};
+const INTERVAL_UNITS = {seconds:1000, minutes:60000, hours:3600000};
+function normalizeInterval(value) {
+  if (!value || typeof value.unit !== 'string' || !Object.hasOwn(INTERVAL_UNITS,value.unit) || !Number.isSafeInteger(value.value) ||
+    value.value * INTERVAL_UNITS[value.unit] < 5000 || value.value * INTERVAL_UNITS[value.unit] > 86400000) throw Error('刷新间隔须为正整数，范围为 5 秒至 24 小时。');
+  return {value:value.value,unit:value.unit};
+}
 const REQUEST_TIMEOUT_MS = 60 * 1000;
 const DEFAULT_LIST_SETTINGS = {showName: true, showPlatform: true, showRemaining: true, showRefresh: true, showFiveHour: true};
 
@@ -99,11 +105,14 @@ function createQuotaPanel({tokenFile, dataDir, baseUrl, fetchImpl, clock = {now:
   const accountRefreshErrors = new Map();
   let initialized = false, disabledAccountIds = new Set();
   let resumeCache = false, cacheError = '';
+  let refreshInterval = {...DEFAULT_REFRESH_INTERVAL}, cachedIntervalMs = 300000;
+  const intervalMs = () => refreshInterval.value * INTERVAL_UNITS[refreshInterval.unit];
   const cache = createQuotaCache({dataDir, tokenFile, baseUrl});
   try {
     const saved = cache.load();
     if (saved) {
-      const {nextRefreshAt: next, ...cachedState} = saved;
+      const {nextRefreshAt: next, refreshIntervalMs: savedIntervalMs, ...cachedState} = saved;
+      cachedIntervalMs = savedIntervalMs;
       state = {...state, ...cachedState};nextRefreshAt = next;resumeCache = true;
     }
   } catch { cacheError = '本地额度缓存无法读取，将重新同步。'; }
@@ -111,7 +120,10 @@ function createQuotaPanel({tokenFile, dataDir, baseUrl, fetchImpl, clock = {now:
   try {
     const saved = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
     if (Array.isArray(saved.disabledAccountIds)) disabledAccountIds = new Set(saved.disabledAccountIds.filter(id => Number.isSafeInteger(id) && id > 0));
+    if (saved.refreshInterval) refreshInterval = normalizeInterval(saved.refreshInterval);
   } catch {} // 无配置或文件损坏时默认全部开启，不自动覆盖原文件。
+  // 缓存写入失败或配置由旧版恢复时，剩余等待仍以已保存的新周期为准。
+  if (nextRefreshAt !== null && cachedIntervalMs !== intervalMs()) nextRefreshAt = Math.max(0,nextRefreshAt - cachedIntervalMs + intervalMs());
   const listSettingsFile = dataDir ? path.join(dataDir, 'quota-list.json') : null;
   let listSettings = {...DEFAULT_LIST_SETTINGS};
   try {
@@ -124,22 +136,24 @@ function createQuotaPanel({tokenFile, dataDir, baseUrl, fetchImpl, clock = {now:
     // 首次读取时恢复轮询；先返回缓存，按原定刷新时间计算剩余等待。
     if (resumeCache && !closed) {
       resumeCache = false;
-      schedule(nextRefreshAt ?? (state.attemptedAt ?? state.checkedAt ?? clock.now()) + REFRESH_MS);
+      schedule(nextRefreshAt ?? (state.attemptedAt ?? state.checkedAt ?? clock.now()) + intervalMs());
     }
     return {accounts: state.accounts.map(account => ({...account, refreshEnabled: !disabledAccountIds.has(account.id)})), error: state.error, checkedAt: state.checkedAt,
       attemptedAt: state.attemptedAt, failedAt: state.failedAt, busy: state.busy,
       refreshingAccountIds: !state.busy ? [] : flightAccountId === null ? state.accounts.filter(account => !disabledAccountIds.has(account.id)).map(account => account.id) : [flightAccountId],
-      accountRefreshErrors: Object.fromEntries(accountRefreshErrors), nextRefreshAt, cacheError, listSettings: {...listSettings}};
+      accountRefreshErrors: Object.fromEntries(accountRefreshErrors), nextRefreshAt, cacheError, listSettings: {...listSettings},
+      refreshInterval:{...refreshInterval}, refreshIntervalMs:intervalMs(),
+      refreshIntervalLabel:`${refreshInterval.value} ${{seconds:'秒',minutes:'分钟',hours:'小时'}[refreshInterval.unit]}`};
   }
   function clearTimer() { clock.clearTimeout(timer); timer = null; nextRefreshAt = null; }
   function saveCache() {
-    try { cache.save({...state, nextRefreshAt});cacheError = ''; }
+    try { cache.save({...state, nextRefreshAt, refreshIntervalMs:intervalMs()});cacheError = ''; }
     catch { cacheError = '本地额度缓存保存失败，重启后可能无法保留最新数据。'; }
   }
-  function schedule(at = clock.now() + REFRESH_MS) {
+  function schedule(at = clock.now() + intervalMs()) {
     clearTimer();
     if (closed || allPaused()) return;
-    // 全量刷新完成后重新计算五分钟轮询时间；单账号刷新沿用原计划。
+    // 请求完成后再等待配置的间隔，避免短周期堆积请求；单账号刷新沿用原计划。
     nextRefreshAt = at;
     timer = clock.setTimeout(() => void refresh(), Math.max(0, at - clock.now()));
     timer.unref?.();
@@ -206,8 +220,8 @@ function createQuotaPanel({tokenFile, dataDir, baseUrl, fetchImpl, clock = {now:
         // 失败保留上次成功数据；不向页面透传网络库可能包含凭据的原始错误。
         const known = ['尚未配置 token 文件', 'token 文件是空的', 'token 无效，无法读取账号额度', '读取账号额度失败'];
         // 记录本轮连续失败的起点；后续重试失败不推进此时间。
-        const message = signal.aborted ? '读取账号额度超时，5 分钟后自动重试。' :
-          known.includes(error.message) ? error.message : '读取账号额度失败，5 分钟后自动重试。';
+        const message = signal.aborted ? '读取账号额度超时，将按刷新间隔自动重试。' :
+          known.includes(error.message) ? error.message : '读取账号额度失败，将按刷新间隔自动重试。';
         // 单账号失败只影响对应额度条，不把错误扩散到其他账号。
         if (accountId !== null) accountRefreshErrors.set(accountId, message);
         else {state = {...state, failedAt: state.failedAt ?? clock.now(), error: message};accountRefreshErrors.clear();}
@@ -234,15 +248,28 @@ function createQuotaPanel({tokenFile, dataDir, baseUrl, fetchImpl, clock = {now:
     if (!Number.isSafeInteger(value?.id) || value.id <= 0 || typeof value.enabled !== 'boolean' || !state.accounts.some(account => account.id === value.id)) throw new Error('无效的账号刷新设置');
     const next = new Set(disabledAccountIds);
     if (value.enabled) next.delete(value.id);else next.add(value.id);
-    // 先原子保存，再更新内存；落盘失败不会让页面误以为已保存。
-    try {
-      if (!settingsFile) throw new Error();
-      fs.writeFileSync(settingsFile + '.tmp', JSON.stringify({disabledAccountIds: [...next]}), {mode: 0o600});
-      fs.renameSync(settingsFile + '.tmp', settingsFile);
-    } catch { throw new Error('账号刷新设置保存失败，请重试'); }
+    saveRefreshSettings(next,refreshInterval);
     disabledAccountIds = next;
     if (allPaused()) clearTimer();
     else if (!timer && state.accounts.length) schedule();
+    saveCache();
+    return snapshot();
+  }
+  function saveRefreshSettings(disabled, interval) {
+    // 账号开关和周期共用配置文件，每次完整保存，避免互相覆盖；成功后才更新内存。
+    try {
+      if (!settingsFile) throw new Error();
+      fs.writeFileSync(settingsFile + '.tmp', JSON.stringify({disabledAccountIds:[...disabled],refreshInterval:interval}), {mode: 0o600});
+      fs.renameSync(settingsFile + '.tmp', settingsFile);
+    } catch { throw new Error('账号刷新设置保存失败，请重试'); }
+  }
+  function setRefreshInterval(value) {
+    if (closed) throw Error('额度页面已关闭');
+    if (flight) throw Error('正在刷新，请稍后修改设置');
+    const next = normalizeInterval(value);
+    saveRefreshSettings(disabledAccountIds,next);refreshInterval = next;resumeCache = false;
+    // 修改周期从保存时重新计时；全部暂停时只保存配置，重新启用后再恢复轮询。
+    if (timer || state.attemptedAt !== null || state.checkedAt !== null || state.accounts.length) schedule();
     saveCache();
     return snapshot();
   }
@@ -261,7 +288,7 @@ function createQuotaPanel({tokenFile, dataDir, baseUrl, fetchImpl, clock = {now:
     listSettings = next;
     return snapshot();
   }
-  return {snapshot, refresh: () => refresh(), refreshAccount, close, setRefreshEnabled, setListSettings};
+  return {snapshot, refresh: () => refresh(), refreshAccount, close, setRefreshEnabled, setRefreshInterval, setListSettings};
 }
 
 module.exports = {projectAccount, listAccountQuotas, createQuotaPanel, remainingPercent};
