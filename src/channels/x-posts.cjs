@@ -36,11 +36,32 @@ function readXDocument() {
     if (!['x.com','www.x.com','twitter.com','www.twitter.com'].includes(url.hostname) || url.protocol !== 'https:') continue;
     const match = /^\/([a-z0-9_]{1,15})\/status\/(\d{8,22})\/?$/i.exec(url.pathname);
     const body = article.querySelector('[data-testid="tweetText"], [dir="auto"].whitespace-pre-wrap');
-    const text = body?.innerText || body?.textContent || '（图片或视频动态，请查看原文）';
+    const more = Array.from(article.querySelectorAll('button, [role="button"], [data-testid="tweet-text-show-more-link"]')).filter(el=>
+      el.closest('article') === article && /^(显示更多|Show more)$/i.test(el.textContent.trim()));
+    const raw = body?.innerText || body?.textContent || '（图片或视频动态，请查看原文）';
+    // 控件文案不属于正文，不能把“显示更多”送去翻译或当作全文保存。
+    const text = more.some(el=>body?.contains(el)) ? raw.replace(/\s*(显示更多|Show more)\s*$/i,'') : raw;
     items.push({id:match[2], username:match[1].toLowerCase(), text:text.slice(0, 10000),
-      truncated:text.length > 10000 || Array.from(article.querySelectorAll('button')).some(button => /^(显示更多|Show more)$/i.test(button.textContent.trim()))});
+      truncated:text.length > 10000 || more.length > 0});
   }
   const text = document.body?.innerText || '';
   return {items, empty:items.length === 0 && /hasn[’']t posted|hasn[’']t posted anything|尚未发布|还没有发布|还没有发帖/i.test(text)};
 }
-module.exports = {xUsername, validPostId, compareIds, projectPost, readXDocument};
+// 只点击目标作者动态中的展开正文按钮，不操作引用帖、关注或登录按钮。
+function expandXDocument(username) {
+  let count = 0;
+  for (const article of Array.from(document.querySelectorAll('article')).slice(0,100)) {
+    if (article.parentElement?.closest('article')) continue;
+    const own = Array.from(article.querySelectorAll('a[href*="/status/"]')).some(link=>{
+      const url = new URL(link.href,location.href);
+      return ['x.com','www.x.com','twitter.com','www.twitter.com'].includes(url.hostname) && url.protocol === 'https:' &&
+        new RegExp('^/'+username+'/status/[0-9]{8,22}/?$','i').test(url.pathname) && link.closest('article') === article;
+    });
+    if (!own) continue;
+    for (const button of article.querySelectorAll('button, [role="button"], [data-testid="tweet-text-show-more-link"]')) {
+      if (button.closest('article') === article && /^(显示更多|Show more)$/i.test(button.textContent.trim())) {button.click();count++;}
+    }
+  }
+  return count;
+}
+module.exports = {xUsername, validPostId, compareIds, projectPost, readXDocument, expandXDocument};

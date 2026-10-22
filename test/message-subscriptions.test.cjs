@@ -25,16 +25,32 @@ test('X handles and supplied post links normalize, while foreign URLs and reserv
   for (const value of ['@ThSottiaux','thsottiaux','https://x.com/thsottiaux','https://x.com/thsottiaux/status/2113162277688070445?s=20','twitter.com/thsottiaux']) assert.equal(xUsername(value),'thsottiaux');
   for (const value of ['https://evil.test/thsottiaux','https://x.com.evil.test/thsottiaux','https://user:pass@x.com/thsottiaux','https://x.com:444/thsottiaux','http://x.com/thsottiaux','https://x.com/home','https://x.com/thsottiaux/anything','a'.repeat(16),null,'../x']) assert.throws(() => xUsername(value));
 });
-test('first sync is a baseline, persisted cache is safe and restart retains unread progress', async t => {
+test('first sync is unread, persisted cache is safe and restart retains read progress', async t => {
   const f = fixture(t), s = f.service;s.add('thsottiaux');await s.refresh();
-  assert.equal(s.snapshot().posts.length,1);assert.equal(s.summary().unread,0);
+  assert.equal(s.snapshot().posts.length,1);assert.equal(s.summary().unread,1);s.markRead(null);
   assert.equal(s.snapshot().posts[0].url,`https://x.com/thsottiaux/status/${f.post(1).id}`);
   f.setResponse(async () => [f.post(2),f.post(1)]);await s.refresh();assert.equal(s.summary().unread,1);
   s.close();const restarted = f.create();assert.equal(restarted.summary().unread,1);assert.equal(restarted.snapshot().posts.length,2);
   assert.equal(fs.statSync(path.join(f.dir,'message-subscriptions.json')).mode & 0o777,0o600);
 });
+test('legacy cache becomes unread once, and reading after migration survives restart',async t=>{
+  const f=fixture(t),s=f.service;s.add('thsottiaux');await s.refresh();s.markRead(null);s.close();
+  const file=path.join(f.dir,'message-subscriptions.json'),saved=JSON.parse(fs.readFileSync(file,'utf8'));
+  saved.version=1;fs.writeFileSync(file,JSON.stringify(saved));
+  const upgraded=f.create();assert.equal(upgraded.snapshot().posts[0].unread,true);
+  upgraded.markRead({username:'thsottiaux',id:f.post(1).id});upgraded.close();
+  assert.equal(JSON.parse(fs.readFileSync(file,'utf8')).version,2);
+  const restarted=f.create();assert.equal(restarted.summary().unread,0);await restarted.refresh();assert.equal(restarted.summary().unread,0);
+});
+test('full posts are not overwritten by later truncated previews, and translations remain valid',async t=>{
+  const f=fixture(t),s=f.service;s.add('thsottiaux');await s.refresh();const value={username:'thsottiaux',id:f.post(1).id};
+  await s.translate(value);const original=s.snapshot().posts[0];s.markRead(value);
+  f.setResponse(async()=>[{...f.post(1),text:'short preview',truncated:true}]);await s.refresh();
+  const result=s.snapshot().posts[0];assert.equal(result.text,original.text);assert.equal(result.truncated,false);
+  assert.deepEqual(result.translation,original.translation);assert.equal(result.unread,false);
+});
 test('clear cache retains account, read state and the high-water mark, including after restart', async t => {
-  const f = fixture(t), s = f.service;s.add('thsottiaux');await s.refresh();
+  const f = fixture(t), s = f.service;s.add('thsottiaux');await s.refresh();s.markRead(null);
   f.setResponse(async () => [f.post(2),f.post(1)]);await s.refresh();
   s.markRead({username:'thsottiaux',id:f.post(2).id});s.clearCache();
   assert.equal(s.snapshot().posts.length,0);assert.equal(s.snapshot().accounts.length,1);
@@ -50,7 +66,7 @@ test('cache clear also restores an existing unread flag when the same post is fe
 });
 test('cache is bounded to the newest hundred unique posts per account', async t => {
   const f = fixture(t), s = f.service;s.add('thsottiaux');
-  f.setResponse(async () => Array.from({length:100},(_,i) => f.post(i + 1)));await s.refresh();
+  f.setResponse(async () => Array.from({length:100},(_,i) => f.post(i + 1)));await s.refresh();assert.equal(s.summary().unread,100);s.markRead(null);
   f.setResponse(async () => Array.from({length:100},(_,i) => f.post(i + 51)));await s.refresh();
   const posts = s.snapshot().posts;assert.equal(posts.length,100);
   assert.equal(posts[0].id,f.post(150).id);assert.equal(posts.at(-1).id,f.post(51).id);assert.equal(s.summary().unread,50);
@@ -63,11 +79,11 @@ test('hourly work survives restart and a long sleep without replaying missed int
   await f.advance(INTERVAL * 8);await restarted.checkDue();assert.equal(f.calls.length,3);
   assert.equal(f.jobs.size,1);assert.equal([...f.jobs][0].ms,INTERVAL);
 });
-test('account errors preserve cache and first eventual success still establishes a baseline', async t => {
+test('account errors preserve cache and first eventual success marks fetched posts unread', async t => {
   const f = fixture(t), s = f.service;s.add('thsottiaux');
   f.setResponse(async () => {throw Error('private diagnostics');});await s.refresh();assert.ok(s.snapshot().accounts[0].error);
   assert.ok(!JSON.stringify(s.snapshot()).includes('private diagnostics'));
-  f.setResponse(async () => [f.post(2)]);await s.refresh();assert.equal(s.summary().unread,0);
+  f.setResponse(async () => [f.post(2)]);await s.refresh();assert.equal(s.summary().unread,1);
   f.setResponse(async () => {throw Object.assign(Error(),{code:'X_PUBLIC_UNAVAILABLE'});});await s.refresh();
   assert.equal(s.snapshot().posts.length,1);assert.match(s.snapshot().accounts[0].error,/公开页面/);
 });
@@ -130,19 +146,19 @@ test('translation is on demand, deduplicated and saved once across refresh and r
   assert.equal(s.snapshot().posts[0].translating,true);assert.equal(f.translationCalls[0].text,f.post(1).text);
   done('保存的中文 <img src=x>');await task;
   assert.equal(s.snapshot().posts[0].translation.text,'保存的中文 <img src=x>');
-  assert.equal(s.snapshot().posts[0].translating,false);assert.equal(s.summary().unread,0);
+  assert.equal(s.snapshot().posts[0].translating,false);assert.equal(s.summary().unread,1);
   await s.refresh();await s.translate(value);assert.equal(f.translationCalls.length,1);
   s.close();const restarted = f.create();await restarted.translate(value);
   assert.equal(restarted.snapshot().posts[0].translation.text,'保存的中文 <img src=x>');assert.equal(f.translationCalls.length,1);
 });
-test('changed source or truncation invalidates translation; fetched translation fields are never trusted', async t => {
+test('changed source invalidates translation; truncated previews and fetched translations cannot replace saved content', async t => {
   const f = fixture(t), s = f.service;s.add('thsottiaux');await s.refresh();const value = {username:'thsottiaux',id:f.post(1).id};
   await s.translate(value);const previous = s.snapshot().posts[0].translation;
   f.setResponse(async () => [{...f.post(1),text:'changed',translation:previous}]);await s.refresh();
   assert.equal(s.snapshot().posts[0].translation,undefined);await s.translate(value);
   assert.equal(s.snapshot().posts[0].translation.text,'中文：changed');
   f.setResponse(async () => [{...f.post(1),text:'changed',truncated:true}]);await s.refresh();
-  assert.equal(s.snapshot().posts[0].translation,undefined);
+  assert.equal(s.snapshot().posts[0].translation.text,'中文：changed');assert.equal(s.snapshot().posts[0].truncated,false);
   assert.throws(() => s.translate({username:'thsottiaux',id:'javascript:alert(1)'}),/不存在/);
   assert.equal(f.translationCalls.length,2);
 });
@@ -184,7 +200,7 @@ test('translation failure is retryable and sanitized; failed persistence never c
   await s.translate(value);assert.equal(s.snapshot().posts[0].translation.text,'保存失败的译文');assert.equal(s.snapshot().posts[0].translationError,'');
 });
 test('invalid cached translations are discarded without losing source posts and read progress', async t => {
-  const f = fixture(t), s = f.service;s.add('thsottiaux');await s.refresh();await s.translate({username:'thsottiaux',id:f.post(1).id});s.close();
+  const f = fixture(t), s = f.service;s.add('thsottiaux');await s.refresh();await s.translate({username:'thsottiaux',id:f.post(1).id});s.markRead(null);s.close();
   const file = path.join(f.dir,'message-subscriptions.json'), saved = JSON.parse(fs.readFileSync(file,'utf8'));
   saved.accounts[0].posts[0].text = 'modified on disk';fs.writeFileSync(file,JSON.stringify(saved));
   const restarted = f.create();assert.equal(restarted.snapshot().posts[0].translation,undefined);
