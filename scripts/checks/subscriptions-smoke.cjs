@@ -42,10 +42,16 @@ async function launch() {
   assert.equal(await panel.locator('.subscriptions-post img').count(),0);
   assert.ok(!(JSON.stringify(await panel.evaluate(()=>window.whale.snapshot()))).includes('onerror=alert'));
   assert.equal(await app.evaluate(()=>global.subscriptionsFixture.translationCalls.length),0,'fetch never auto-translates');
-  await panel.getByRole('button',{name:'翻译成中文',exact:true}).click();
+  await panel.getByRole('button',{name:'中文翻译',exact:true}).click();
   await panel.waitForFunction(()=>document.querySelector('.subscriptions-translation')?.textContent.includes('额度即将重置'));
   assert.equal(await panel.locator('.subscriptions-translation img').count(),0);
-  assert.ok(await panel.getByRole('button',{name:'译文已保存',exact:true}).isDisabled());
+  assert.equal(await panel.getByRole('button',{name:'取消翻译',exact:true}).getAttribute('aria-expanded'),'true');
+  await panel.getByRole('button',{name:'取消翻译',exact:true}).click();
+  assert.ok(await panel.locator('.subscriptions-translation').isHidden());
+  assert.equal(await panel.getByRole('button',{name:'中文翻译',exact:true}).getAttribute('aria-expanded'),'false');
+  await panel.getByRole('button',{name:'中文翻译',exact:true}).click();
+  assert.ok(await panel.locator('.subscriptions-translation').isVisible());
+  assert.equal(await app.evaluate(()=>global.subscriptionsFixture.translationCalls.length),1,'expand uses saved text without another request');
   const translatedValue=await panel.locator('.subscriptions-post').evaluate(el=>({username:'thsottiaux',id:el.dataset.postId}));
   await panel.evaluate(value=>window.whale.subscriptions('translate',{...value,text:'must not translate renderer content'}),translatedValue);
   assert.equal(await app.evaluate(()=>global.subscriptionsFixture.translationCalls.length),1);
@@ -57,6 +63,8 @@ async function launch() {
   const pet=app.windows().find(page=>page.url().endsWith('/pet.html'));assert.ok(pet);
   assert.equal(await pet.evaluate(async()=>{try{await window.whale.subscriptions('snapshot');return 'allowed';}catch{return 'denied';}}),'denied');
   assert.equal(await pet.evaluate(async()=>{try{await window.whale.subscriptions('translate',{});return 'allowed';}catch{return 'denied';}}),'denied');
+  const savedCard=panel.locator(`[data-post-id="${translatedValue.id}"]`);
+  await savedCard.getByRole('button',{name:'取消翻译',exact:true}).click();
   const bad=await panel.evaluate(()=>window.whale.subscriptions('open-profile','https://evil.test'));assert.ok(bad.error);
   await panel.locator('#subscriptions-input').fill('@THSOTTIAUX');await panel.locator('#subscriptions-add').click();await panel.waitForFunction(()=>document.querySelector('#subscriptions-error').textContent.includes('已在订阅'));
   // 使用稳定的 ID 基点，避免两次测试请求因当前时间变化制造额外新帖。
@@ -64,12 +72,18 @@ async function launch() {
   await panel.locator('#subscriptions-refresh').click();await panel.waitForFunction(()=>document.querySelectorAll('.subscriptions-post').length===3);
   assert.ok(await panel.locator('#subscriptions-badge').isVisible());
   assert.equal(await panel.locator('.subscriptions-translation').count(),1,'refresh reuses saved translation');
+  assert.ok(await savedCard.locator('.subscriptions-translation').isHidden(),'refresh retains the collapsed state');
+  await panel.locator('[data-username="thsottiaux"] .ui-menu-item').click();
+  assert.ok(await savedCard.locator('.subscriptions-translation').isHidden(),'filtering retains the collapsed state');
+  await savedCard.getByRole('button',{name:'中文翻译',exact:true}).click();
+  assert.ok(await savedCard.locator('.subscriptions-translation').isVisible());
+  assert.equal(await app.evaluate(()=>global.subscriptionsFixture.translationCalls.length),0,'opening cached translation requires no IPC translation');
   await app.evaluate(()=>{global.subscriptionsFixture.translationFail=true;});
-  await panel.getByRole('button',{name:'翻译成中文',exact:true}).first().click();
+  await panel.getByRole('button',{name:'中文翻译',exact:true}).first().click();
   await panel.waitForFunction(()=>document.querySelector('.subscriptions-post .ui-alert'));
   assert.ok(!(await panel.locator('#subscriptions-posts').textContent()).includes('secret translation'));
   await app.evaluate(()=>{const f=global.subscriptionsFixture;f.translationFail=false;f.translationHold=true;});
-  await panel.getByRole('button',{name:'重试翻译',exact:true}).click();
+  await panel.getByRole('button',{name:'中文翻译',exact:true}).first().click();
   await panel.waitForFunction(()=>[...document.querySelectorAll('.subscriptions-post button')].some(el=>el.textContent==='翻译中…'));
   assert.ok(await panel.locator('#subscriptions-clear').isEnabled());assert.ok(await panel.locator('#subscriptions-refresh').isEnabled());
   await app.evaluate(()=>{const f=global.subscriptionsFixture;f.translationHold=false;f.releaseTranslation();});
@@ -89,10 +103,17 @@ async function launch() {
   for(const width of [1060,860]) {
     await app.evaluate(({BrowserWindow},width)=>BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/index.html')).setSize(width,770),width);
     assert.ok(await panel.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+    const placement=await panel.locator('.subscriptions-post').first().evaluate(card=>{
+      const header=card.querySelector('.subscriptions-post-header').getBoundingClientRect();
+      const actions=card.querySelector('.subscriptions-post-actions').getBoundingClientRect();
+      const body=card.querySelector(':scope > p').getBoundingClientRect();
+      return {right:Math.abs(header.right-actions.right)<1,top:Math.abs(header.top-actions.top)<1,above:actions.bottom<=body.top};
+    });
+    assert.deepEqual(placement,{right:true,top:true,above:true},`post actions stay at the top right at ${width}px`);
     fs.mkdirSync(path.join(root,'out'),{recursive:true});await panel.screenshot({path:path.join(root,'out',`subscriptions-${width}.png`),fullPage:true});
   }
   await app.evaluate(()=>{global.subscriptionsFixture.translationHold=true;});
-  await panel.getByRole('button',{name:'翻译成中文',exact:true}).click();
+  await panel.getByRole('button',{name:'中文翻译',exact:true}).click();
   await panel.waitForFunction(()=>[...document.querySelectorAll('.subscriptions-post button')].some(el=>el.textContent==='翻译中…'));
   await panel.locator('#subscriptions-clear').click();assert.equal(await panel.locator('.subscriptions-post').count(),0);assert.equal(await panel.locator('.subscriptions-account').count(),1);
   assert.equal(await panel.locator('.subscriptions-translation').count(),0);
@@ -112,5 +133,5 @@ async function launch() {
   await panel.waitForFunction(()=>document.querySelectorAll('.subscriptions-post').length===1);
   assert.equal(await panel.locator('.subscriptions-account').count(),1);assert.ok(await panel.locator('#subscriptions-recommend-tibo').isDisabled());
   await panel.getByRole('button',{name:'删除 @thsottiaux',exact:true}).click();assert.ok(await panel.locator('#subscriptions-recommend-tibo').isEnabled());
-  assert.deepEqual(errors,[]);console.log('Subscriptions UI OK: translation/save/restart/retry/cancel, link input, unread/read, filtering, safe links/text, clear/restart, IPC and 860/1060px layout');
+  assert.deepEqual(errors,[]);console.log('Subscriptions UI OK: top-right actions, translation expand/collapse/cache/restart/retry/cancel, link input, unread/read, filtering, safe links/text, clear/restart, IPC and 860/1060px layout');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{if(app)await app.close();fs.rmSync(dir,{recursive:true,force:true});});

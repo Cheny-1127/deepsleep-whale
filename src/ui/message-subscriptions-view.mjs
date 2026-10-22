@@ -6,6 +6,7 @@ export function createMessageSubscriptionsView() {
   const view = $('subscriptions-view');if (!view) return;
   const recommendations = [...view.querySelectorAll('[data-recommended-username]')];
   const translationRequests = new Set();
+  const collapsedTranslations = new Set();
   let data, filter = '', pending = false, loading = false, lastContent = '', revision = 0;
   function renderSummary(summary) {
     const count = summary?.unread || 0;
@@ -41,6 +42,15 @@ export function createMessageSubscriptionsView() {
     } catch (err) {error(err.message || '翻译失败，请重试。');}
     finally {translationRequests.delete(key);revision++;lastContent = '';render();void load();}
   }
+  function toggleTranslation(post) {
+    const key = `${post.username}/${post.id}`;
+    // 收起仅改变当前页面的展开状态，不删除已保存译文；再次展开直接读取缓存。
+    if (post.translation) {
+      if (collapsedTranslations.has(key)) collapsedTranslations.delete(key);else collapsedTranslations.add(key);
+      lastContent = '';render();return;
+    }
+    collapsedTranslations.delete(key);void translate(post);
+  }
   function select(username) {filter = username;lastContent = '';render();}
   function render() {
     for (const id of ['subscriptions-add','subscriptions-refresh','subscriptions-read-all']) $(id).disabled = pending || Boolean(data?.storeError);
@@ -61,6 +71,8 @@ export function createMessageSubscriptionsView() {
     renderSummary(data);
     if (data.storeError) error(data.storeError);
     if (filter && !data.accounts.some(a => a.username === filter)) filter = '';
+    const cachedKeys = new Set(data.posts.map(post => `${post.username}/${post.id}`));
+    for (const key of collapsedTranslations) if (!cachedKeys.has(key)) collapsedTranslations.delete(key);
     // 定时只读快照不重建未变化的列表，避免打断键盘焦点和正在阅读的位置。
     const content = JSON.stringify([data.accounts,data.posts,filter,$('subscriptions-unread').checked,pending]);
     if (content === lastContent) return;lastContent = content;
@@ -90,25 +102,34 @@ export function createMessageSubscriptionsView() {
     $('subscriptions-posts').replaceChildren();
     for (const post of posts) {
       const card = node('article','','ui-card subscriptions-post');card.dataset.postId = post.id;
+      const key = `${post.username}/${post.id}`, value = {username:post.username,id:post.id};
+      const expanded = Boolean(post.translation) && !collapsedTranslations.has(key);
+      const header = node('div','','subscriptions-post-header');
       const heading = node('div','','subscriptions-post-heading');heading.append(node('strong',`@${post.username}`),node('span',time(post.publishedAt)));
       if (post.unread) heading.append(node('span','未读','subscriptions-new'));
+      const actions = node('div','','subscriptions-post-actions');
+      const originalButton = button('查看原文 ↗',()=>call('open-post',value));originalButton.disabled = pending;
+      const translating = post.translating || translationRequests.has(key);
+      const translateButton = button(translating ? '翻译中…' : expanded ? '取消翻译' : '中文翻译',()=>toggleTranslation(post));
+      translateButton.disabled = pending || translating || (!post.translation && Boolean(data.storeError));
+      translateButton.setAttribute('aria-expanded',String(expanded));
+      if (post.translation) translateButton.setAttribute('aria-controls',`subscription-translation-${post.username}-${post.id}`);
+      actions.append(originalButton,translateButton);header.append(heading,actions);
       // 动态正文始终通过 textContent 写入，不插入远程 HTML、图片或可执行链接。
-      card.append(heading,node('p',post.text));
+      card.append(header,node('p',post.text));
       if (post.truncated) card.append(node('p','内容已截取，完整内容请查看原文。','subscriptions-truncated'));
       if (post.translation) {
         const translated = node('div','','subscriptions-translation');translated.lang = 'zh-CN';
+        translated.id = `subscription-translation-${post.username}-${post.id}`;translated.hidden = !expanded;
         translated.append(node('strong','中文译文'),node('p',post.translation.text));card.append(translated);
       }
       if (post.translationError) card.append(node('p',post.translationError,'ui-alert'));
-      const actions = node('div','','subscriptions-post-actions'), value = {username:post.username,id:post.id};
-      if (post.unread) actions.append(button('标为已读',()=>call('mark-read',value)));
-      actions.append(button('查看原文 ↗',()=>call('open-post',value)));
-      for (const el of actions.children) el.disabled = pending;
-      const translating = post.translating || translationRequests.has(`${post.username}/${post.id}`);
-      const translateButton = button(post.translation ? '译文已保存' : translating ? '翻译中…' : post.translationError ? '重试翻译' : '翻译成中文',()=>translate(post));
-      translateButton.disabled = pending || Boolean(data.storeError) || Boolean(post.translation) || translating;
-      actions.append(translateButton);
-      card.append(actions);$('subscriptions-posts').append(card);
+      if (post.unread) {
+        const readActions = node('div','','subscriptions-post-read-actions');
+        const readButton = button('标为已读',()=>call('mark-read',value));readButton.disabled = pending;
+        readActions.append(readButton);card.append(readActions);
+      }
+      $('subscriptions-posts').append(card);
     }
     $('subscriptions-empty').hidden = posts.length > 0;
     $('subscriptions-empty').textContent = !data.accounts.length ? '还没有订阅，添加一个 X 账号开始阅读。' : $('subscriptions-unread').checked ? '暂时没有未读动态。' : data.busy ? '正在读取公开动态，首次检查最多需要半分钟…' : '暂无缓存。可点击“立即检查”；首次读取的历史动态默认已读。';

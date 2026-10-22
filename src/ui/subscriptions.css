@@ -3,7 +3,7 @@
 .subscriptions-recommendations { margin-bottom: 20px; }
 .subscriptions-recommendation { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; }
 .subscriptions-recommendation p { margin: 6px 0 0; font-size: var(--ui-font-small); color: var(--ui-text-muted); }
-.subscriptions-toolbar, .subscriptions-add, .subscriptions-feed-heading, .subscriptions-post-heading, .subscriptions-post-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.subscriptions-toolbar, .subscriptions-add, .subscriptions-feed-heading, .subscriptions-post-heading, .subscriptions-post-actions, .subscriptions-post-read-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .subscriptions-toolbar > span, .subscriptions-hint, #subscriptions-feedback, #subscriptions-account-status { color: var(--ui-text-muted); font-size: var(--ui-font-small); line-height: 1.7; }
 #subscriptions-feedback { color: var(--ui-accent); }
 #subscriptions-manage { margin-top: 15px; }
@@ -24,13 +24,16 @@
 .subscriptions-feed-heading { justify-content: space-between; min-height: 30px; }
 .subscriptions-feed-heading label { font-size: var(--ui-font-small); color: var(--ui-text-muted); }
 .subscriptions-post { margin-bottom: 12px; }
-.subscriptions-post-heading { font-size: var(--ui-font-small); color: var(--ui-text-subtle); }
-.subscriptions-post-heading strong { color: var(--ui-text); }
+.subscriptions-post-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 12px; }
+.subscriptions-post-heading { min-width: 0; font-size: var(--ui-font-small); color: var(--ui-text-subtle); }
+.subscriptions-post-heading strong { color: var(--ui-text); overflow-wrap: anywhere; }
 .subscriptions-post p { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.9; margin: 14px 0; }
 .subscriptions-post .subscriptions-truncated { color: var(--ui-text-muted); font-size: var(--ui-font-small); }
 .subscriptions-translation { border-top: 1px solid var(--ui-divider); padding-top: 14px; }
 .subscriptions-translation > strong { color: var(--ui-accent); font-size: var(--ui-font-small); }
-.subscriptions-post-actions { justify-content: flex-end; }
+.subscriptions-post-actions { justify-content: flex-end; flex-wrap: nowrap; }
+.subscriptions-post-actions button { white-space: nowrap; }
+.subscriptions-post-read-actions { justify-content: flex-end; }
 .subscriptions-badge { padding: 2px 5px; background: var(--ui-accent); color: var(--ui-on-accent); border-radius: var(--ui-radius-control); font-size: var(--ui-font-caption); }
 .subscriptions-new { color: var(--ui-accent); background: var(--ui-selected); padding: 2px 6px; border-radius: var(--ui-radius-control); }
 #subscriptions-empty { line-height: 1.8; color: var(--ui-text-muted); }
