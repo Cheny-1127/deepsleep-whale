@@ -155,6 +155,7 @@ button,input{-webkit-app-region:no-drag}.studio{display:flex;background:var(--ui
 
 .shortcuts-picker{width:100%;min-width:0}.shortcuts-picker .quota-group-menu{width:100%}.shortcuts-picker .quota-picker-options{max-height:min(264px,40vh);padding-top:0}#shortcuts-selected{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
+#home-view>header{gap:16px}.home-startup-settings{flex-shrink:0;max-width:190px}.home-startup-settings label{min-height:32px;gap:6px;font-size:12px;white-space:nowrap}.home-startup-settings input{width:16px;height:16px;margin:0}#startup-settings-error{margin:8px 0 0;font-size:10px;line-height:1.6;color:var(--ui-danger)}.scene-top>.pill,.care>.section-heading>.pill{display:inline-flex;align-items:center;justify-content:center;height:32px;padding:6px 12px;font-size:12px;line-height:18px}.scene-top #pet-visibility-toggle{margin-left:auto}.care>.section-heading>.pill{margin-left:auto;flex-shrink:0}
 
 /* 第二条保留榜单和刷新入口，中间展示账号。 */
 .floating .pet-quota-secondary{margin-top:4px;gap:5px}.pet-quota-account-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;font-size:10px;color:#435b4b}.pet-quota-secondary [data-field="percent"]{font-size:9px;color:#788e7f;font-variant-numeric:tabular-nums}

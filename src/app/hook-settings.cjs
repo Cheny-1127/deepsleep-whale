@@ -9,7 +9,7 @@ const { prepareCursorChange } = require('../hooks/cursor-settings.cjs');
 
 // 应用层协调“客户端可用能力”和“桌宠接收偏好”，不把本地开关当作客户端授权。
 function createHookSettings({ dataDir, cwd, onChange }) {
-  let settings = { sound:false, notifications:true, sources:{ codex:true, cursor:false }, events:{} };
+  let settings = { sound:false, notifications:true, showPanelOnStartup:true, sources:{ codex:true, cursor:false }, events:{} };
   const settingsFile = path.join(dataDir, 'settings.json');
   const hookNode = [process.env.npm_node_execpath, ...(process.env.PATH || '').split(path.delimiter).filter(Boolean).map(dir => path.join(dir, 'node'))]
     .find(file => { try { return file && fs.statSync(file).isFile() && fs.accessSync(file, fs.constants.X_OK) === undefined && fs.realpathSync(file) !== fs.realpathSync(process.execPath); } catch { return false; } });
@@ -23,7 +23,7 @@ function createHookSettings({ dataDir, cwd, onChange }) {
     const saved = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
     savedCursorEnabled = saved.sources?.cursor;
     // 白名单读取偏好，忽略旧版外观字段，避免历史配置覆盖当前界面协议。
-    for (const key of ['sound', 'notifications']) if (typeof saved[key] === 'boolean') settings[key] = saved[key];
+    for (const key of ['sound', 'notifications', 'showPanelOnStartup']) if (typeof saved[key] === 'boolean') settings[key] = saved[key];
     for (const source of SOURCES) if (typeof saved.sources?.[source] === 'boolean') settings.sources[source] = saved.sources[source];
     for (const adapter of adapters) settings.events[adapter.id] = Object.fromEntries(adapter.mappings.map(item => [item.event, saved.events?.[adapter.id]?.[item.event] !== false]));
   } catch {} // 首次启动或偏好文件不可读时使用默认值，不在启动时覆盖原文件。
@@ -76,8 +76,12 @@ function createHookSettings({ dataDir, cwd, onChange }) {
     get settings() { return settings; },
     adapters, availability, refresh, update,
     setPreference(key, value) {
-      settings[key] = value;
-      fs.writeFileSync(settingsFile, JSON.stringify(settings));
+      if (!['sound', 'notifications', 'showPanelOnStartup'].includes(key) || typeof value !== 'boolean') throw new Error('无效的偏好设置');
+      const next = {...settings, [key]:value};
+      // 先原子落盘再更新内存，保存失败时界面仍能回退到上一次有效设置。
+      fs.writeFileSync(settingsFile + '.tmp', JSON.stringify(next), {mode:0o600});
+      fs.renameSync(settingsFile + '.tmp', settingsFile);
+      settings = next;
     }
   };
 }

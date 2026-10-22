@@ -169,7 +169,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
         const tasks=activity.snapshot();
         behavior.task({...tasks,state:tasks.pending||tasks.working?tasks.state:'idle'});
       }
-    } else if (['sound', 'notifications'].includes(action) && typeof value === 'boolean') {
+    } else if (['sound', 'notifications', 'showPanelOnStartup'].includes(action) && typeof value === 'boolean') {
       hooks.setPreference(action,value);
     } else if (action === 'open-completion') {
       const tasks=activity.snapshot();
@@ -292,7 +292,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     await refreshClients();
     activity.reconcile(titles.readState());
     if(savedReminders)saveReminders();
-    windows.start();
+    windows.start({showPanelOnStartup:hooks.settings.showPanelOnStartup});
     wechat=createWechatGateway({store:createWechatStore({dataDir,safeStorage}),
       api:createWechatApi({fetchImpl:(url,options)=>net.fetch(url,options)}),
       makeQr:text=>QRCode.toDataURL(text,{width:256,margin:2,errorCorrectionLevel:'M'}),onChange:broadcast});
