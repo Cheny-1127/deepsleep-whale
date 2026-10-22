@@ -114,7 +114,7 @@ function createPetQuota({settings, quota, groups, clock = {now:() => Date.now(),
     if (closed) return;
     const accountState = quota.snapshot(), last = accountState.attemptedAt ?? accountState.checkedAt;
     const paused = accountState.accounts.length > 0 && accountState.accounts.every(account => account.refreshEnabled === false);
-    const due = accountState.nextRefreshAt == null ? last == null || clock.now()-last >= 300000 : clock.now() >= accountState.nextRefreshAt;
+    const due = accountState.nextRefreshAt == null ? last == null || clock.now()-last >= (accountState.refreshIntervalMs ?? 300000) : clock.now() >= accountState.nextRefreshAt;
     const ids = new Set(settings.snapshot().trackingConfigs.map(config => config.groupId));
     await Promise.allSettled([!paused && !accountState.busy && due ? quota.refresh() : null, groups.openDaily(), ...[...ids].map(id => groups.openDaily(id))]);
   }

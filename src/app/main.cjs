@@ -273,8 +273,8 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   ipcMain.handle('quota',async(event,name,value)=>{
     if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋查看额度');
     if(!quota)return {error:'额度页面正在初始化'};
-    if(!['snapshot','refresh','set-refresh','set-list'].includes(name))return {error:'不支持的额度操作'};
-    try{return {value:name==='set-list'?quota.setListSettings(value):name==='set-refresh'?quota.setRefreshEnabled(value):name==='refresh'?await quota.refresh():quota.snapshot()};}catch(error){return {error:error.message};}
+    if(!['snapshot','refresh','set-refresh','set-interval','set-list'].includes(name))return {error:'不支持的额度操作'};
+    try{return {value:name==='set-interval'?quota.setRefreshInterval(value):name==='set-list'?quota.setListSettings(value):name==='set-refresh'?quota.setRefreshEnabled(value):name==='refresh'?await quota.refresh():quota.snapshot()};}catch(error){return {error:error.message};}
   });
   ipcMain.handle('quota-group',async(event,name,value)=>{
     if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋查看分组用量');

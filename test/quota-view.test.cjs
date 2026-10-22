@@ -21,13 +21,14 @@ function fixture() {
   class TestDate extends Date { static now() { return now; } }
   const calls = [], intervals = [], saves = [];
   let save = async value => {
+    if (value.unit) {const ms=value.value*({seconds:1000,minutes:60000,hours:3600000}[value.unit]);data={...data,refreshInterval:value,refreshIntervalMs:ms,refreshIntervalLabel:value.value+' '+({seconds:'秒',minutes:'分钟',hours:'小时'}[value.unit]),nextRefreshAt:now+ms};return {value:data};}
     if (Object.keys(value).some(key => key.startsWith('show'))) {data = {...data, listSettings: {...data.listSettings, ...value}};return {value: data};}
     data = {...data, accounts: data.accounts.map(account => account.id === value.id ? {...account, refreshEnabled: value.enabled} : account)};
     return {value: data};
   };
   const tick = () => new Promise(setImmediate);
   elements.get('quota-view').hidden = true;
-  const window = {whale: {quota: async (name, value) => { calls.push(name); if (name === 'set-refresh' || name === 'set-list') {saves.push(value);return save(value);} if (name === 'refresh') data = {...data, checkedAt: now, attemptedAt: now, failedAt: null, error: '', nextRefreshAt: now + 300000, busy: false}; return {value: data}; }}};
+  const window = {whale: {quota: async (name, value) => { calls.push(name); if (name === 'set-refresh' || name === 'set-list' || name === 'set-interval') {saves.push(value);return save(value);} if (name === 'refresh') data = {...data, checkedAt: now, attemptedAt: now, failedAt: null, error: '', nextRefreshAt: now + 300000, busy: false}; return {value: data}; }}};
   const source = fs.readFileSync(path.join(__dirname, '../src/ui/quota-view.mjs'), 'utf8').replace('export function', 'function');
   vm.runInNewContext(source + '\ncreateQuotaView();', {window, document: {addEventListener() {}, getElementById: id => elements.get(id), createElement: tag => new Element(tag), createElementNS: (_ns, tag) => new Element(tag)}, Date: TestDate, setInterval(callback) { intervals.push(callback); }});
   const get = id => elements.get('quota-' + id);
@@ -49,6 +50,29 @@ test('list preferences hide the five-hour window without hiding weekly quota or 
   assert.equal(view.get('list').children[0].children[2].children[0].hidden, false);
   assert.equal(JSON.stringify(view.saves), JSON.stringify([{showFiveHour: true}]));
   assert.deepEqual(view.calls, ['snapshot', 'set-list']);
+});
+
+test('interval drafts survive polling and save with the chosen unit without requesting quota data',async()=>{
+  const view=fixture();view.set({checkedAt:1000});await view.open();
+  assert.equal(view.get('interval-value').value,'5');assert.equal(view.get('interval-unit').value,'minutes');
+  view.get('interval-value').value='2';view.get('interval-value').handlers.input();
+  view.get('interval-unit').value='hours';view.get('interval-unit').handlers.change();
+  assert.equal(view.get('interval-value').max,'24');assert.equal(view.get('interval-apply').disabled,false);
+  await view.poll();assert.equal(view.get('interval-value').value,'2');assert.equal(view.get('interval-unit').value,'hours');
+  await view.get('interval-form').handlers.submit({preventDefault(){}});
+  assert.deepEqual(view.calls,['snapshot','snapshot','set-interval']);assert.equal(JSON.stringify(view.saves),JSON.stringify([{value:2,unit:'hours'}]));
+  assert.equal(view.get('interval-apply').disabled,true);assert.match(view.get('interval-feedback').textContent,/2 小时/);
+  view.set({busy:true,nextRefreshAt:null});await view.poll();assert.match(view.get('next').textContent,/本次完成后 2 小时/);
+});
+
+test('failed interval saves preserve the draft and old schedule, and seconds enforce the five-second minimum',async()=>{
+  const view=fixture();view.set({checkedAt:1000,nextRefreshAt:301000});await view.open();
+  view.get('interval-unit').value='seconds';view.get('interval-unit').handlers.change();
+  assert.equal(view.get('interval-value').min,'5');assert.equal(view.get('interval-value').max,'86400');
+  view.setSave(async()=>({error:'private storage error'}));
+  const previous=view.get('next').textContent;await view.get('interval-form').handlers.submit({preventDefault(){}});
+  assert.equal(view.get('interval-unit').value,'seconds');assert.equal(view.get('interval-apply').disabled,false);
+  assert.equal(view.get('next').textContent,previous);assert.equal(view.get('settings-error').textContent,'刷新间隔保存失败，请重试。');
 });
 
 test('a zero-length window stays hidden even when the five-hour display setting is enabled', async () => {

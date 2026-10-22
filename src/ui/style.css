@@ -166,3 +166,5 @@ button,input{-webkit-app-region:no-drag}.studio{display:flex;background:var(--ui
 .quota-config-tools{position:relative;z-index:1;display:flex;gap:6px;margin-left:auto}.quota-pet-card .quota-section-heading h2{min-width:0}.quota-pet-card{margin-top:20px}#pet-quota-extra-bars{max-height:165px;overflow-y:auto;scrollbar-width:none}#pet-quota-extra-bars::-webkit-scrollbar{display:none}
 
 .floating{--ui-icon-size:23px;--ui-icon-padding:3px}
+
+.quota-refresh-settings{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:20px;font-size:var(--ui-font-small);color:var(--ui-text-muted)}.quota-refresh-settings input{width:96px}.quota-refresh-settings select{width:90px}.quota-refresh-settings .wechat-hint{flex-basis:100%;margin:0}#quota-interval-feedback{color:var(--ui-accent)}

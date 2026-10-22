@@ -57,6 +57,13 @@ test('pet reads reuse fresh caches, respect paused accounts and retry only when 
   data.accounts[0].refreshEnabled = false;await service.sync();assert.equal(accountCalls, 1);
   service.close();await service.sync();assert.equal(dailyCalls, 3);
 });
+test('pet freshness fallback uses the configured interval when no next refresh time is available',async t=>{
+  const f=fixture(t);let calls=0;
+  const data={accounts:[{id:5,refreshEnabled:true}],checkedAt:1000,refreshIntervalMs:3600000,nextRefreshAt:null};
+  const service=createPetQuota({settings:f.settings,quota:{snapshot:()=>data,refresh:async()=>{calls++;}},
+    groups:{openDaily:async()=>{}},clock:{now:()=>10000,setTimeout,clearTimeout}});
+  await service.sync();assert.equal(calls,0);data.refreshIntervalMs=5000;await service.sync();assert.equal(calls,1);service.close();
+});
 test('manual pet refresh reuses quota service and rejects missing or paused tracking', async t => {
   const f = fixture(t);let calls = 0;
   const data = {accounts:[{id:5, refreshEnabled:true, sevenDayRemaining:70}], busy:false};
