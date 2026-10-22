@@ -21,12 +21,12 @@ function cachedPost(item, username, now) {
 function createMessageSubscriptions({dataDir, readPosts, translateText, onChange = () => {}, clock = {now:() => Date.now(), setTimeout, clearTimeout}}) {
   const file = path.join(dataDir, 'message-subscriptions.json');
   const translations = new Map(), translationErrors = new Map();
-  let state = {version:1, accounts:[]}, storeError = '', retryAt = 0, blocked = false, timer, flight = null, controller, activeUsername = null, epoch = 0, closed = false, started = false, revision = 0;
+  let state = {version:2, accounts:[]}, storeError = '', retryAt = 0, blocked = false, timer, flight = null, controller, activeUsername = null, epoch = 0, closed = false, started = false, revision = 0;
   try {
     if (fs.existsSync(file)) {
       if (fs.statSync(file).size > 64000000) throw Error();
       const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
-      if (saved.version !== 1 || !Array.isArray(saved.accounts) || saved.accounts.length > ACCOUNT_LIMIT) throw Error();
+      if (![1,2].includes(saved.version) || !Array.isArray(saved.accounts) || saved.accounts.length > ACCOUNT_LIMIT) throw Error();
       const names = new Set();
       state.accounts = saved.accounts.map(a => {
         const username = xUsername(a.username);
@@ -35,12 +35,13 @@ function createMessageSubscriptions({dataDir, readPosts, translateText, onChange
           !Array.isArray(a.unreadIds) || a.unreadIds.length > LIMIT || !a.unreadIds.every(validPostId) ||
           !Array.isArray(a.posts) || a.posts.length > LIMIT) throw Error();
         names.add(username);
-        return {username, enabled:a.enabled, initialized:a.initialized, latestId:a.latestId, unreadIds:[...new Set(a.unreadIds)],
+        // v1 无法区分默认已读和实际阅读，按本次约定一次性恢复现有缓存为未读。
+        return {username, enabled:a.enabled, initialized:a.initialized, latestId:a.latestId, unreadIds:[...new Set([...a.unreadIds,...(saved.version === 1 ? a.posts.map(p=>p.id) : [])])].sort((a,b)=>compareIds(b,a)).slice(0,LIMIT),
           attemptedAt:a.attemptedAt, checkedAt:a.checkedAt, error:typeof a.error === 'string' ? a.error.slice(0, 160) : '',
           posts:a.posts.map(item => cachedPost(item, username, clock.now()))};
       });
     }
-  } catch {state = {version:1, accounts:[]};blocked = true;storeError = '消息订阅文件无法读取，原文件已保留，请检查本地文件后重启。';}
+  } catch {state = {version:2, accounts:[]};blocked = true;storeError = '消息订阅文件无法读取，原文件已保留，请检查本地文件后重启。';}
   const nextAt = a => a.attemptedAt === null ? clock.now() : Math.min(a.attemptedAt, clock.now()) + INTERVAL;
   function summary() {
     return {unread:state.accounts.reduce((sum,a) => sum + a.posts.filter(p => a.unreadIds.includes(p.id)).length, 0), busy:Boolean(flight), revision};
@@ -107,13 +108,15 @@ function createMessageSubscriptions({dataDir, readPosts, translateText, onChange
           const incoming = result.map(item => projectPost(item, username, clock.now()));
           const next = structuredClone(state);a = next.accounts.find(item => item.username === username);
           const unread = new Set(a.unreadIds);
-          // 首次成功只建立基线；后续按单调增长的帖子 ID 去重，清缓存也保留这个游标。
-          if (a.initialized) for (const post of incoming) if (a.latestId === null || compareIds(post.id,a.latestId) > 0) unread.add(post.id);
+          // 首次抓取也应显示未读；已读后仍用递增 ID 游标去重，清缓存不重置阅读进度。
+          for (const post of incoming) if (a.latestId === null || compareIds(post.id,a.latestId) > 0) unread.add(post.id);
           for (const post of incoming) if (a.latestId === null || compareIds(post.id,a.latestId) > 0) a.latestId = post.id;
           a.unreadIds = [...unread].sort((a,b) => compareIds(b,a)).slice(0,LIMIT);
           const merged = new Map(a.posts.map(p => [p.id,p]));
           for (const post of incoming) {
             const previous = merged.get(post.id);
+            // 已有全文不被偶尔抓到的主页摘要降级，避免丢失正文及其译文。
+            if (previous && !previous.truncated && post.truncated) continue;
             // 同一条原文未变时保留本地译文；采集结果不能自行提供或覆盖译文。
             if (previous?.translation && sourceHash(previous) === sourceHash(post)) post.translation = previous.translation;
             merged.set(post.id,post);

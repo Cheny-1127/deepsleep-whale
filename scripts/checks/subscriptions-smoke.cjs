@@ -37,7 +37,10 @@ async function launch() {
   fs.mkdirSync(path.join(root,'out'),{recursive:true});await panel.screenshot({path:path.join(root,'out','subscriptions-recommendations.png'),fullPage:true});
   await panel.locator('#subscriptions-input').fill('https://x.com/thsottiaux/status/2113162277688070445');await panel.locator('#subscriptions-add').click();
   await panel.waitForFunction(()=>document.querySelectorAll('.subscriptions-post').length===1);
-  assert.equal(await panel.locator('#subscriptions-badge').isHidden(),true);
+  assert.ok(await panel.locator('#subscriptions-badge').isVisible());
+  assert.equal(await panel.locator('.subscriptions-unread-dot').count(),1,'首次获取也显示未读绿点');
+  await panel.locator('#subscriptions-read-all').click();
+  await panel.waitForFunction(()=>document.querySelector('#subscriptions-badge').hidden);
   assert.equal(await panel.locator('#subscriptions-recommend-tibo').textContent(),'已订阅');assert.ok(await panel.locator('#subscriptions-recommend-tibo').isDisabled());
   assert.equal(await panel.locator('.subscriptions-post img').count(),0);
   assert.ok(!(JSON.stringify(await panel.evaluate(()=>window.whale.snapshot()))).includes('onerror=alert'));

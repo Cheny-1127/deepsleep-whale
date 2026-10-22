@@ -135,7 +135,7 @@ export function createMessageSubscriptionsView() {
       $('subscriptions-posts').append(card);
     }
     $('subscriptions-empty').hidden = posts.length > 0;
-    $('subscriptions-empty').textContent = !data.accounts.length ? '还没有订阅，添加一个 X 账号开始阅读。' : $('subscriptions-unread').checked ? '暂时没有未读动态。' : data.busy ? '正在读取公开动态，首次检查最多需要半分钟…' : '暂无缓存。可点击“立即检查”；首次读取的历史动态默认已读。';
+    $('subscriptions-empty').textContent = !data.accounts.length ? '还没有订阅，添加一个 X 账号开始阅读。' : $('subscriptions-unread').checked ? '暂时没有未读动态。' : data.busy ? '正在读取公开动态，首次检查最多需要半分钟…' : '暂无缓存。可点击“立即检查”；新获取的动态默认未读。';
   }
   async function load() {
     if (view.hidden || loading || pending) return;loading = true;const requestedAt = revision;
@@ -144,10 +144,10 @@ export function createMessageSubscriptionsView() {
   }
   $('subscriptions-form').addEventListener('submit',async event=>{
     event.preventDefault();const input = $('subscriptions-input');
-    if (await call('add',input.value,'已添加订阅；首次读取只建立基线，之后的新动态才计入未读。')) input.value = '';
+    if (await call('add',input.value,'已添加订阅，新获取的动态将标为未读。')) input.value = '';
   });
   $('subscriptions-all').addEventListener('click',()=>select(''));
-  for (const recommended of recommendations) recommended.addEventListener('click',()=>call('add',recommended.dataset.recommendedUsername,'已添加订阅；首次读取只建立基线，之后的新动态才计入未读。'));
+  for (const recommended of recommendations) recommended.addEventListener('click',()=>call('add',recommended.dataset.recommendedUsername,'已添加订阅，新获取的动态将标为未读。'));
   $('subscriptions-unread').addEventListener('change',render);
   $('subscriptions-refresh').addEventListener('click',()=>call('refresh'));
   $('subscriptions-read-all').addEventListener('click',()=>call('mark-read',null,'已全部标为已读。'));
