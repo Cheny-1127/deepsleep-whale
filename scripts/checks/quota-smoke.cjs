@@ -57,6 +57,9 @@ let app;
   let {panel,pet,errors}=await launch();
   if(process.env.WHALE_QUOTA_MULTI_ONLY!=='1') {
   // 使用较长间隔检查三种单位，避免真实计时器干扰后续手动刷新调用数断言。
+  assert.equal(await panel.locator('#quota-next').count(),0,'不再展示下次刷新时间');
+  assert.equal(await panel.locator('#quota-account-tools #quota-interval-form').count(),1,'刷新频率位于账号额度标题栏');
+  assert.equal(await panel.locator('label[for="quota-interval-value"]').textContent(),'刷新频率');
   for(const [value,unit] of [['2','hours'],['120','minutes'],['7200','seconds']]) {
     await panel.locator('#quota-interval-value').fill(value);await panel.locator('#quota-interval-unit').selectOption(unit);
     await panel.locator('#quota-interval-apply').click();
@@ -126,9 +129,6 @@ let app;
   await panel.locator('#quota-heading').hover();
   assert.equal(await tooltip.isVisible(),false,'移开立即隐藏');
   await panel.locator('#quota-columns-button').focus();await panel.keyboard.press('Tab');
-  assert.equal(await panel.locator('#quota-interval-value').evaluate(el=>el===document.activeElement),true);
-  await panel.keyboard.press('Tab');assert.equal(await panel.locator('#quota-interval-unit').evaluate(el=>el===document.activeElement),true);
-  await panel.keyboard.press('Tab');
   assert.equal(await resetTime.evaluate(el=>el.matches(':focus-visible')),true);
   await tooltip.waitFor({state:'visible',timeout:5000});
   await panel.locator('#quota-refresh').focus();
@@ -240,9 +240,9 @@ let app;
     await panel.waitForTimeout(100);
     const layout=await panel.evaluate(()=>{
       const box=id=>{const r=document.getElementById(id).getBoundingClientRect();return {x:r.x,right:r.right,y:r.y,bottom:r.bottom};};
-      return {time:box('quota-checked'),next:box('quota-next'),heading:box('quota-accounts-heading'),table:box('quota-table'),refresh:box('quota-refresh'),scroll:document.documentElement.scrollWidth,width:innerWidth};
+      return {time:box('quota-checked'),heading:box('quota-accounts-heading'),table:box('quota-table'),refresh:box('quota-refresh'),scroll:document.documentElement.scrollWidth,width:innerWidth};
     });
-    assert.ok(layout.time.x>layout.heading.right);assert.ok(layout.next.bottom<layout.table.y);assert.ok(layout.time.right<=layout.refresh.x);
+    assert.ok(layout.time.x>layout.heading.right);assert.ok(layout.time.bottom<layout.table.y);assert.ok(layout.time.bottom<=layout.refresh.y);
     assert.ok(layout.scroll<=layout.width);
     const filters=await panel.locator('.quota-group-controls').evaluate(el=>{
       const label=el.querySelector('#quota-group-label').getBoundingClientRect(),groupButton=el.querySelector('#quota-group-button'),periodButton=el.querySelector('#quota-group-period-button'),button=groupButton.getBoundingClientRect(),period=periodButton.getBoundingClientRect();
@@ -436,7 +436,7 @@ let app;
   await second().click();await panel.waitForFunction(()=>document.querySelectorAll('#quota-list [role="switch"][aria-checked="false"]').length===2);
   assert.equal(await panel.locator('#quota-refresh').isDisabled(),true);
   assert.equal(await panel.locator('#quota-status').textContent(),'已暂停刷新');
-  assert.match(await panel.locator('#quota-next').textContent(),/已全部关闭/);
+  assert.equal(await panel.locator('#quota-next').count(),0);
   const before=await app.evaluate(()=>global.quotaSmoke.calls.length);
   await panel.evaluate(()=>window.whale.quota('refresh'));
   assert.equal(await app.evaluate(()=>global.quotaSmoke.calls.length),before);

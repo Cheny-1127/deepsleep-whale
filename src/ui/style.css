@@ -167,4 +167,7 @@ button,input{-webkit-app-region:no-drag}.studio{display:flex;background:var(--ui
 
 .floating{--ui-icon-size:23px;--ui-icon-padding:3px}
 
-.quota-refresh-settings{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:20px;font-size:var(--ui-font-small);color:var(--ui-text-muted)}.quota-refresh-settings input{width:96px}.quota-refresh-settings select{width:90px}.quota-refresh-settings .wechat-hint{flex-basis:100%;margin:0}#quota-interval-feedback{color:var(--ui-accent)}
+/* 标题栏中的刷新频率控件位于折叠热区上方，点击输入不会折叠账号列表。 */
+.quota-refresh-settings{position:relative;z-index:1;display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:0;font-size:var(--ui-font-small);color:var(--ui-text-muted)}.quota-refresh-settings label{margin:0;white-space:nowrap}.quota-refresh-settings input{width:64px;margin:0}.quota-refresh-settings select{width:72px;margin:0}#quota-interval-feedback{color:var(--ui-accent)}
+
+.quota-account-tools{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:10px;flex:1;min-width:0}.quota-account-tools .quota-refresh-info{flex-basis:100%}

@@ -62,7 +62,7 @@ test('interval drafts survive polling and save with the chosen unit without requ
   await view.get('interval-form').handlers.submit({preventDefault(){}});
   assert.deepEqual(view.calls,['snapshot','snapshot','set-interval']);assert.equal(JSON.stringify(view.saves),JSON.stringify([{value:2,unit:'hours'}]));
   assert.equal(view.get('interval-apply').disabled,true);assert.match(view.get('interval-feedback').textContent,/2 小时/);
-  view.set({busy:true,nextRefreshAt:null});await view.poll();assert.match(view.get('next').textContent,/本次完成后 2 小时/);
+  view.set({busy:true,nextRefreshAt:null});await view.poll();assert.equal(view.get('interval-value').disabled,true);
 });
 
 test('failed interval saves preserve the draft and old schedule, and seconds enforce the five-second minimum',async()=>{
@@ -70,9 +70,9 @@ test('failed interval saves preserve the draft and old schedule, and seconds enf
   view.get('interval-unit').value='seconds';view.get('interval-unit').handlers.change();
   assert.equal(view.get('interval-value').min,'5');assert.equal(view.get('interval-value').max,'86400');
   view.setSave(async()=>({error:'private storage error'}));
-  const previous=view.get('next').textContent;await view.get('interval-form').handlers.submit({preventDefault(){}});
+  const previous=view.get('checked').textContent;await view.get('interval-form').handlers.submit({preventDefault(){}});
   assert.equal(view.get('interval-unit').value,'seconds');assert.equal(view.get('interval-apply').disabled,false);
-  assert.equal(view.get('next').textContent,previous);assert.equal(view.get('settings-error').textContent,'刷新间隔保存失败，请重试。');
+  assert.equal(view.get('checked').textContent,previous);assert.equal(view.get('settings-error').textContent,'刷新间隔保存失败，请重试。');
 });
 
 test('a zero-length window stays hidden even when the five-hour display setting is enabled', async () => {
@@ -290,7 +290,6 @@ test('visible polling reads local snapshots and updates background refresh state
   await view.poll();
   assert.equal(view.get('refresh').disabled, false);
   assert.equal(view.get('refresh').textContent, '立即刷新');
-  assert.match(view.get('next').textContent, /下次刷新/);
   assert.deepEqual(view.calls, ['snapshot', 'refresh', 'snapshot', 'snapshot']);
   view.get('view').hidden = true;
   await view.poll();

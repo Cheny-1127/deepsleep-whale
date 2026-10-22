@@ -94,8 +94,6 @@ export function createQuotaView() {
     $('cache-error').textContent = data.cacheError || '';
     $('cache-error').hidden = !data.cacheError;
     $('checked').textContent = `刷新时间：${data.checkedAt != null ? new Date(data.checkedAt).toLocaleString('zh-CN') : '尚未刷新'}`;
-    $('next').textContent = `下次刷新：${data.nextRefreshAt != null ? new Date(data.nextRefreshAt).toLocaleString('zh-CN') :
-      refreshing ? `本次完成后 ${intervalLabel}` : paused ? '已全部关闭' : '打开时检查'}`;
     $('count').textContent = `${accounts.length} 个账号`;
     $('table').hidden = !accounts.length;
     $('empty').hidden = Boolean(accounts.length);
