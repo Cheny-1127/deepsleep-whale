@@ -13,6 +13,7 @@ function fixture() {
     replaceChildren(...children) { this.children = children; }
     addEventListener(name, handler) { this.handlers[name] = handler; }
     click() { this.handlers.click?.(); }
+    focus() {}
   }
   const elements = new Map();
   for (const [, id] of fs.readFileSync(path.join(__dirname, '../src/ui/index.html'), 'utf8').matchAll(/id="([^"]+)"/g)) elements.set(id, new Element());
@@ -56,7 +57,7 @@ test('interval drafts survive polling and save with the chosen unit without requ
   const view=fixture();view.set({checkedAt:1000});await view.open();
   assert.equal(view.get('interval-value').value,'5');assert.equal(view.get('interval-unit').value,'minutes');
   view.get('interval-value').value='2';view.get('interval-value').handlers.input();
-  view.get('interval-unit').value='hours';view.get('interval-unit').handlers.change();
+  view.get('interval-hours').click();
   assert.equal(view.get('interval-value').max,'24');assert.equal(view.get('interval-apply').disabled,false);
   await view.poll();assert.equal(view.get('interval-value').value,'2');assert.equal(view.get('interval-unit').value,'hours');
   await view.get('interval-form').handlers.submit({preventDefault(){}});
@@ -67,7 +68,7 @@ test('interval drafts survive polling and save with the chosen unit without requ
 
 test('failed interval saves preserve the draft and old schedule, and seconds enforce the five-second minimum',async()=>{
   const view=fixture();view.set({checkedAt:1000,nextRefreshAt:301000});await view.open();
-  view.get('interval-unit').value='seconds';view.get('interval-unit').handlers.change();
+  view.get('interval-seconds').click();
   assert.equal(view.get('interval-value').min,'5');assert.equal(view.get('interval-value').max,'86400');
   view.setSave(async()=>({error:'private storage error'}));
   const previous=view.get('checked').textContent;await view.get('interval-form').handlers.submit({preventDefault(){}});

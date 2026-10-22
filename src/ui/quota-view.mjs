@@ -69,6 +69,7 @@ export function createQuotaView() {
   if (!$('view')) return;
   let latest = null, busy = false, syncing = false, saving = false, listKey = '', sequence = 0, refreshButtons = [], resetLabels = [];
   let intervalDirty = false;
+  const intervalUnits = {seconds:'秒',minutes:'分钟',hours:'小时'};
   function intervalControls() {
     const saved = latest?.refreshInterval || {value:5,unit:'minutes'};
     if (!intervalDirty) {$('interval-value').value = String(saved.value);$('interval-unit').value = saved.unit;}
@@ -77,6 +78,14 @@ export function createQuotaView() {
     const disabled = busy || saving || latest?.busy || !latest;
     $('interval-value').disabled = disabled;$('interval-unit').disabled = disabled;
     $('interval-apply').disabled = disabled || !intervalDirty;
+    $('interval-apply').hidden = !intervalDirty;
+    $('interval-selected').textContent = intervalUnits[$('interval-unit').value];
+    $('interval-button').setAttribute('aria-disabled',String(Boolean(disabled)));
+    if (disabled) $('interval-picker').open = false;
+    for (const unit of Object.keys(intervalUnits)) {
+      $('interval-'+unit).disabled = disabled;
+      $('interval-'+unit).setAttribute('aria-selected',String($('interval-unit').value === unit));
+    }
   }
   function render(data) {
     if (!data) return;
@@ -250,10 +259,33 @@ export function createQuotaView() {
     }
   }
   $('refresh').addEventListener('click', () => void refresh());
-  for (const [id,event] of [['interval-value','input'],['interval-unit','change']]) $(id).addEventListener(event,() => {
+  function intervalChanged() {
     const saved = latest?.refreshInterval || {value:5,unit:'minutes'};
     intervalDirty = Number($('interval-value').value) !== saved.value || $('interval-unit').value !== saved.unit;
     $('interval-feedback').textContent = '';intervalControls();
+  }
+  $('interval-value').addEventListener('input',intervalChanged);
+  // 单位复用公共选择器外观与交互，隐藏值只用于保存，不显示系统原生菜单。
+  $('interval-button').addEventListener('click',event=>{if ($('interval-value').disabled) event.preventDefault();});
+  for (const unit of Object.keys(intervalUnits)) $('interval-'+unit).addEventListener('click',()=>{
+    if ($('interval-value').disabled) return;
+    $('interval-unit').value = unit;$('interval-picker').open = false;
+    intervalChanged();$('interval-button').focus();
+  });
+  $('interval-picker').addEventListener('toggle',()=>{
+    if ($('interval-picker').open) {
+      $('list-settings').open = false;
+      $('interval-'+$('interval-unit').value).focus();
+    }
+  });
+  $('interval-picker').addEventListener('keydown',event=>{
+    if ($('interval-value').disabled || !['ArrowDown','ArrowUp','Home','End'].includes(event.key)) return;
+    event.preventDefault();
+    const units = Object.keys(intervalUnits), index = units.findIndex(unit=>$('interval-'+unit) === document.activeElement);
+    $('interval-picker').open = true;
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? units.length-1 :
+      index < 0 ? (event.key === 'ArrowUp' ? units.length-1 : 0) : (index+(event.key === 'ArrowDown'?1:-1)+units.length)%units.length;
+    $('interval-'+units[next]).focus();
   });
   $('interval-form').addEventListener('submit',async event => {
     event.preventDefault();
@@ -286,9 +318,13 @@ export function createQuotaView() {
   });
   // 勾选时保持菜单展开，点击外部或按 Esc 收起，键盘焦点回到入口。
   document.addEventListener('pointerdown', event => {
+    if ($('interval-picker').open && !$('interval-picker').contains(event.target)) $('interval-picker').open = false;
     if ($('list-settings').open && !$('list-settings').contains(event.target)) $('list-settings').open = false;
   });
   document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && $('interval-picker').open) {
+      $('interval-picker').open = false;$('interval-button').focus();
+    }
     if (event.key === 'Escape' && $('list-settings').open) {
       $('list-settings').open = false;
       $('columns-button').focus();
