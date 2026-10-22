@@ -16,6 +16,9 @@ const REASONS={
   DESKTOP_UNAVAILABLE:'无法连接持有该会话的 Codex 桌面端，请打开该对话并确认配置目录一致',
   DESKTOP_PROTOCOL:'桌面会话连接或协议状态不匹配，已停止转发，请检查客户端版本并重新选择对话',
   DELIVERY_UNKNOWN:'未能确认本次桌面消息的执行结果，请先到原会话查看；不会自动重发',
+  RECOVERY_UNKNOWN:'结果跟踪已中断，暂时无法确认原任务的执行结果，请到原会话查看',
+  TRACKING_STORE:'无法安全保存任务关联信息，已停止转发',
+  TURN_INTERRUPTED:'原 Codex 轮次已中断，未取得完成回复',
   TURN_FAILED:'Codex 未完成任务',TIMEOUT:'任务超过十分钟，已停止',CANCELLED:'任务已停止'
 };
 class AgentError extends Error {

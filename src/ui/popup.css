@@ -1,0 +1,8 @@
+@import url("components.css");
+
+/* 榜单和账号选择窗共用弹窗容器，避免账号窗口依赖榜单业务样式。 */
+:root { color: var(--ui-text); font-size: var(--ui-font-control); --ui-icon-size: 24px; }
+body { padding: 6px; background: transparent; }
+.ui-popup-card { padding: 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-card); background: var(--ui-surface-soft); box-shadow: var(--ui-popup-shadow); }
+header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+h1 { margin: 0; flex-shrink: 0; font-size: var(--ui-font-body); font-weight: 600; }

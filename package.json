@@ -10,6 +10,7 @@
     "test": "node --test test/*.test.cjs",
     "check": "node scripts/checks/syntax.cjs",
     "test:ui": "node scripts/checks/ui-smoke.cjs",
+    "test:styles": "node scripts/checks/styles-smoke.cjs",
     "test:hooks": "node scripts/checks/hooks-smoke.cjs",
     "test:reminders": "node scripts/checks/reminder-smoke.cjs",
     "test:presence": "node scripts/checks/client-presence-smoke.cjs",

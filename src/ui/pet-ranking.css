@@ -1,6 +1,18 @@
-:root{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:#43564d;font-size:12px;font-synthesis:none}*{box-sizing:border-box}body{margin:0;padding:6px;background:transparent}.ranking-card{background:#fcfefbf7;border:1px solid #dce5de;border-radius:14px;padding:12px;box-shadow:0 2px 5px #243b3b12}header{display:flex;align-items:center;justify-content:space-between;gap:8px}h1{margin:0;font-size:13px;font-weight:600}button{border:0;background:transparent;color:#85928b;font:inherit;font-size:20px;cursor:pointer;padding:0 3px}button:focus-visible{outline:2px solid #6bbcb3;border-radius:4px}h1{flex-shrink:0}.ranking-tools{display:flex;align-items:center;gap:7px;min-width:0;margin-left:auto}#users{margin-top:9px}ol{list-style:none;margin:0;padding:0}li{display:grid;grid-template-columns:20px minmax(0,1fr) auto;align-items:center;gap:8px;padding:9px 0;border-top:1px solid #e9eee7}.rank{display:grid;place-items:center;width:19px;height:19px;border-radius:50%;background:#edf1eb;color:#71816f;font-size:10px}li:first-child .rank{background:#fff1c5;color:#a07c30}.name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px}.cost{font-variant-numeric:tabular-nums;font-size:11px;font-weight:550;color:#326e5c}#status{margin:8px 0 0;font-size:9px;color:#93a09b;line-height:1.6}#status.failed{color:#a52e34}#empty{margin:20px 0;color:#85928b;font-size:11px}[hidden]{display:none!important}
+@import url("popup.css");
 
-#refresh{display:inline-flex;align-items:center;justify-content:center;padding:3px;border-radius:50%}#refresh:hover:not(:disabled){background:#edf1eb}#refresh:disabled{opacity:.5;cursor:default}#refresh[aria-busy="true"] svg{animation:ranking-spin 1s linear infinite}@keyframes ranking-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){#refresh[aria-busy="true"] svg{animation:none}}
-
-/* 榜单采用紧凑尺寸，颜色与选中状态沿用小屋样式。 */
-#group-picker{width:126px;min-width:0;flex-shrink:1}#group-button{height:24px;padding:3px 8px;gap:6px}#group-picker[open]>summary,#group-button:focus-visible{outline-width:1px;outline-offset:1px}#group-picker .quota-group-menu{left:auto;right:0;top:calc(100% + 6px);width:max(100%,190px);padding:4px 0;border-radius:8px}#group-picker .quota-picker-options{max-height:220px;padding-top:0}#group-options button{padding:5px 10px;font-size:11px;line-height:16px}#group-picker button:disabled{opacity:.55;cursor:default}
+.ranking-tools { display: flex; align-items: center; gap: 7px; min-width: 0; margin-left: auto; }
+#source { margin: 7px 0 0; font-size: var(--ui-font-caption); color: var(--ui-text-subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#users { margin-top: 9px; }
+ol { list-style: none; margin: 0; padding: 0; }
+li { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 9px 0; border-top: 1px solid var(--ui-divider); }
+.rank { display: grid; place-items: center; width: 19px; height: 19px; border-radius: 50%; background: var(--ui-hover); color: var(--ui-text-muted); font-size: var(--ui-font-caption); }
+li:first-child .rank { background: #fff1c5; color: #a07c30; }
+.name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: var(--ui-font-small); }
+.cost { font-variant-numeric: tabular-nums; font-size: var(--ui-font-small); font-weight: 550; color: var(--ui-accent); }
+#status { margin: 8px 0 0; font-size: var(--ui-font-caption); color: var(--ui-text-subtle); line-height: 1.6; }
+#status.failed { color: var(--ui-danger); }
+#empty { margin: 20px 0; color: var(--ui-text-subtle); font-size: var(--ui-font-small); }
+/* 小窗仅缩小控件尺寸，边框、颜色与选中状态仍引用公共组件。 */
+#group-picker { --ui-control-height: 24px; --ui-control-padding: 1px 8px; --ui-font-control: 11px; --ui-menu-item-padding: 5px 10px; width: 126px; min-width: 0; flex-shrink: 1; }
+#group-picker .quota-group-menu { left: auto; right: 0; top: calc(100% + 6px); width: max(100%, 190px); padding: 4px; }
+#group-picker .quota-picker-options { padding-top: 0; }

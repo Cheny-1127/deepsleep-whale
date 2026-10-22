@@ -120,12 +120,20 @@ function safeSocket(file) {
     return uid!==undefined&&socket.isSocket()&&socket.uid===uid&&dir.isDirectory()&&dir.uid===uid&&!(dir.mode&0o022)&&!(socket.mode&0o077);
   }catch{return false;}
 }
-function startDesktopAgent({settings,text:prompt,session,onSession=()=>{},onApproval,onUserInput,timeoutMs=600000,rpcTimeoutMs=15000}) {
-  let socket,clientId='',owner='',bytes=Buffer.alloc(0),done=false,submitted=false,cancelled=false,turnId='',starting=false,stopping=false;
-  const messageId=randomUUID(),projection=new DesktopProjection(),pending=new Map(),reviewed=new Set(),userInputs=new Map();
+function isDesktopCheckpoint(value) {
+  return object(value)&&typeof value.messageId==='string'&&value.messageId.length>0&&value.messageId.length<=160&&value.submitted===true&&typeof value.turnId==='string'&&value.turnId.length<=160;
+}
+function startDesktopAgent({settings,text:prompt,session,onSession=()=>{},onCheckpoint=()=>{},checkpoint,recovering=false,onApproval,onUserInput,timeoutMs=600000,rpcTimeoutMs=15000}) {
+  let socket,clientId='',owner='',bytes=Buffer.alloc(0),done=false,submitted=recovering,cancelled=false,turnId=recovering&&isDesktopCheckpoint(checkpoint)?checkpoint.turnId:'',starting=false,stopping=false,confirmedTurn=false,lastCheckpoint='';
+  const messageId=recovering?checkpoint?.messageId:randomUUID(),projection=new DesktopProjection(),pending=new Map(),reviewed=new Set(),userInputs=new Map();
   let resolveResult,rejectResult;
   const promise=new Promise((resolve,reject)=>{resolveResult=resolve;rejectResult=reject;});
-  const timer=setTimeout(()=>cancel('TIMEOUT'),timeoutMs);timer.unref?.();
+  const timer=setTimeout(()=>recovering?finish(new AgentError('RECOVERY_UNKNOWN','desktop')):cancel('TIMEOUT'),timeoutMs);timer.unref?.();
+  function saveCheckpoint() {
+    const value={messageId,submitted,turnId},key=JSON.stringify(value);if(key===lastCheckpoint)return;
+    // 先落盘再发送消息；服务端轮次 ID 一旦获知也立即保存，响应丢失时可按原消息查询。
+    try{onCheckpoint(value);lastCheckpoint=key;}catch{throw new AgentError('TRACKING_STORE','desktop');}
+  }
   function send(message) {
     if(!socket?.writable||done)throw new AgentError(submitted?'DELIVERY_UNKNOWN':'DESKTOP_UNAVAILABLE','desktop');
     const body=Buffer.from(JSON.stringify(message)),head=Buffer.alloc(4);head.writeUInt32LE(body.length);socket.write(Buffer.concat([head,body]));
@@ -150,6 +158,8 @@ function startDesktopAgent({settings,text:prompt,session,onSession=()=>{},onAppr
   }
   async function interrupt(code) {
     if(done||stopping)return;
+    // 恢复连接尚未核实原轮次时，不凭磁盘里的 ID 中止桌面任务。
+    if(recovering&&!confirmedTurn){finish(new AgentError(code,'desktop'));return;}
     if(!turnId){if(!submitted)finish(new AgentError(code,'desktop'));return;}
     stopping=true;
     try{await request('thread-follower-interrupt-turn',{conversationId:session,expectedTurnId:turnId,mode:'user-stop'},4,owner);finish(new AgentError(code,'desktop'));}
@@ -226,11 +236,17 @@ function startDesktopAgent({settings,text:prompt,session,onSession=()=>{},onAppr
     // 用本次消息 ID 建立轮次关联，再跟踪服务端轮次 ID，排除旧历史和桌面其他任务。
     const matches=projection.turns().filter(turn=>turn.params?.clientUserMessageId===messageId||turnId&&turn.turnId===turnId);
     const own=matches.find(turn=>['completed','failed','interrupted'].includes(turn.status))||matches[0];
-    if(own?.turnId){if(turnId&&turnId!==own.turnId)throw new AgentError('DESKTOP_PROTOCOL','desktop');turnId=own.turnId;}
+    if(new Set(matches.map(turn=>turn.turnId)).size>1)throw new AgentError('DESKTOP_PROTOCOL','desktop');
+    if(own?.turnId){
+      if(turnId&&turnId!==own.turnId||own.params?.clientUserMessageId&&own.params.clientUserMessageId!==messageId)throw new AgentError('DESKTOP_PROTOCOL','desktop');
+      turnId=own.turnId;confirmedTurn=true;saveCheckpoint();
+    }
+    // 恢复模式只查看持久化关联的轮次；找不到时不能取最后一条回复或重新提交原文。
+    if(recovering&&!own){finish(new AgentError('RECOVERY_UNKNOWN','desktop'));return;}
     if(cancelled){void interrupt(cancelCode);return;}
     reviewUserInputs(own);
     if(own&&['completed','failed','interrupted'].includes(own.status)) {
-      if(own.status!=='completed'){finish(new AgentError('TURN_FAILED','desktop'));return;}
+      if(own.status!=='completed'){finish(new AgentError(own.status==='interrupted'?'TURN_INTERRUPTED':'TURN_FAILED','desktop'));return;}
       const answers=own.items.filter(item=>item?.type==='agentMessage'),finals=answers.filter(item=>item.phase==='final_answer');
       const result=(finals.length?finals:answers.filter(item=>!item.phase)).map(item=>item.text||'').join('\n\n');
       if(result.length>100000)throw new AgentError('REPLY_LIMIT','desktop');
@@ -241,14 +257,14 @@ function startDesktopAgent({settings,text:prompt,session,onSession=()=>{},onAppr
     if(data.threadRuntimeStatus?.type==='active')return;
     if(data.threadRuntimeStatus?.type!=='idle')throw new AgentError('DESKTOP_PROTOCOL','desktop');
     // 发出请求即视为可能已送达；断线或响应丢失时不重投，防止同一任务执行两次。
-    starting=true;submitted=true;
+    starting=true;submitted=true;saveCheckpoint();
     // 交给原会话 owner 处理；不传模型、cwd、provider、权限或额外提示。
     void request('thread-follower-start-turn',{conversationId:session,turnStart:{request:{threadId:session,input:[{type:'text',text:prompt,text_elements:[]}],clientUserMessageId:messageId},context:{inheritThreadSettings:true}}},2,owner)
       .then(response=>{
         if(done)return;
         const id=response.result?.result?.turn?.id;
         if(typeof id!=='string'||turnId&&id!==turnId)throw new AgentError('DELIVERY_UNKNOWN','desktop');
-        turnId=id;observe();
+        turnId=id;saveCheckpoint();observe();
       }).catch(error=>finish(error));
   }
   function receive(message) {
@@ -271,6 +287,7 @@ function startDesktopAgent({settings,text:prompt,session,onSession=()=>{},onAppr
   }
   let streamTimer;
   async function connect() {
+    if(recovering&&!isDesktopCheckpoint(checkpoint))throw new AgentError('RECOVERY_UNKNOWN','desktop');
     const file=desktopSocket(settings);
     if(!session||!safeSocket(file))throw new AgentError('DESKTOP_UNAVAILABLE','desktop');
     socket=net.createConnection(file);
@@ -296,6 +313,6 @@ function startDesktopAgent({settings,text:prompt,session,onSession=()=>{},onAppr
     streamTimer=setTimeout(()=>finish(new AgentError('DESKTOP_PROTOCOL','desktop')),rpcTimeoutMs);streamTimer.unref?.();
   }
   void connect().catch(error=>finish(error instanceof AgentError?error:new AgentError('DESKTOP_UNAVAILABLE','desktop')));
-  return {promise,cancel};
+  return {promise,cancel,detach:()=>finish(new AgentError('DELIVERY_UNKNOWN','desktop'))};
 }
-module.exports={startDesktopAgent,desktopSocket,DesktopProjection};
+module.exports={startDesktopAgent,desktopSocket,DesktopProjection,isDesktopCheckpoint};

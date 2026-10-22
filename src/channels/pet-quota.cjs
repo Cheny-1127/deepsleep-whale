@@ -47,7 +47,10 @@ function createPetQuota({settings, quota, groups, clock = {now:() => Date.now(),
     // 主榜跟随用户排行分组，副榜按自身分组取今日缓存，不改变用户排行的每日／每周筛选。
     const config = configFor(id), daily = id === 'primary' ? groups.dailySnapshot() : groups.dailySnapshot(config.groupId);
     const groupName = daily.groupId === null ? '全部分组' : daily.groups.find(item => item.id === daily.groupId)?.name || `分组 #${daily.groupId}`;
-    return {groupId:daily.groupId, groupName, groups:daily.groups.map(({id,name}) => ({id,name})), date:daily.date, checkedAt:daily.checkedAt,
+    // 榜单来源跟随桌宠当前生效账号，包含副条的临时选择，仅提供名称以便辨认。
+    const accountId = accountIdFor(id), account = quota.snapshot().accounts.find(item => item.id === accountId);
+    const source = {configName:id === 'primary' ? '流量跟踪配置' : `流量跟踪配置-${id}`, accountName:account?.name || (accountId == null ? '暂不跟踪' : `账号 #${accountId}`)};
+    return {source, groupId:daily.groupId, groupName, groups:daily.groups.map(({id,name}) => ({id,name})), date:daily.date, checkedAt:daily.checkedAt,
       error:daily.error, busy:daily.busy, users:daily.users.slice(0,5).map(({user_id,email,actual_cost}) => ({user_id,email,actual_cost}))};
   }
   function snapshot() {
@@ -93,6 +96,8 @@ function createPetQuota({settings, quota, groups, clock = {now:() => Date.now(),
   }
   function copyConfig(id = 'primary') {
     const config = configFor(id), state = settings.snapshot(), nextId = state.nextConfigId;
+    // 主配置不计入副本上限；主进程兜底校验，避免过期页面或直接 IPC 绕过按钮限制。
+    if (state.trackingConfigs.length >= 3) throw Error('最多只能创建 3 条副配置，请先删除已有副配置');
     // 复制阈值和榜单分组，账号留空，避免新副配置立即与来源配置冲突。
     const clone = {id:nextId, accountId:null, yellowBelow:config.yellowBelow, redBelow:config.redBelow, configExpanded:true,
       groupId:id === 'primary' ? groups.snapshot().groupId : config.groupId};

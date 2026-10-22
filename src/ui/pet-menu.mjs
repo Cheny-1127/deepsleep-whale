@@ -14,7 +14,7 @@ function panelFor(items,label) {
   for(const item of items) {
     if(item.separator){const line=document.createElement('div');line.className='menu-separator';line.setAttribute('role','separator');panel.append(line);continue;}
     const button=document.createElement('button');
-    button.type='button';button.dataset.id=item.id;button.setAttribute('role','menuitem');button.tabIndex=-1;
+    button.className='ui-menu-item';button.type='button';button.dataset.id=item.id;button.setAttribute('role','menuitem');button.tabIndex=-1;
     // 鼠标与键盘共用一处焦点，避免悬停新选项时旧选项仍保留聚焦边框。
     button.addEventListener('mouseenter',()=>{if(!button.disabled)button.focus({preventScroll:true});});
     if(item.icon){const icon=document.createElement('span');icon.className='menu-icon';icon.textContent=item.icon;icon.setAttribute('aria-hidden','true');button.append(icon);}

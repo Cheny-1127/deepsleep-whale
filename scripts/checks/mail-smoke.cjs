@@ -25,11 +25,12 @@ let app;
   assert.ok(await panel.locator('#home-view').isHidden());assert.ok(await panel.locator('#wechat-view').isHidden());
   assert.equal(await panel.locator('#mail-authorize').count(),0,'Open Platform app authorization must be removed');
   assert.ok(await panel.locator('#mail-settings').isHidden());
-  assert.ok(await panel.locator('#mail-list').isVisible());
+  // 空列表容器本来就是零高度；用用户能看到的空状态判断收件箱是否展开。
+  assert.ok(await panel.locator('#mail-empty').isVisible());
   await panel.locator('#mail-inbox > summary').click();
-  assert.ok(await panel.locator('#mail-list').isHidden());
+  assert.ok(await panel.locator('#mail-empty').isHidden());
   await panel.locator('#mail-inbox > summary').click();
-  assert.ok(await panel.locator('#mail-list').isVisible());
+  assert.ok(await panel.locator('#mail-empty').isVisible());
   await panel.locator('#mail-options > summary').click();
   assert.equal(await panel.locator('#mail-message-limit').inputValue(),'20');
   assert.ok(await panel.locator('#mail-settings').isVisible());

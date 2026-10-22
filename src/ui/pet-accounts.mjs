@@ -4,7 +4,7 @@ async function render() {
     document.getElementById('error').hidden = true;
     document.getElementById('accounts').replaceChildren(...data.accounts.map(account => {
       const button = document.createElement('button');
-      button.type = 'button';button.setAttribute('role', 'radio');button.setAttribute('aria-checked', String(account.id === data.accountId));
+      button.className = 'ui-menu-item';button.type = 'button';button.setAttribute('role', 'radio');button.setAttribute('aria-checked', String(account.id === data.accountId));
       const check = document.createElement('span');check.className = 'account-check';check.textContent = account.id === data.accountId ? '✓' : '';check.setAttribute('aria-hidden', 'true');
       const info = document.createElement('span');info.className = 'account-info';
       const name = document.createElement('span');name.className = 'account-name';name.textContent = account.name || `账号 #${account.id}`;name.title = name.textContent;

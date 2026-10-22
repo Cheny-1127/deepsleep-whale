@@ -41,5 +41,13 @@ let app;
   await page.evaluate(()=>window.historyFixture.pending.shift()());await page.waitForSelector('[data-task-content="task-34"] pre');
   assert.ok(Math.abs((await next.boundingBox()).y-nextY)<2,'loading the next reply must keep its row in place');
   fs.mkdirSync(path.join(root,'out'),{recursive:true});await page.locator('#wechat-jobs').screenshot({path:path.join(root,'out/wechat-history-scrolled.png')});
-  assert.deepEqual(errors,[]);console.log(JSON.stringify({result:'passed',checks:['bottom-task-loading','bottom-task-loaded','collapse','cached-expand','background-update','long-reply-reading','new-task-above','switch-expanded-task','stable-DOM','no-duplicate-read'],dataDir:dir}));
+  // 重启后的恢复任务尚未激活时，也必须显示状态并锁定会改变账号身份的设置。
+  await page.evaluate(()=>{const state=window.historyFixture;state.data.enabled=false;state.data.status='paused';state.data.jobs=[{...state.data.jobs[0],id:'recovery-task',state:'recovering',delivery:undefined}];state.render();});
+  assert.ok((await page.locator('#wechat-jobs').textContent()).includes('恢复跟踪中'));
+  assert.equal(await page.locator('[data-task-view]').count(),0);assert.equal(await page.locator('[data-task-delete]').count(),0);
+  assert.equal(await page.locator('#wechat-add-codex').isDisabled(),true);assert.equal(await page.locator('#wechat-save').isDisabled(),true);
+  await page.locator('#wechat-jobs').screenshot({path:path.join(root,'out/wechat-recovering.png')});
+  await page.evaluate(()=>{const state=window.historyFixture;state.data.jobs[0].state='completed';state.render();});
+  assert.equal(await page.locator('#wechat-add-codex').isDisabled(),false);assert.equal(await page.locator('[data-task-view]').count(),1);
+  assert.deepEqual(errors,[]);console.log(JSON.stringify({result:'passed',checks:['bottom-task-loading','bottom-task-loaded','collapse','cached-expand','background-update','long-reply-reading','new-task-above','switch-expanded-task','stable-DOM','no-duplicate-read','recovering-state','pending-recovery-settings-lock','completed-recovery-unlocks'],dataDir:dir}));
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{if(app)await app.close();});
