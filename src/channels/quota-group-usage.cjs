@@ -38,7 +38,7 @@ function createGroupUsage({tokenFile, dataDir, baseUrl = 'https://openai.minitvc
   const file = dataDir ? path.join(dataDir, 'quota-group-usage.json') : null;
   const entries = new Map();
   let groupId = 13, period = 'day', groups = [], groupsCheckedAt = null, groupsAttemptedAt = null, groupsError = '';
-  let flight = null, passiveFlight = false, timer, deadline, controller, closed = false, cacheError = '', nextRefreshAt = null;
+  let flight = null, passiveFlight = false, flightEntryKey = null, timer, deadline, controller, closed = false, cacheError = '', nextRefreshAt = null;
   const key = (id, date, strategy = 'day') => `${id ?? 'all'}:${strategy}:${date}`;
   const source = () => createHash('sha256').update(JSON.stringify([origin, fs.readFileSync(tokenFile, 'utf8').trim()])).digest('hex');
   const validGroup = id => id === null || Number.isSafeInteger(id) && id > 0;
@@ -117,7 +117,7 @@ function createGroupUsage({tokenFile, dataDir, baseUrl = 'https://openai.minitvc
     if (!validGroup(id)) throw Error('请输入有效的组 ID');
     if (closed) return Promise.resolve(snapshot());
     if (flight) {
-      if (passive || passiveFlight) return flight.then(() => passive ? openDaily() : refresh(id));
+      if (passive || passiveFlight) return flight.then(() => passive ? openDaily(id) : refresh(id));
       if (id !== groupId) throw Error('正在刷新，请稍后切换分组');
       return flight;
     }
@@ -125,6 +125,7 @@ function createGroupUsage({tokenFile, dataDir, baseUrl = 'https://openai.minitvc
     passiveFlight = passive;
     clock.clearTimeout(timer);nextRefreshAt = null;
     const previous = current(id, strategy), entryKey = key(id, previous.date, strategy);
+    flightEntryKey = entryKey;
     const attempted = {...previous, attemptedAt: clock.now()};
     entries.delete(entryKey);entries.set(entryKey, attempted);
     while (entries.size > 20) entries.delete(entries.keys().next().value);
@@ -160,7 +161,7 @@ function createGroupUsage({tokenFile, dataDir, baseUrl = 'https://openai.minitvc
           '读取用户排行超时，30 分钟后自动重试。' : known.includes(error.message) ? error.message : '读取用户排行失败，30 分钟后自动重试。'});
       }
     }).finally(() => {
-      clock.clearTimeout(deadline);controller = null;flight = null;passiveFlight = false;
+      clock.clearTimeout(deadline);controller = null;flight = null;passiveFlight = false;flightEntryKey = null;
       if (!closed) {
         // 桌宠补查今日数据不能推迟每周排行原定的刷新时间。
         const active = current(), last = active.attemptedAt ?? active.checkedAt;
@@ -189,25 +190,28 @@ function createGroupUsage({tokenFile, dataDir, baseUrl = 'https://openai.minitvc
     if (!timer) schedule(last + REFRESH_MS);
     return Promise.resolve(snapshot());
   }
-  function dailySnapshot() {
-    return {...current(groupId, 'day'), groups: groups.map(group => ({...group})),
-      users: current(groupId, 'day').users.map(user => ({...user})), busy: Boolean(flight)};
+  function dailySnapshot(id = groupId) {
+    return {...current(id, 'day'), groups: groups.map(group => ({...group})),
+      users: current(id, 'day').users.map(user => ({...user})), busy: Boolean(flight)};
   }
-  function openDaily() {
-    if (closed) return Promise.resolve(dailySnapshot());
-    const item = current(groupId, 'day'), last = item.attemptedAt ?? item.checkedAt;
+  function openDaily(id = groupId) {
+    if (!validGroup(id)) throw Error('请输入有效的组 ID');
+    if (closed) return Promise.resolve(dailySnapshot(id));
+    const item = current(id, 'day'), last = item.attemptedAt ?? item.checkedAt;
     if (last != null && clock.now() - last < REFRESH_MS) {
-      if (!groupsDue()) return Promise.resolve(dailySnapshot());
-      return (flight || openDirectory(last)).then(() => dailySnapshot());
+      if (!groupsDue()) return Promise.resolve(dailySnapshot(id));
+      return (flight || openDirectory(last)).then(() => dailySnapshot(id));
     }
-    if (flight) return flight.then(() => openDaily());
-    return refreshEntry(groupId, 'day', true).then(() => dailySnapshot());
+    if (flight) return flight.then(() => openDaily(id));
+    return refreshEntry(id, 'day', true).then(() => dailySnapshot(id));
   }
-  function refreshDaily() {
-    if (closed) return Promise.resolve(dailySnapshot());
-    // 手动刷新跳过半小时缓存；合并同组今日请求，等待其他查询完成后再刷新。
-    if (flight) return passiveFlight ? flight.then(() => dailySnapshot()) : flight.then(() => refreshDaily());
-    return refreshEntry(groupId, 'day', true).then(() => dailySnapshot());
+  function refreshDaily(id = groupId) {
+    if (!validGroup(id)) throw Error('请输入有效的组 ID');
+    if (closed) return Promise.resolve(dailySnapshot(id));
+    // 按分组和日期合并在途请求，独立榜单不修改主排行筛选。
+    if (flight) return passiveFlight && flightEntryKey === key(id, shanghaiDate(clock.now()), 'day') ?
+      flight.then(() => dailySnapshot(id)) : flight.then(() => refreshDaily(id));
+    return refreshEntry(id, 'day', true).then(() => dailySnapshot(id));
   }
   function close() {closed = true;clock.clearTimeout(timer);clock.clearTimeout(deadline);timer = null;nextRefreshAt = null;controller?.abort();}
   function select(value) {

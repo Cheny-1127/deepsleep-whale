@@ -95,7 +95,8 @@ async function listAccountQuotas(options = {}) {
 // 首次请求后启动轮询；由主进程持有，切换或关闭小屋不影响后续刷新。
 function createQuotaPanel({tokenFile, dataDir, baseUrl, fetchImpl, clock = {now: () => Date.now(), setTimeout, clearTimeout}} = {}) {
   let state = {accounts: [], error: '', checkedAt: null, attemptedAt: null, failedAt: null, busy: false};
-  let closed = false, flight = null, timer, deadline, controller, nextRefreshAt = null;
+  let closed = false, flight = null, flightAccountId = null, timer, deadline, controller, nextRefreshAt = null;
+  const accountRefreshErrors = new Map();
   let initialized = false, disabledAccountIds = new Set();
   let resumeCache = false, cacheError = '';
   const cache = createQuotaCache({dataDir, tokenFile, baseUrl});
@@ -126,7 +127,9 @@ function createQuotaPanel({tokenFile, dataDir, baseUrl, fetchImpl, clock = {now:
       schedule(nextRefreshAt ?? (state.attemptedAt ?? state.checkedAt ?? clock.now()) + REFRESH_MS);
     }
     return {accounts: state.accounts.map(account => ({...account, refreshEnabled: !disabledAccountIds.has(account.id)})), error: state.error, checkedAt: state.checkedAt,
-      attemptedAt: state.attemptedAt, failedAt: state.failedAt, busy: state.busy, nextRefreshAt, cacheError, listSettings: {...listSettings}};
+      attemptedAt: state.attemptedAt, failedAt: state.failedAt, busy: state.busy,
+      refreshingAccountIds: !state.busy ? [] : flightAccountId === null ? state.accounts.filter(account => !disabledAccountIds.has(account.id)).map(account => account.id) : [flightAccountId],
+      accountRefreshErrors: Object.fromEntries(accountRefreshErrors), nextRefreshAt, cacheError, listSettings: {...listSettings}};
   }
   function clearTimer() { clock.clearTimeout(timer); timer = null; nextRefreshAt = null; }
   function saveCache() {
@@ -136,19 +139,26 @@ function createQuotaPanel({tokenFile, dataDir, baseUrl, fetchImpl, clock = {now:
   function schedule(at = clock.now() + REFRESH_MS) {
     clearTimer();
     if (closed || allPaused()) return;
-    // 从请求完成时计算，手动刷新也重新计时，避免整点集中请求或轮询重叠。
+    // 全量刷新完成后重新计算五分钟轮询时间；单账号刷新沿用原计划。
     nextRefreshAt = at;
     timer = clock.setTimeout(() => void refresh(), Math.max(0, at - clock.now()));
     timer.unref?.();
   }
-  function refresh() {
+  function refresh(accountId = null) {
     if (closed) return Promise.resolve(snapshot());
-    if (flight) return flight;
-    if (allPaused()) return Promise.resolve(snapshot());
+    if (accountId !== null) {
+      if (!Number.isSafeInteger(accountId) || !state.accounts.some(account => account.id === accountId)) return Promise.reject(Error('该账号已不可用，请重新选择'));
+      if (disabledAccountIds.has(accountId)) return Promise.reject(Error('跟踪账号已暂停刷新，请先在小屋开启'));
+    }
+    // 全量请求覆盖所有账号，同账号请求可合并；其他刷新范围等待当前请求完成。
+    if (flight) return flightAccountId === null || flightAccountId === accountId ? flight : flight.then(() => refresh(accountId));
+    if (accountId === null && allPaused()) return Promise.resolve(snapshot());
     resumeCache = false;
-    clearTimer();
+    flightAccountId = accountId;
+    // 单账号刷新不重置全量同步时间，避免推迟其他账号的自动刷新。
+    if (accountId === null) clearTimer();
     // 重试开始时保留失败提示，只有成功取得完整列表后才清除。
-    state = {...state, busy: true, attemptedAt: clock.now()};
+    state = {...state, busy: true, ...(accountId === null ? {attemptedAt: clock.now()} : {})};
     controller = new AbortController();
     const signal = controller.signal;
     flight = Promise.resolve().then(async () => {
@@ -157,6 +167,15 @@ function createQuotaPanel({tokenFile, dataDir, baseUrl, fetchImpl, clock = {now:
       deadline.unref?.();
       try {
         const options = {tokenFile, baseUrl, fetchImpl, signal};
+        if (accountId !== null) {
+          // 只读取并替换目标账号摘要，其他账号继续使用已有缓存。
+          const account = projectAccount(await readAccountData(options, `/${accountId}`));
+          if (!account || account.id !== accountId) throw new Error('读取账号额度失败');
+          if (closed) return;
+          state = {...state, accounts: state.accounts.map(item => item.id === accountId ? account : item)};
+          accountRefreshErrors.set(accountId, '');
+          return;
+        }
         // 首次发现账号；后续只读取开启的账号详情，关闭的账号保留旧值。
         if (!initialized || !state.accounts.length) {
           const accounts = await listAccountQuotas(options);
@@ -181,21 +200,29 @@ function createQuotaPanel({tokenFile, dataDir, baseUrl, fetchImpl, clock = {now:
           }
           if (failed) throw new Error('读取账号额度失败');
         }
-        if (!closed) state = {...state, error: '', failedAt: null, checkedAt: clock.now()};
+        if (!closed) {state = {...state, error: '', failedAt: null, checkedAt: clock.now()};accountRefreshErrors.clear();}
       } catch (error) {
         if (closed) return;
         // 失败保留上次成功数据；不向页面透传网络库可能包含凭据的原始错误。
         const known = ['尚未配置 token 文件', 'token 文件是空的', 'token 无效，无法读取账号额度', '读取账号额度失败'];
         // 记录本轮连续失败的起点；后续重试失败不推进此时间。
-        state = {...state, failedAt: state.failedAt ?? clock.now(), error: signal.aborted ? '读取账号额度超时，5 分钟后自动重试。' :
-          known.includes(error.message) ? error.message : '读取账号额度失败，5 分钟后自动重试。'};
+        const message = signal.aborted ? '读取账号额度超时，5 分钟后自动重试。' :
+          known.includes(error.message) ? error.message : '读取账号额度失败，5 分钟后自动重试。';
+        // 单账号失败只影响对应额度条，不把错误扩散到其他账号。
+        if (accountId !== null) accountRefreshErrors.set(accountId, message);
+        else {state = {...state, failedAt: state.failedAt ?? clock.now(), error: message};accountRefreshErrors.clear();}
       }
     }).finally(() => {
       clock.clearTimeout(deadline); deadline = null; controller = null;
-      state = {...state, busy: false}; flight = null; schedule();
+      state = {...state, busy: false}; flight = null; flightAccountId = null;
+      if (accountId === null) schedule();
       if (!closed) saveCache();
     }).then(() => snapshot());
     return flight;
+  }
+  function refreshAccount(id) {
+    if (!Number.isSafeInteger(id) || id <= 0) return Promise.reject(Error('请选择有效账号'));
+    return refresh(id);
   }
   function close() {
     closed = true; clearTimer(); clock.clearTimeout(deadline); controller?.abort();
@@ -234,7 +261,7 @@ function createQuotaPanel({tokenFile, dataDir, baseUrl, fetchImpl, clock = {now:
     listSettings = next;
     return snapshot();
   }
-  return {snapshot, refresh, close, setRefreshEnabled, setListSettings};
+  return {snapshot, refresh: () => refresh(), refreshAccount, close, setRefreshEnabled, setListSettings};
 }
 
 module.exports = {projectAccount, listAccountQuotas, createQuotaPanel, remainingPercent};

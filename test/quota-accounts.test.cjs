@@ -269,3 +269,57 @@ test('invalid choices and failed saves cannot change the running refresh configu
   assert.throws(() => f.panel.setRefreshEnabled({id: 5, enabled: false}), /保存/);
   assert.equal(f.panel.snapshot().accounts[0].refreshEnabled, true);
 });
+
+test('single account refresh requests only that account and preserves other data and the full refresh schedule', async t => {
+  const f = selectedAccountsFixture(t);await f.panel.refresh();
+  const before = f.panel.snapshot();
+  await f.panel.refreshAccount(6);
+  assert.deepEqual(f.calls.slice(1), ['/api/v1/admin/accounts/6']);
+  const after = f.panel.snapshot();
+  assert.deepEqual(after.accounts[0], before.accounts[0]);
+  assert.notDeepEqual(after.accounts[1], before.accounts[1]);
+  for (const key of ['checkedAt','attemptedAt','nextRefreshAt']) assert.equal(after[key], before[key]);
+  const restarted = f.create();t.after(() => restarted.close());
+  assert.deepEqual(restarted.snapshot().accounts, after.accounts);
+  f.panel.setRefreshEnabled({id:6,enabled:false});
+  await assert.rejects(f.panel.refreshAccount(6), /暂停/);
+  for (const id of [null, '../5', 99]) await assert.rejects(f.panel.refreshAccount(id), /账号/);
+  assert.equal(f.calls.length,2);
+});
+
+test('single account errors stay with that account and recovery clears only its error', async t => {
+  const f = selectedAccountsFixture(t);await f.panel.refresh();
+  const before = f.panel.snapshot();f.fail(6);
+  await f.panel.refreshAccount(6);
+  let after = f.panel.snapshot();
+  assert.deepEqual(after.accounts,before.accounts);assert.equal(after.error,before.error);
+  assert.ok(after.accountRefreshErrors[6]);assert.equal(after.accountRefreshErrors[5],undefined);
+  assert.ok(!after.accountRefreshErrors[6].includes('private'));
+  f.fail(null);await f.panel.refreshAccount(6);
+  assert.equal(f.panel.snapshot().accountRefreshErrors[6],'');
+});
+
+test('single account refresh merges duplicates, queues other scopes, and exposes only the active account as busy', async t => {
+  const f = pollingFixture(t);await f.panel.refresh();
+  let done;f.setRequest(()=>new Promise(resolve=>{done=resolve;}));
+  const a=f.panel.refreshAccount(5),b=f.panel.refreshAccount(5);await new Promise(setImmediate);
+  assert.equal(f.calls.length,2);assert.deepEqual(f.panel.snapshot().refreshingAccountIds,[5]);
+  const all=f.panel.refresh();
+  done({ok:true,json:async()=>({id:5,codex_5h_used_percent:10})});await Promise.all([a,b]);
+  await new Promise(setImmediate);assert.equal(f.calls.length,3);
+  done({ok:true,json:async()=>({id:5,codex_5h_used_percent:15})});await all;
+  assert.deepEqual(f.panel.snapshot().refreshingAccountIds,[]);
+});
+
+test('single account refresh cancels on timeout or close and ignores late responses', async t => {
+  const f = pollingFixture(t);await f.panel.refresh();
+  const before=f.panel.snapshot();
+  f.setRequest((_url,{signal})=>new Promise((_resolve,reject)=>signal.addEventListener('abort',()=>reject(Error('aborted')))));
+  const timeout=f.panel.refreshAccount(5);await new Promise(setImmediate);await f.fire(60000);await timeout;
+  assert.match(f.panel.snapshot().accountRefreshErrors[5],/超时/);
+  assert.deepEqual(f.panel.snapshot().accounts,before.accounts);
+  let done;f.setRequest(()=>new Promise(resolve=>{done=resolve;}));
+  const task=f.panel.refreshAccount(5);await new Promise(setImmediate);f.panel.close();
+  done({ok:true,json:async()=>({id:5,codex_5h_used_percent:0})});await task;
+  assert.deepEqual(f.panel.snapshot().accounts,before.accounts);assert.equal(f.jobs.size,0);
+});

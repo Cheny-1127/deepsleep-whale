@@ -72,7 +72,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   nurture.setSaveDir(dataDir);
   nurture.load();
 
-  const windows=createWindows({snapshot,performAction,rankingSnapshot:()=>petQuota.snapshot().ranking,rankingRefresh:()=>petQuota.refreshRanking(),collapseReminders:()=>{
+  const windows=createWindows({snapshot,performAction,rankingSnapshot:id=>petQuota.rankingSnapshot(id),rankingRefresh:id=>petQuota.refreshRanking(id),rankingSelect:(groupId,id)=>petQuota.selectRankingGroup(groupId,id),collapseReminders:()=>{
     if(completionExpanded||busyExpanded) { completionExpanded=false;busyExpanded=false;broadcast(); }
   }});
   const {showPanel,showReminders}=windows;
@@ -100,7 +100,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   function snapshot() {
     // 两个窗口共享同一份主进程状态，避免小屋和悬浮桌宠各自计时、各自累计成长。
     const tasks = activity.snapshot();
-    return { petVisible:windows.isPetVisible(),shortcuts:shortcuts.snapshot(),wechat:wechat?.snapshot()||null,hookAdapters:hooks.adapters,hookAvailability:hooks.availability,sourceStatus,codexApprovalSync:codexRuntime.snapshot(),clientRunning:{...clientRunning},completionExpanded, busyExpanded, reminderView, settings:hooks.settings, nurture: nurture.snapshot(), activity: tasks, ...behavior.snapshot(), bridge: Boolean(bridge), bridgeError, reminderError };
+    return { trackingRows:petQuotaSettings.snapshot().trackingConfigs.length, petVisible:windows.isPetVisible(),shortcuts:shortcuts.snapshot(),wechat:wechat?.snapshot()||null,hookAdapters:hooks.adapters,hookAvailability:hooks.availability,sourceStatus,codexApprovalSync:codexRuntime.snapshot(),clientRunning:{...clientRunning},completionExpanded, busyExpanded, reminderView, settings:hooks.settings, nurture: nurture.snapshot(), activity: tasks, ...behavior.snapshot(), bridge: Boolean(bridge), bridgeError, reminderError };
   }
   function canObserveCodexApproval() {
     return hooks.settings.sources.codex&&hooks.settings.events.codex?.PermissionRequest!==false&&clientRunning.codex===true&&
@@ -256,19 +256,33 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     const panel=windows.isPanel(event.sender),pet=windows.isPet(event.sender);
     if((!panel&&!pet)||event.senderFrame!==event.sender.mainFrame)throw Error('不允许读取桌宠额度');
     if(!petQuota)return {error:'桌宠额度正在初始化'};
-    if(name==='update') {
-      if(!panel)throw Error('仅允许在小屋修改桌宠配置');
+    if(['update','update-config','copy-config','delete-config'].includes(name)) {
+      if(!panel)throw Error('仅允许在小屋修改流量跟踪配置');
       try {
-        if(value?.accountId!=null&&!quota.snapshot().accounts.some(account=>account.id===value.accountId))throw Error('请选择有效账号');
-        petQuotaSettings.update(value);
+        if(name==='copy-config')petQuota.copyConfig(value ?? 'primary');
+        else if(name==='delete-config')petQuota.deleteConfig(value);
+        else if(name==='update-config')petQuota.updateConfig(value?.id,value?.patch);
+        else {
+          if(value?.accountId!=null&&!quota.snapshot().accounts.some(account=>account.id===value.accountId))throw Error('请选择有效账号');
+          if(value&&Object.keys(value).some(key=>['trackingConfigs','nextConfigId'].includes(key)))throw Error('请使用配置操作');
+          petQuota.updateSettings(value);
+        }
       }catch(error){return {error:error.message};}
     } else if(name==='ranking'&&pet) {
-      await windows.toggleRanking();return {value:true};
+      try {petQuota.rankingSnapshot(value ?? 'primary');await windows.toggleRanking(value ?? 'primary');return {value:true};}catch(error){return {error:error.message};}
     } else if(name==='refresh'&&pet) {
-      try{return {value:await petQuota.refresh()};}catch(error){return {error:error.message};}
+      try{return {value:await petQuota.refresh(value ?? 'primary')};}catch(error){return {error:error.message};}
+    } else if(name==='choose-account'&&pet) {
+      try {
+        // 副配置选择窗只列出可用账号；主配置保留完整选择范围。
+        const id=value ?? 'primary',selected=petQuota.accountIdFor(id),accounts=petQuota.availableAccounts(id);
+        if(!accounts.length)throw Error(quota.snapshot().accounts.length ? '没有可用的跟踪账号，其他账号已被配置占用' : '暂无可选账号，请先在 API 额度中同步账号');
+        const accountId=await windows.chooseTrackingAccount(accounts,selected);
+        return {value:accountId===null?petQuota.snapshot():petQuota.selectAccount(accountId,id)};
+      }catch(error){return {error:error.message};}
     } else if(name!=='snapshot')return {error:'不支持的桌宠额度操作'};
     const data=petQuota.snapshot();
-    // 账号选项只给小屋；桌宠只拿选中账号和排行前五，不能调用管理或配置接口。
+    // 完整账号选项由小屋和独立选择窗读取；人物窗口只拿选中账号和排行前五。
     if(panel)data.accounts=quota.snapshot().accounts.map(({id,name})=>({id,name}));
     return {value:data};
   });
