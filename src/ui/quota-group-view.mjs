@@ -48,7 +48,7 @@ export function createGroupUsageView() {
     }
     $('refresh').textContent = working ? '正在刷新…' : '立即刷新';
     renderGroups();
-    $('count').textContent = `展示 ${data.users.length} 位用户 · Top 50`;
+    $('count').textContent = `展示 ${data.users.length} 位用户 · Top 20`;
     $('empty').hidden = data.users.length > 0;
     $('empty').textContent = data.checkedAt != null ? '所选分组在此时间范围内暂无用量。' : working ? '正在读取用户排行…' : '尚未取得此时间范围的用户排行。';
     $('table').hidden = !data.users.length;

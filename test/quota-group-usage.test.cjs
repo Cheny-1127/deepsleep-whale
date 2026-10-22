@@ -78,7 +78,7 @@ test('opening queries group 13 today, whitelists fields, and sorts by actual cos
   const f = fixture(t);assert.equal(f.calls.length, 0);
   const data = await f.panel.open(), url = new URL(f.calls[0].url);
   assert.equal(url.pathname, '/api/v1/admin/dashboard/user-breakdown');
-  assert.deepEqual(Object.fromEntries(url.searchParams), {group_id: '13', start_date: '2026-10-20', end_date: '2026-10-20', timezone: 'Asia/Shanghai', sort_by: 'actual_cost', limit: '50'});
+  assert.deepEqual(Object.fromEntries(url.searchParams), {group_id: '13', start_date: '2026-10-20', end_date: '2026-10-20', timezone: 'Asia/Shanghai', sort_by: 'actual_cost', limit: '20'});
   assert.equal(f.calls[0].options.headers['x-api-key'], 'fixture-secret');
   assert.deepEqual(data.users.map(user => user.user_id), [8, 4]);
   assert.equal(data.users[1].requests, 0);assert.equal(data.users[1].input_tokens, null);
@@ -86,6 +86,27 @@ test('opening queries group 13 today, whitelists fields, and sorts by actual cos
   const file = fs.readFileSync(path.join(f.dir, 'quota-group-usage.json'), 'utf8');
   assert.ok(!file.includes('do-not-cache'));assert.ok(!file.includes('fixture-secret'));
   assert.equal(fs.statSync(path.join(f.dir, 'quota-group-usage.json')).mode & 0o777, 0o600);
+});
+
+test('oversized API results are sorted before limiting both the view and persisted cache to twenty users', async t => {
+  const f = fixture(t), users = Array.from({length: 50}, (_, i) => ({user_id: i + 1, actual_cost: i}));
+  f.setRequest(async () => ({ok: true, json: async () => ({data: {users}})}));
+  const data = await f.panel.open(), expected = Array.from({length: 20}, (_, i) => 50 - i);
+  assert.deepEqual(data.users.map(user => user.user_id), expected);
+  const saved = JSON.parse(fs.readFileSync(path.join(f.dir, 'quota-group-usage.json'), 'utf8'));
+  assert.deepEqual(saved.entries[0].users.map(user => user.user_id), expected);
+});
+
+test('legacy fifty-user caches immediately display only twenty users without another request', async t => {
+  const f = fixture(t);await f.panel.open();f.panel.close();
+  const file = path.join(f.dir, 'quota-group-usage.json'), saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  saved.entries[0].users = Array.from({length: 50}, (_, i) => ({user_id: i + 1, actual_cost: 50 - i}));
+  fs.writeFileSync(file, JSON.stringify(saved));
+  const restarted = f.create(), expected = Array.from({length: 20}, (_, i) => i + 1);
+  assert.deepEqual(restarted.snapshot().users.map(user => user.user_id), expected);
+  await restarted.open();
+  assert.equal(f.calls.length, 1);
+  assert.deepEqual(restarted.snapshot().users.map(user => user.user_id), expected);
 });
 
 test('missing group names retry on manual refresh without discarding fresh ranking data', async t => {
