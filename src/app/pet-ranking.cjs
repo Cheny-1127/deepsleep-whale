@@ -3,11 +3,12 @@ const {BrowserWindow, ipcMain, screen} = require('electron');
 const path = require('node:path');
 
 // 榜单使用独立小窗，避免改变人物几何和透明区域的点击穿透。
-function createPetRanking({getPet, snapshot, refresh, protect}) {
-  let panel, loading, placement, sequence = 0, active = false;
+function createPetRanking({getPet, snapshot, refresh, select, protect}) {
+  let panel, loading, placement, sequence = 0, active = false, trackingId = 'primary';
   function close() {sequence++;active = false;if (panel && !panel.isDestroyed()) panel.hide();}
-  async function toggle() {
-    if (active) {close();return;}
+  async function toggle(id = 'primary') {
+    if (active && id === trackingId) {close();return;}
+    close();trackingId = id;
     const pet = getPet(), request = ++sequence;
     if (!pet || pet.isDestroyed() || !pet.isVisible()) return;
     let art;
@@ -30,16 +31,20 @@ function createPetRanking({getPet, snapshot, refresh, protect}) {
     const y = Math.max(area.y, Math.min(area.y + area.height - height, bounds.y + art.bottom - height));
     placement = {area, bottom:bounds.y + art.bottom};
     panel.setBounds({x:Math.round(x), y:Math.round(y), width, height});
-    active = true;panel.show();panel.focus();
+    active = true;panel.webContents.send?.('pet-ranking-open');panel.show();panel.focus();
   }
   const ownFrame = event => panel && !panel.isDestroyed() && event.sender === panel.webContents && event.senderFrame === panel.webContents.mainFrame;
   ipcMain.handle('pet-ranking-data', event => {
     if (!ownFrame(event)) throw Error('仅允许在榜单窗口读取排行');
-    return snapshot();
+    return snapshot(trackingId);
   });
   ipcMain.handle('pet-ranking-refresh', event => {
     if (!ownFrame(event)) throw Error('仅允许在榜单窗口刷新排行');
-    return refresh();
+    return refresh(trackingId);
+  });
+  ipcMain.handle('pet-ranking-select', (event, groupId) => {
+    if (!ownFrame(event)) throw Error('仅允许在榜单窗口切换分组');
+    return select(groupId,trackingId);
   });
   ipcMain.on('pet-ranking-close', event => {if (ownFrame(event)) close();});
   ipcMain.on('pet-ranking-size', (event, requested) => {

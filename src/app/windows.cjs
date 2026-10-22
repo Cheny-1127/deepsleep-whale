@@ -5,8 +5,8 @@ const {createPetMenu}=require('./pet-menu.cjs');
 const {createPetRanking}=require('./pet-ranking.cjs');
 
 // 此模块只负责 Electron 窗口、菜单和拖动；任务状态和交互规则由应用层传入。
-function createWindows({ snapshot, performAction, collapseReminders, rankingSnapshot, rankingRefresh }) {
-  let panel, pet, tray, quitting = false;
+function createWindows({ snapshot, performAction, collapseReminders, rankingSnapshot, rankingRefresh, rankingSelect }) {
+  let panel, pet, tray, accountPanel, accountLoading, accountData, accountResolve, accountSequence = 0, quitting = false;
   let dragOrigin=null,petInteractive=false,ignoredMouse;
   const fromPet=event=>Boolean(pet&&!pet.isDestroyed()&&event.sender===pet.webContents&&event.senderFrame===pet.webContents.mainFrame);
   function updatePetMouse() {
@@ -25,7 +25,7 @@ function createWindows({ snapshot, performAction, collapseReminders, rankingSnap
     win.webContents.on('will-navigate', event => event.preventDefault());
   }
   const petMenu=createPetMenu({getPet:()=>pet,snapshot,performAction,showPanel,restartApp,protect});
-  const petRanking=createPetRanking({getPet:()=>pet,snapshot:rankingSnapshot,refresh:rankingRefresh,protect});
+  const petRanking=createPetRanking({getPet:()=>pet,snapshot:rankingSnapshot,refresh:rankingRefresh,select:rankingSelect,protect});
   function createPanel() {
     panel = new BrowserWindow({ width:1060, height:770, minWidth:860, minHeight:680, title:'', backgroundColor:'#f5f7f4', webPreferences:preferences() });
     panel.on('page-title-updated', event => { event.preventDefault(); panel.setTitle(''); });
@@ -44,6 +44,53 @@ function createWindows({ snapshot, performAction, collapseReminders, rankingSnap
     else reveal();
   }
   function restartApp() { app.relaunch(); app.quit(); }
+  function closeAccountMenu(accountId = null) {
+    accountSequence++;
+    const resolve = accountResolve;accountResolve = null;
+    if (accountPanel && !accountPanel.isDestroyed()) accountPanel.hide();
+    resolve?.(accountId);
+  }
+  async function chooseTrackingAccount(accounts, accountId) {
+    if (!pet || pet.isDestroyed() || !pet.isVisible() || accountResolve) return null;
+    petMenu.close();petRanking.close();
+    const request = ++accountSequence;
+    const art = await pet.webContents.executeJavaScript(`(() => {const r=document.getElementById('pet-art').getBoundingClientRect();return {left:r.left,right:r.right,bottom:r.bottom};})()`);
+    if (request !== accountSequence || pet.isDestroyed() || !pet.isVisible()) return null;
+    if (!accountPanel || accountPanel.isDestroyed()) {
+      accountPanel = new BrowserWindow({width:300, height:320, show:false, transparent:true, frame:false, resizable:false,
+        hasShadow:false, alwaysOnTop:true, skipTaskbar:true,
+        webPreferences:{preload:path.join(__dirname, '../ui/pet-accounts-preload.cjs'), contextIsolation:true, nodeIntegration:false, sandbox:true}});
+      protect(accountPanel);accountPanel.setVisibleOnAllWorkspaces(true, {visibleOnFullScreen:true});
+      accountPanel.on('blur', () => closeAccountMenu());
+      accountPanel.on('closed', () => closeAccountMenu());
+      accountLoading = accountPanel.loadFile(path.join(__dirname, '../ui/pet-accounts.html'));
+    }
+    await accountLoading;
+    if (request !== accountSequence || pet.isDestroyed() || !pet.isVisible()) return null;
+    accountData = {accountId, accounts:accounts.map(account => ({id:account.id, name:account.name,
+      remaining:account.sevenDayWindowMinutes !== 0 ? account.sevenDayRemaining : null, paused:account.refreshEnabled === false}))};
+    const bounds = pet.getContentBounds(), area = screen.getDisplayMatching(pet.getBounds()).workArea;
+    const width = Math.min(300, area.width), height = Math.min(84 + accounts.length * 49, 340, area.height);
+    const left = bounds.x + art.left - width - 8;
+    const x = Math.max(area.x, Math.min(area.x + area.width - width, left >= area.x ? left : bounds.x + art.right + 8));
+    const y = Math.max(area.y, Math.min(area.y + area.height - height, bounds.y + art.bottom - height));
+    accountPanel.setBounds({x:Math.round(x), y:Math.round(y), width, height});
+    return new Promise(resolve => {
+      accountResolve = resolve;
+      accountPanel.webContents.send('pet-accounts-open');
+      accountPanel.show();accountPanel.focus();
+    });
+  }
+  const fromAccounts = event => Boolean(accountResolve && accountPanel && !accountPanel.isDestroyed() &&
+    event.sender === accountPanel.webContents && event.senderFrame === accountPanel.webContents.mainFrame);
+  ipcMain.handle('pet-accounts-data', event => {
+    if (!fromAccounts(event)) throw Error('仅允许在账号选择窗口读取列表');
+    return accountData;
+  });
+  ipcMain.on('pet-accounts-select', (event, id) => {
+    if (fromAccounts(event) && accountData.accounts.some(account => account.id === id)) closeAccountMenu(id);
+  });
+  ipcMain.on('pet-accounts-close', event => {if (fromAccounts(event)) closeAccountMenu();});
   function updateTrayMenu() {
     if (!tray || tray.isDestroyed() || !pet || pet.isDestroyed()) return;
     const visible = pet.isVisible();
@@ -65,11 +112,11 @@ function createWindows({ snapshot, performAction, collapseReminders, rankingSnap
     pet.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen:true });
     pet.loadFile(path.join(__dirname, '../ui/pet.html'));
     pet.on('show', () => {pointerChanged();updateTrayMenu();});
-    pet.on('hide', () => {dragOrigin=null;updatePetMouse();petMenu.close();petRanking.close();updateTrayMenu();});
-    // 焦点进入自绘菜单不折叠提醒，避免人物几何在弹出过程中变化。
-    pet.on('blur', () => {dragOrigin=null;updatePetMouse();pointerChanged();if(!petMenu.isOpen()&&!petRanking.isOpen())collapseReminders();});
-    pet.on('move',()=>{petMenu.close();petRanking.close();pointerChanged();});
-    pet.on('resize',()=>{petMenu.close();petRanking.close();pointerChanged();});
+    pet.on('hide', () => {dragOrigin=null;updatePetMouse();closeAccountMenu();petMenu.close();petRanking.close();updateTrayMenu();});
+    // 焦点进入桌宠弹窗时不折叠提醒，避免人物几何在弹出过程中变化。
+    pet.on('blur', () => {dragOrigin=null;updatePetMouse();pointerChanged();if(!accountResolve&&!petMenu.isOpen()&&!petRanking.isOpen())collapseReminders();});
+    pet.on('move',()=>{closeAccountMenu();petMenu.close();petRanking.close();pointerChanged();});
+    pet.on('resize',()=>{closeAccountMenu();petMenu.close();petRanking.close();pointerChanged();});
     pet.webContents.on('context-menu',petMenu.open);
     pet.on('close', event => { if (!quitting) { event.preventDefault(); pet.hide(); } });
   }
@@ -81,7 +128,7 @@ function createWindows({ snapshot, performAction, collapseReminders, rankingSnap
     const count = view === 'pending' ? data.activity.pending : view === 'busy' ? data.activity.working : data.activity.unread;
     const expanded = view === 'pending' ? count > 0 : (view === 'busy' ? data.busyExpanded : data.completionExpanded) || (count > 0 && count <= 3);
     const width = data.state === 'fireworks' ? 340 : expanded ? 260 : 220;
-    const height = expanded ? (count === 1 ? 380 : 440) : 320;
+    const height = (expanded ? (count === 1 ? 380 : 440) : 320) + Math.max(0, Math.min(data.trackingRows || 0, 5) - 1) * 33;
     if (bounds.width === width && bounds.height === height) return;
     // 提醒向上展开，烟花横向留白；只保持人物中心与脚底，不把用户选择的位置拉回屏幕内。
     const x = Math.round(bounds.x + (bounds.width - width) / 2);
@@ -113,14 +160,14 @@ function createWindows({ snapshot, performAction, collapseReminders, rankingSnap
   });
   app.on('second-instance', showPanel);
   app.on('activate', showPanel);
-  app.on('before-quit', () => { quitting = true;petMenu.close();petRanking.close(); });
+  app.on('before-quit', () => { quitting = true;closeAccountMenu();petMenu.close();petRanking.close(); });
 
   return {
-    showPanel, showReminders,
+    showPanel, showReminders, chooseTrackingAccount,
     isPetVisible:()=>Boolean(pet&&!pet.isDestroyed()&&pet.isVisible()),
     isPanel:sender=>sender===panel?.webContents,
     isPet:sender=>sender===pet?.webContents,
-    toggleRanking:()=>{petMenu.close();return petRanking.toggle();},
+    toggleRanking:id=>{petMenu.close();return petRanking.toggle(id);},
     start() {
       createPanel(); createPet();
       const icon = nativeImage.createFromPath(path.join(__dirname, '../../assets/icon.png')).resize({ width:20, height:20 });

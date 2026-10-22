@@ -1,20 +1,63 @@
 // 只展示主进程给出的今日前五；邮箱和费用按纯文本写入，5 秒轮询不直接请求接口。
-let key = '', polling = false;
+let key = '', groupsKey = '', polling = false, updating = false, checkedAt = null, latest = null, busy = false, openHeight = 0, generation = 0, reopen = false;
+const refreshTime = at => at == null ? '尚无成功记录' : new Date(at).toLocaleTimeString('zh-CN', {timeZone:'Asia/Shanghai', hour12:false});
 const refresh = document.getElementById('refresh');
-async function render(action = 'snapshot') {
+const group = document.getElementById('group');
+const picker = document.getElementById('group-picker');
+const groupButton = document.getElementById('group-button');
+const optionsBox = document.getElementById('group-options');
+function resize() {
+  const card = document.querySelector('.ranking-card').getBoundingClientRect();
+  if (picker.open) openHeight = Math.max(openHeight, picker.querySelector('.quota-group-menu').getBoundingClientRect().bottom);
+  else openHeight = 0;
+  const bottom = Math.max(card.bottom, openHeight);
+  window.ranking.resize(Math.min(400, Math.ceil(bottom) + 6));
+}
+function renderGroups() {
+  if (!latest) return;
+  const choices = [{id:null, name:'全部分组'}, ...latest.groups];
+  if (!choices.some(item => item.id === latest.groupId)) choices.push({id:latest.groupId, name:latest.groupName});
+  const nextKey = JSON.stringify([choices, latest.groupId]);
+  if (groupsKey !== nextKey) {
+    groupsKey = nextKey;
+    optionsBox.replaceChildren(...choices.map(item => {
+      const option = document.createElement('button'), name = document.createElement('span'), check = document.createElement('span');
+      option.type = 'button';option.setAttribute('role', 'option');option.setAttribute('aria-selected', String(item.id === latest.groupId));
+      name.textContent = item.name;
+      check.className = 'quota-group-check';check.textContent = '✓';check.setAttribute('aria-hidden', 'true');
+      option.append(name, check);
+      option.addEventListener('click', () => {
+        picker.open = false;groupButton.focus();
+        if (item.id !== latest.groupId) void render('select', item.id);
+      });
+      return option;
+    }));
+  }
+  for (const option of optionsBox.querySelectorAll('button')) option.disabled = updating || busy;
+}
+function setWorking() {
+  const working = updating || busy;
+  refresh.disabled = working;
+  groupButton.setAttribute('aria-disabled', String(working));
+  renderGroups();
+}
+async function render(action = 'snapshot', groupId) {
   if (polling || document.hidden) return;
-  polling = true;
-  let busy = false;
-  refresh.disabled = true;
+  polling = true;const stamp = generation;
+  updating = action !== 'snapshot';
+  setWorking();
   refresh.setAttribute('aria-busy', String(action === 'refresh'));
   try {
-    const data = await window.ranking[action]();
+    const data = action === 'select' ? await window.ranking.selectGroup(groupId) : await window.ranking[action]();
+    if(stamp !== generation)return;
+    latest = data;
+    checkedAt = data.checkedAt;
     busy = data.busy === true;
-    document.getElementById('group').textContent = data.groupName;
-    document.getElementById('group').title = data.groupName;
+    group.textContent = data.groupId === null ? '全部分组' : data.groupName;
+    group.title = data.groupName;
     const status = document.getElementById('status');
     status.className = data.error ? 'failed' : '';
-    status.textContent = data.error ? '同步失败，保留上次数据' : data.checkedAt == null ? '' : `更新于 ${new Date(data.checkedAt).toLocaleTimeString('zh-CN')}`;
+    status.textContent = data.error ? `同步失败，刷新时间：${refreshTime(checkedAt)}` : checkedAt == null ? '' : `刷新时间：${refreshTime(checkedAt)}`;
     document.getElementById('empty').hidden = Boolean(data.users.length);
     document.getElementById('empty').textContent = data.busy ? '正在读取今日排行…' : data.error ? '暂时无法取得今日排行' : '该分组今日暂无用量';
     const nextKey = JSON.stringify(data.users);
@@ -29,14 +72,36 @@ async function render(action = 'snapshot') {
         row.append(rank, name, cost);return row;
       }));
     }
-    window.ranking.resize(Math.ceil(document.querySelector('.ranking-card').getBoundingClientRect().height) + 12);
   } catch {
-    document.getElementById('status').textContent = '暂时无法读取排行';
+    busy = false;
+    document.getElementById('status').textContent = `同步失败，刷新时间：${refreshTime(checkedAt)}`;
     document.getElementById('status').className = 'failed';
-  } finally {polling = false;refresh.disabled = busy;refresh.setAttribute('aria-busy', 'false');}
+  } finally {polling = false;updating = false;setWorking();refresh.setAttribute('aria-busy', 'false');resize();if(reopen){reopen=false;void render();}}
 }
 refresh.addEventListener('click', () => void render('refresh'));
-document.addEventListener('keydown', event => {if (event.key === 'Escape') window.ranking.close();});
+groupButton.addEventListener('click', event => {if (polling || busy || !latest) event.preventDefault();});
+picker.addEventListener('toggle', () => {
+  if (picker.open) {renderGroups();optionsBox.querySelector('[aria-selected="true"]')?.focus();}
+  resize();
+});
+picker.addEventListener('keydown', event => {
+  if (polling || busy || !latest || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+  event.preventDefault();
+  if (!picker.open) {picker.open = true;return;}
+  const options = [...optionsBox.querySelectorAll('button:not(:disabled)')], index = options.indexOf(document.activeElement);
+  const next = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 :
+    index < 0 ? (event.key === 'ArrowUp' ? options.length - 1 : 0) : (index + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length;
+  options[next]?.focus();
+});
+document.addEventListener('pointerdown', event => {if (picker.open && !picker.contains(event.target)) picker.open = false;});
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Escape') return;
+  if (picker.open) {picker.open = false;groupButton.focus();}
+  else window.ranking.close();
+});
+document.addEventListener('visibilitychange', () => {if (document.hidden) picker.open = false;});
 document.addEventListener('visibilitychange', () => void render());
 setInterval(() => void render(), 5000);
 void render();
+
+window.ranking.onOpen(() => {generation++;picker.open = false;if(polling)reopen=true;else void render();});
