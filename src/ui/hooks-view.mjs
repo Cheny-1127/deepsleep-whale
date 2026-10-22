@@ -3,7 +3,7 @@ const $ = id => document.getElementById(id);
 
 export function showView(view) {
   if(!$('home-view'))return;
-  for(const name of ['home','hooks','wechat','mail','archery','quota','shortcuts'])if($(name+'-view'))$(name+'-view').hidden=name!==view;
+  for(const name of ['home','hooks','wechat','mail','subscriptions','archery','quota','shortcuts'])if($(name+'-view'))$(name+'-view').hidden=name!==view;
   for(const button of document.querySelectorAll('[data-view]')) {
     const selected=button.dataset.view===view;
     button.classList.toggle('selected',selected);

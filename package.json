@@ -10,6 +10,8 @@
     "test": "node --test test/*.test.cjs",
     "check": "node scripts/checks/syntax.cjs",
     "test:ui": "node scripts/checks/ui-smoke.cjs",
+    "test:subscriptions": "node scripts/checks/subscriptions-smoke.cjs",
+    "test:x-reader": "node scripts/checks/x-reader-smoke.cjs",
     "test:styles": "node scripts/checks/styles-smoke.cjs",
     "test:hooks": "node scripts/checks/hooks-smoke.cjs",
     "test:reminders": "node scripts/checks/reminder-smoke.cjs",
