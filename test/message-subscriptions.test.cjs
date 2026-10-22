@@ -6,17 +6,19 @@ const {xUsername} = require('../src/channels/x-posts.cjs');
 const turn = () => new Promise(setImmediate);
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(),'whale-subscriptions-')), calls = [], jobs = new Set(), services = [];
-  let now = Date.parse('2026-10-22T12:00:00+08:00'), response = async username => [post(1,username)];
+  let now = Date.parse('2026-10-22T12:00:00+08:00'), response = async username => [post(1,username)], translator = async text => '中文：' + text;
+  const translationCalls = [];
   const clock = {now:() => now, setTimeout(fn,ms) {const job = {fn,at:now + ms,ms};jobs.add(job);return job;},clearTimeout:job => jobs.delete(job)};
   function post(offset,username = 'thsottiaux') {
     return {id:String((BigInt(now - 600000 + offset) - 1288834974657n) << 22n),username,text:'动态 ' + offset};
   }
   const create = () => {
-    const service = createMessageSubscriptions({dataDir:dir,clock,readPosts:(username,options) => {calls.push({username,...options});return response(username,options);}});
+    const service = createMessageSubscriptions({dataDir:dir,clock,readPosts:(username,options) => {calls.push({username,...options});return response(username,options);},
+      translateText:(text,options) => {translationCalls.push({text,...options});return translator(text,options);}});
     services.push(service);return service;
   };
   t.after(() => {services.forEach(s => s.close());fs.rmSync(dir,{recursive:true,force:true});});
-  return {dir,clock,jobs,calls,post,create,service:create(),setResponse:fn => {response = fn;},
+  return {dir,clock,jobs,calls,post,create,service:create(),setResponse:fn => {response = fn;},translationCalls,setTranslator:fn => {translator = fn;},
     async advance(ms) {now += ms;for (const job of [...jobs]) if (job.at <= now) {jobs.delete(job);job.fn();}await turn();await turn();}};
 }
 test('X handles and supplied post links normalize, while foreign URLs and reserved paths are rejected', () => {
@@ -118,4 +120,73 @@ test('malformed and foreign-author responses never overwrite good posts or open 
   }
   assert.throws(() => s.postUrl({username:'thsottiaux',id:'javascript:alert(1)'}));
   assert.throws(() => s.markRead({username:'thsottiaux',id:f.post(9).id}));
+});
+test('translation is on demand, deduplicated and saved once across refresh and restart', async t => {
+  const f = fixture(t), s = f.service;s.add('thsottiaux');await s.refresh();
+  assert.equal(f.translationCalls.length,0);const value = {username:'thsottiaux',id:f.post(1).id};let done;
+  f.setTranslator(() => new Promise(resolve => {done = resolve;}));
+  const task = s.translate({...value,text:'renderer cannot replace cached text'});
+  assert.equal(s.translate(value),task);await turn();
+  assert.equal(s.snapshot().posts[0].translating,true);assert.equal(f.translationCalls[0].text,f.post(1).text);
+  done('保存的中文 <img src=x>');await task;
+  assert.equal(s.snapshot().posts[0].translation.text,'保存的中文 <img src=x>');
+  assert.equal(s.snapshot().posts[0].translating,false);assert.equal(s.summary().unread,0);
+  await s.refresh();await s.translate(value);assert.equal(f.translationCalls.length,1);
+  s.close();const restarted = f.create();await restarted.translate(value);
+  assert.equal(restarted.snapshot().posts[0].translation.text,'保存的中文 <img src=x>');assert.equal(f.translationCalls.length,1);
+});
+test('changed source or truncation invalidates translation; fetched translation fields are never trusted', async t => {
+  const f = fixture(t), s = f.service;s.add('thsottiaux');await s.refresh();const value = {username:'thsottiaux',id:f.post(1).id};
+  await s.translate(value);const previous = s.snapshot().posts[0].translation;
+  f.setResponse(async () => [{...f.post(1),text:'changed',translation:previous}]);await s.refresh();
+  assert.equal(s.snapshot().posts[0].translation,undefined);await s.translate(value);
+  assert.equal(s.snapshot().posts[0].translation.text,'中文：changed');
+  f.setResponse(async () => [{...f.post(1),text:'changed',truncated:true}]);await s.refresh();
+  assert.equal(s.snapshot().posts[0].translation,undefined);
+  assert.throws(() => s.translate({username:'thsottiaux',id:'javascript:alert(1)'}),/不存在/);
+  assert.equal(f.translationCalls.length,2);
+});
+test('late translations cannot restore cleared, removed or changed posts, including remove and re-add', async t => {
+  for (const action of ['clear','remove','change','close']) {
+    const f = fixture(t), s = f.service;s.add('thsottiaux');await s.refresh();let done;
+    f.setTranslator(() => new Promise(resolve => {done = resolve;}));
+    const task = s.translate({username:'thsottiaux',id:f.post(1).id});await turn();
+    if (action === 'clear') {s.clearCache();await s.refresh();}
+    if (action === 'remove') {s.remove('thsottiaux');s.add('thsottiaux');await s.refresh();}
+    if (action === 'change') {f.setResponse(async () => [{...f.post(1),text:'edited'}]);await s.refresh();}
+    if (action === 'close') s.close();
+    assert.equal(f.translationCalls[0].signal.aborted,true);done('late result');await task;
+    assert.ok(s.snapshot().posts.every(p => !p.translation && !p.translating && !p.translationError));
+  }
+});
+test('translations are independent from checks and read state, and concurrent requests are bounded', async t => {
+  const f = fixture(t), s = f.service;s.add('thsottiaux');await s.refresh();
+  f.setResponse(async () => [1,2,3,4,5].map(i => f.post(i)));await s.refresh();
+  const done = [];f.setTranslator(() => new Promise(resolve => done.push(resolve)));
+  const tasks = [2,3,4].map(i => s.translate({username:'thsottiaux',id:f.post(i).id}));await turn();
+  assert.equal(s.summary().busy,false);assert.throws(() => s.translate({username:'thsottiaux',id:f.post(5).id}),/最多同时/);
+  s.markRead({username:'thsottiaux',id:f.post(2).id});s.setEnabled({username:'thsottiaux',enabled:false});await s.refresh();
+  assert.ok(f.translationCalls.every(c => !c.signal.aborted));done.forEach(resolve => resolve('中文'));await Promise.all(tasks);
+  assert.equal(s.snapshot().posts.filter(p => p.translation).length,3);assert.equal(s.snapshot().accounts[0].enabled,false);
+  assert.equal(s.snapshot().posts.find(p => p.id === f.post(2).id).unread,false);
+});
+test('translation failure is retryable and sanitized; failed persistence never claims saved text', async t => {
+  const f = fixture(t), s = f.service;s.add('thsottiaux');await s.refresh();const value = {username:'thsottiaux',id:f.post(1).id};
+  const file = path.join(f.dir,'message-subscriptions.json'), before = fs.readFileSync(file,'utf8');
+  for (const response of [() => {throw Error('secret remote diagnostics');},() => '',() => 'x'.repeat(20001)]) {
+    f.setTranslator(response);await s.translate(value);
+    assert.match(s.snapshot().posts[0].translationError,/翻译失败/);assert.equal(s.snapshot().posts[0].translation,undefined);
+    assert.ok(!JSON.stringify(s.snapshot()).includes('secret'));assert.equal(fs.readFileSync(file,'utf8'),before);
+  }
+  fs.mkdirSync(file + '.tmp');f.setTranslator(async () => '保存失败的译文');await s.translate(value);
+  assert.match(s.snapshot().storeError,/保存失败/);assert.equal(s.snapshot().posts[0].translation,undefined);
+  assert.equal(fs.readFileSync(file,'utf8'),before);fs.rmdirSync(file + '.tmp');
+  await s.translate(value);assert.equal(s.snapshot().posts[0].translation.text,'保存失败的译文');assert.equal(s.snapshot().posts[0].translationError,'');
+});
+test('invalid cached translations are discarded without losing source posts and read progress', async t => {
+  const f = fixture(t), s = f.service;s.add('thsottiaux');await s.refresh();await s.translate({username:'thsottiaux',id:f.post(1).id});s.close();
+  const file = path.join(f.dir,'message-subscriptions.json'), saved = JSON.parse(fs.readFileSync(file,'utf8'));
+  saved.accounts[0].posts[0].text = 'modified on disk';fs.writeFileSync(file,JSON.stringify(saved));
+  const restarted = f.create();assert.equal(restarted.snapshot().posts[0].translation,undefined);
+  assert.equal(restarted.snapshot().posts[0].text,'modified on disk');assert.equal(restarted.snapshot().storeError,'');assert.equal(restarted.summary().unread,0);
 });

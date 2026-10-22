@@ -1,11 +1,26 @@
 'use strict';
 const fs = require('node:fs'), path = require('node:path');
+const {createHash} = require('node:crypto');
 const {xUsername, validPostId, compareIds, projectPost} = require('./x-posts.cjs');
+const {TEXT_LIMIT} = require('./subscription-translation.cjs');
 const INTERVAL = 60 * 60 * 1000, LIMIT = 100, ACCOUNT_LIMIT = 20;
 const stamp = value => value === null || Number.isSafeInteger(value) && value >= 0;
+const sourceHash = post => createHash('sha256').update(JSON.stringify([post.text,post.truncated])).digest('hex');
+const postKey = post => `${post.username}/${post.id}`;
+function cachedPost(item, username, now) {
+  const post = projectPost(item,username,now), value = item.translation;
+  // 旧缓存没有译文也能读取；不匹配当前正文的译文直接失效，不影响原文和阅读进度。
+  if (value?.language === 'zh-CN' && value.provider === 'google' && value.sourceHash === sourceHash(post) &&
+    typeof value.text === 'string' && value.text.trim() && value.text.length <= TEXT_LIMIT &&
+    Number.isSafeInteger(value.translatedAt) && value.translatedAt >= 0) {
+    post.translation = {text:value.text,language:'zh-CN',provider:'google',sourceHash:value.sourceHash,translatedAt:value.translatedAt};
+  }
+  return post;
+}
 
-function createMessageSubscriptions({dataDir, readPosts, onChange = () => {}, clock = {now:() => Date.now(), setTimeout, clearTimeout}}) {
+function createMessageSubscriptions({dataDir, readPosts, translateText, onChange = () => {}, clock = {now:() => Date.now(), setTimeout, clearTimeout}}) {
   const file = path.join(dataDir, 'message-subscriptions.json');
+  const translations = new Map(), translationErrors = new Map();
   let state = {version:1, accounts:[]}, storeError = '', retryAt = 0, blocked = false, timer, flight = null, controller, activeUsername = null, epoch = 0, closed = false, started = false, revision = 0;
   try {
     if (fs.existsSync(file)) {
@@ -22,7 +37,7 @@ function createMessageSubscriptions({dataDir, readPosts, onChange = () => {}, cl
         names.add(username);
         return {username, enabled:a.enabled, initialized:a.initialized, latestId:a.latestId, unreadIds:[...new Set(a.unreadIds)],
           attemptedAt:a.attemptedAt, checkedAt:a.checkedAt, error:typeof a.error === 'string' ? a.error.slice(0, 160) : '',
-          posts:a.posts.map(item => projectPost(item, username, clock.now()))};
+          posts:a.posts.map(item => cachedPost(item, username, clock.now()))};
       });
     }
   } catch {state = {version:1, accounts:[]};blocked = true;storeError = '消息订阅文件无法读取，原文件已保留，请检查本地文件后重启。';}
@@ -34,17 +49,27 @@ function createMessageSubscriptions({dataDir, readPosts, onChange = () => {}, cl
     const accounts = state.accounts.map(a => ({username:a.username, enabled:a.enabled, checkedAt:a.checkedAt, attemptedAt:a.attemptedAt,
       error:a.error, count:a.posts.length, unread:a.posts.filter(p => a.unreadIds.includes(p.id)).length,
       nextCheckAt:a.enabled ? nextAt(a) : null}));
-    const posts = state.accounts.flatMap(a => a.posts.map(p => ({...p, unread:a.unreadIds.includes(p.id)})))
+    const posts = state.accounts.flatMap(a => a.posts.map(p => ({...p, unread:a.unreadIds.includes(p.id),
+      translating:translations.has(postKey(p)), translationError:translationErrors.get(postKey(p))?.message || ''})))
       .sort((a,b) => compareIds(b.id,a.id));
     return {accounts, posts, ...summary(), storeError, interval:INTERVAL, limit:LIMIT, accountLimit:ACCOUNT_LIMIT};
   }
   function commit(next) {
     if (blocked) throw Error(storeError);
     try {
-      fs.writeFileSync(file + '.tmp', JSON.stringify(next), {mode:0o600});
+      const json = JSON.stringify(next);
+      // 和读取上限保持一致，不能保存一份下次启动无法读取的缓存。
+      if (Buffer.byteLength(json) > 64000000) throw Error('cache limit');
+      fs.writeFileSync(file + '.tmp', json, {mode:0o600});
       fs.renameSync(file + '.tmp', file);
     } catch {storeError = '消息订阅保存失败，已有文件和内容已保留，请重试。';retryAt = clock.now() + INTERVAL;revision++;onChange();throw Error(storeError);}
-    state = next;storeError = '';retryAt = 0;revision++;onChange();
+    state = next;pruneTranslations();storeError = '';retryAt = 0;revision++;onChange();
+  }
+  function pruneTranslations() {
+    const sources = new Map(state.accounts.flatMap(a => a.posts.map(p => [postKey(p),sourceHash(p)])));
+    // 清缓存、删除、淘汰或原文变化后取消对应任务；仅比较 ID 会把旧译文写回新正文。
+    for (const [key,task] of translations) if (sources.get(key) !== task.hash) {translations.delete(key);task.controller.abort();}
+    for (const [key,value] of translationErrors) if (sources.get(key) !== value.hash) translationErrors.delete(key);
   }
   function schedule() {
     clock.clearTimeout(timer);timer = null;
@@ -86,7 +111,14 @@ function createMessageSubscriptions({dataDir, readPosts, onChange = () => {}, cl
           if (a.initialized) for (const post of incoming) if (a.latestId === null || compareIds(post.id,a.latestId) > 0) unread.add(post.id);
           for (const post of incoming) if (a.latestId === null || compareIds(post.id,a.latestId) > 0) a.latestId = post.id;
           a.unreadIds = [...unread].sort((a,b) => compareIds(b,a)).slice(0,LIMIT);
-          a.posts = [...new Map([...a.posts,...incoming].map(p => [p.id,p])).values()].sort((a,b) => compareIds(b.id,a.id)).slice(0,LIMIT);
+          const merged = new Map(a.posts.map(p => [p.id,p]));
+          for (const post of incoming) {
+            const previous = merged.get(post.id);
+            // 同一条原文未变时保留本地译文；采集结果不能自行提供或覆盖译文。
+            if (previous?.translation && sourceHash(previous) === sourceHash(post)) post.translation = previous.translation;
+            merged.set(post.id,post);
+          }
+          a.posts = [...merged.values()].sort((a,b) => compareIds(b.id,a.id)).slice(0,LIMIT);
           a.initialized = true;a.checkedAt = clock.now();a.error = '';commit(next);
         } catch (error) {
           if (closed || epoch !== batch) break;
@@ -133,9 +165,38 @@ function createMessageSubscriptions({dataDir, readPosts, onChange = () => {}, cl
     const a = account(state,value?.username), post = a.posts.find(p => p.id === value?.id);
     if (!post) throw Error('动态不存在。');return `https://x.com/${a.username}/status/${post.id}`;
   }
-  return {snapshot, summary, add, setEnabled, remove, clearCache, markRead, refresh, postUrl,
+  function translate(value) {
+    if (closed || blocked) return Promise.reject(Error(storeError || '消息订阅已停止。'));
+    const a = account(state,value?.username), post = a.posts.find(p => p.id === value?.id);
+    if (!post) throw Error('动态不存在。');
+    if (post.translation) return Promise.resolve(snapshot());
+    const key = postKey(post), existing = translations.get(key);
+    if (existing) return existing.promise;
+    if (translations.size >= 3) throw Error('最多同时翻译 3 条动态，请稍后再试。');
+    if (typeof translateText !== 'function') throw Error('在线翻译尚未就绪。');
+    const task = {hash:sourceHash(post),controller:new AbortController(),promise:null};
+    const current = () => !closed && translations.get(key) === task && !task.controller.signal.aborted;
+    translations.set(key,task);translationErrors.delete(key);revision++;
+    // 每条动态独立去重，不占用订阅刷新锁；完成时读取最新状态，保留期间的已读/账号操作。
+    task.promise = Promise.resolve().then(async () => {
+      try {
+        const text = await translateText(post.text,{signal:task.controller.signal});
+        if (!current()) return;
+        if (typeof text !== 'string' || !text.trim() || text.length > TEXT_LIMIT) throw Error('invalid translation');
+        const next = structuredClone(state), target = account(next,a.username).posts.find(p => p.id === post.id);
+        target.translation = {text,language:'zh-CN',provider:'google',sourceHash:task.hash,translatedAt:clock.now()};
+        commit(next);
+      } catch {
+        if (current()) translationErrors.set(key,{hash:task.hash,message:storeError || '翻译失败，原文已保留，请重试。'});
+      } finally {
+        if (translations.get(key) === task) {translations.delete(key);revision++;onChange();}
+      }
+    }).then(snapshot);
+    onChange();return task.promise;
+  }
+  return {snapshot, summary, add, setEnabled, remove, clearCache, markRead, refresh, postUrl, translate,
     start() {if (closed || started) return;started = true;void refresh(false);},
     checkDue:() => refresh(false),
-    close() {closed = true;invalidate();}};
+    close() {closed = true;invalidate();for (const task of translations.values()) task.controller.abort();translations.clear();translationErrors.clear();}};
 }
 module.exports = {createMessageSubscriptions, INTERVAL};

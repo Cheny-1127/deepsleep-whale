@@ -5,6 +5,7 @@ const node = (tag, text, className) => {const el = document.createElement(tag);e
 export function createMessageSubscriptionsView() {
   const view = $('subscriptions-view');if (!view) return;
   const recommendations = [...view.querySelectorAll('[data-recommended-username]')];
+  const translationRequests = new Set();
   let data, filter = '', pending = false, loading = false, lastContent = '', revision = 0;
   function renderSummary(summary) {
     const count = summary?.unread || 0;
@@ -28,6 +29,17 @@ export function createMessageSubscriptionsView() {
       data = result.value;if (message) feedback(message);return true;
     } catch (err) {error(err.message || '订阅操作失败，请重试。');return false;}
     finally {pending = false;revision++;lastContent = '';render();}
+  }
+  async function translate(post) {
+    const key = `${post.username}/${post.id}`;
+    if (pending || post.translating || translationRequests.has(key)) return;
+    translationRequests.add(key);revision++;lastContent = '';render();
+    try {
+      const result = await window.whale.subscriptions('translate',{username:post.username,id:post.id});
+      if (result.error) throw Error(result.error);
+      // 翻译期间允许清缓存、刷新和标记已读；不能用较早的 IPC 返回快照覆盖这些操作。
+    } catch (err) {error(err.message || '翻译失败，请重试。');}
+    finally {translationRequests.delete(key);revision++;lastContent = '';render();void load();}
   }
   function select(username) {filter = username;lastContent = '';render();}
   function render() {
@@ -83,10 +95,19 @@ export function createMessageSubscriptionsView() {
       // 动态正文始终通过 textContent 写入，不插入远程 HTML、图片或可执行链接。
       card.append(heading,node('p',post.text));
       if (post.truncated) card.append(node('p','内容已截取，完整内容请查看原文。','subscriptions-truncated'));
+      if (post.translation) {
+        const translated = node('div','','subscriptions-translation');translated.lang = 'zh-CN';
+        translated.append(node('strong','中文译文'),node('p',post.translation.text));card.append(translated);
+      }
+      if (post.translationError) card.append(node('p',post.translationError,'ui-alert'));
       const actions = node('div','','subscriptions-post-actions'), value = {username:post.username,id:post.id};
       if (post.unread) actions.append(button('标为已读',()=>call('mark-read',value)));
       actions.append(button('查看原文 ↗',()=>call('open-post',value)));
       for (const el of actions.children) el.disabled = pending;
+      const translating = post.translating || translationRequests.has(`${post.username}/${post.id}`);
+      const translateButton = button(post.translation ? '译文已保存' : translating ? '翻译中…' : post.translationError ? '重试翻译' : '翻译成中文',()=>translate(post));
+      translateButton.disabled = pending || Boolean(data.storeError) || Boolean(post.translation) || translating;
+      actions.append(translateButton);
       card.append(actions);$('subscriptions-posts').append(card);
     }
     $('subscriptions-empty').hidden = posts.length > 0;
