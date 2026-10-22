@@ -33,7 +33,7 @@ npm start
 
 小屋与桌宠弹窗共用 `src/ui/components.css`，统一按钮、输入框、下拉框、卡片、图标按钮及提示样式；颜色、字号、圆角和尺寸集中在 `src/ui/tokens.css`。榜单和账号选择窗额外引用 `src/ui/popup.css`，各页面只保留布局及业务专属样式。后续调整同类控件时优先修改公共层；紧凑窗口通过 CSS 变量调整尺寸。
 
-验证：`PLAYWRIGHT_MODULE=/path/to/playwright npm run test:styles`，使用静态页面夹具检查各窗口的计算样式、选中与焦点状态，以及小屋七个页面在 860 / 1060 像素宽度下的布局，不读取本机凭据或连接业务服务。
+验证：`PLAYWRIGHT_MODULE=/path/to/playwright npm run test:styles`，使用静态页面夹具检查各窗口的计算样式、选中与焦点状态，以及小屋八个页面在 860 / 1060 像素宽度下的布局，不读取本机凭据或连接业务服务。
 
 ## 快捷操作
 
@@ -44,6 +44,18 @@ npm start
 验证：`node --test test/shortcut-settings.test.cjs test/pet-gesture.test.cjs test/shortcuts-view.test.cjs`，覆盖本地保存、重启恢复、保存失败、三连击、单击回退、拖动及取消。
 
 真实 Electron 检查：`PLAYWRIGHT_MODULE=/path/to/playwright node scripts/checks/shortcuts-smoke.cjs`，使用临时数据目录验证三连击打开小屋、单击不打开及禁用后不触发，并检查浏览器报错；需要现有 Playwright 安装。
+
+## 消息订阅
+
+小屋左栏打开 **消息订阅**，添加 X 用户名、主页或帖子链接（例如 `https://x.com/thsottiaux/status/2113162277688070445` 会识别为 `@thsottiaux`）。默认不预置账号，最多订阅 20 个。首次成功读取的历史动态默认已读；后续新动态显示侧栏未读数，可按账号或未读筛选、标为已读，也可打开原文。暂停保留内容，删除会同时移除该账号的缓存和进度；不发送系统通知。
+
+应用运行期间每账号每小时检查一次，可手动“立即检查”；启动和唤醒只补查到期账号，不补跑休眠期间的每个小时。复用 Electron 的独立内存会话串行读取 X 公开页面，不需要 API Key、RSSHub、Redis 或新增后台服务，不共享用户浏览器登录态。每次读取最多等待 30 秒，完成或取消后关闭采集窗口；禁止远程页面访问本地功能、下载、弹窗或申请权限，正文以纯文本展示。
+
+已获取的动态、订阅、阅读与去重进度保存在本机数据目录的 `message-subscriptions.json`，每账号最多保留 100 条。离线或读取失败保留旧缓存和最后成功时间，页面显示失败原因。“清除缓存”只清动态正文，保留账号、阅读记录和去重游标，下次检查时重新获取页面可见内容，旧帖不会因此全部变成新消息。缓存不可读时保留原文件并停止写入，避免覆盖已有进度。
+
+免登录仅能取得当前公开页面提供的内容，不保证覆盖完整时间线、转发、长文全文或两次检查之间的全部动态。登录限制、限流或页面结构变化时会提示失败；首次实测 `@thsottiaux` 可取得 5 条动态，包含上面的指定帖子，但不代表长期可用性。
+
+验证：`node --test test/message-subscriptions.test.cjs`；`PLAYWRIGHT_MODULE=/path/to/playwright npm run test:subscriptions` 检查隔离主进程、真实 IPC 和界面；`PLAYWRIGHT_MODULE=/path/to/playwright npm run test:x-reader` 使用合成网页检查实际 Electron 的解析、沙箱、取消、登录页超时与窗口释放。两项界面检查都使用临时目录，不修改真实订阅或登录账号。
 
 ## 邮箱直接收件
 

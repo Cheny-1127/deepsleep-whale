@@ -24,21 +24,21 @@ const capture=async(page,name)=>{if(screenshots)await page.screenshot({path:path
   await panel.waitForSelector('.ui-card');
   const controlKeys=['minHeight','fontFamily','fontSize','borderRadius','borderColor','borderWidth'];
   const expectedControl=await appearance(panel,'#quota-group-button',controlKeys);
-  for(const selector of ['#shortcuts-triple','#quota-columns-button','#mail-email','#mail-type','#quota-pet-yellow']) {
+  for(const selector of ['#shortcuts-triple','#quota-columns-button','#mail-email','#mail-type','#quota-pet-yellow','#subscriptions-input']) {
     assert.deepEqual(await appearance(panel,selector,controlKeys),expectedControl,selector+' shares control appearance');
   }
   const expectedButton=await appearance(panel,'#quota-refresh',controlKeys);
-  for(const selector of ['#archery-refresh','#mail-connect','#wechat-login','#quota-pet-apply']) {
+  for(const selector of ['#archery-refresh','#mail-connect','#wechat-login','#quota-pet-apply','#subscriptions-refresh']) {
     const actual=await appearance(panel,selector,controlKeys);
     if(selector==='#mail-connect'||selector==='#wechat-login')actual.borderColor=expectedButton.borderColor;
     assert.deepEqual(actual,expectedButton,selector+' shares button sizing');
   }
   const cardKeys=['padding','borderRadius','borderColor','backgroundColor'];
   const expectedCard=await appearance(panel,'.care',cardKeys);
-  for(const selector of ['#quota-view .ui-card','#mail-view .ui-card','.hook-event-panel','#shortcuts-view .ui-card'])assert.deepEqual(await appearance(panel,selector,cardKeys),expectedCard);
+  for(const selector of ['#quota-view .ui-card','#mail-view .ui-card','.hook-event-panel','#shortcuts-view .ui-card','#subscriptions-view .ui-card'])assert.deepEqual(await appearance(panel,selector,cardKeys),expectedCard);
   const alertKeys=['padding','borderRadius','backgroundColor','color','fontSize'];
   const expectedAlert=await appearance(panel,'#mail-error',alertKeys);
-  for(const selector of ['#wechat-error','#archery-error','#quota-error','#quota-pet-error','#shortcuts-error'])assert.deepEqual(await appearance(panel,selector,alertKeys),expectedAlert);
+  for(const selector of ['#wechat-error','#archery-error','#quota-error','#quota-pet-error','#shortcuts-error','#subscriptions-error'])assert.deepEqual(await appearance(panel,selector,alertKeys),expectedAlert);
   await panel.evaluate(()=>{
     const box=document.getElementById('quota-group-options');
     const option=document.createElement('button');option.setAttribute('role','option');option.setAttribute('aria-selected','true');option.textContent='测试分组';box.append(option);
@@ -48,9 +48,9 @@ const capture=async(page,name)=>{if(screenshots)await page.screenshot({path:path
   const expectedSelection=await appearance(panel,'#quota-group-options button',selectionKeys);
   for(const width of [1060,860]) {
     await app.evaluate(({BrowserWindow},width)=>BrowserWindow.getAllWindows()[0].setSize(width,770),width);
-    for(const view of ['home','hooks','wechat','mail','archery','quota','shortcuts']) {
+    for(const view of ['home','hooks','wechat','mail','subscriptions','archery','quota','shortcuts']) {
       await panel.evaluate(view=>{
-        for(const name of ['home','hooks','wechat','mail','archery','quota','shortcuts'])document.getElementById(name+'-view').hidden=name!==view;
+        for(const name of ['home','hooks','wechat','mail','subscriptions','archery','quota','shortcuts'])document.getElementById(name+'-view').hidden=name!==view;
         for(const id of ['mail-options','wechat-client-options'])document.getElementById(id).open=true;
         document.getElementById('mail-settings').hidden=false;
       },view);
@@ -90,6 +90,6 @@ const capture=async(page,name)=>{if(screenshots)await page.screenshot({path:path
     await capture(page,name);
   }
   assert.deepEqual(errors,[]);
-  console.log('Shared styles UI OK: controls, cards, alerts, selection and focus across windows; seven views at 860/1060px; compact pet controls');
+  console.log('Shared styles UI OK: controls, cards, alerts, selection and focus across windows; eight views at 860/1060px; compact pet controls');
   if(screenshots)console.log('Screenshots: '+screenshots);
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{if(app)await app.close();fs.rmSync(dir,{recursive:true,force:true});});

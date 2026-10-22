@@ -1,0 +1,104 @@
+const $ = id => document.getElementById(id);
+const time = value => value === null ? '尚未成功检查' : new Date(value).toLocaleString('zh-CN', {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+const node = (tag, text, className) => {const el = document.createElement(tag);el.textContent = text;if (className) el.className = className;return el;};
+
+export function createMessageSubscriptionsView() {
+  const view = $('subscriptions-view');if (!view) return;
+  let data, filter = '', pending = false, loading = false, lastContent = '', revision = 0;
+  function renderSummary(summary) {
+    const count = summary?.unread || 0;
+    $('subscriptions-badge').hidden = count === 0;
+    $('subscriptions-badge').textContent = count > 99 ? '99+' : String(count);
+    $('nav-subscriptions').setAttribute('aria-label', `消息订阅${count ? `，${count} 条未读` : ''}`);
+    // 复用小屋的轻量状态广播；版本或检查状态变化时才取正文，避免定时传输整份缓存。
+    if (summary && (!data || summary.revision !== data.revision || summary.busy !== data.busy)) void load();
+  }
+  function error(message = '') {$('subscriptions-error').textContent = message;$('subscriptions-error').hidden = !message;}
+  function feedback(message) {$('subscriptions-feedback').textContent = message;$('subscriptions-feedback').hidden = !message;}
+  const button = (text, action, className = 'outline') => {
+    const el = node('button', text, className);el.type = 'button';el.addEventListener('click', action);return el;
+  };
+  async function call(name, value, message) {
+    if (pending) return false;
+    pending = true;revision++;render();error();feedback('');
+    try {
+      const result = await window.whale.subscriptions(name, value);
+      if (result.error) throw Error(result.error);
+      data = result.value;if (message) feedback(message);return true;
+    } catch (err) {error(err.message || '订阅操作失败，请重试。');return false;}
+    finally {pending = false;revision++;lastContent = '';render();}
+  }
+  function select(username) {filter = username;lastContent = '';render();}
+  function render() {
+    for (const id of ['subscriptions-add','subscriptions-refresh','subscriptions-read-all']) $(id).disabled = pending || Boolean(data?.storeError);
+    // 清理可中止正在进行的自动采集；手动操作仍串行，避免响应乱序覆盖页面。
+    $('subscriptions-clear').disabled = pending || Boolean(data?.storeError) || !data?.posts.length;
+    if (!data) return;
+    $('subscriptions-refresh').disabled ||= data.busy || !data.accounts.some(a => a.enabled);
+    $('subscriptions-refresh').textContent = data.busy ? '正在检查…' : '立即检查';
+    $('subscriptions-read-all').disabled ||= !data.unread;
+    $('subscriptions-add').disabled ||= data.accounts.length >= data.accountLimit;
+    $('subscriptions-status').textContent = `${data.accounts.length} 个订阅 · ${data.posts.length} 条缓存 · ${data.unread} 条未读`;
+    renderSummary(data);
+    if (data.storeError) error(data.storeError);
+    if (filter && !data.accounts.some(a => a.username === filter)) filter = '';
+    // 定时只读快照不重建未变化的列表，避免打断键盘焦点和正在阅读的位置。
+    const content = JSON.stringify([data.accounts,data.posts,filter,$('subscriptions-unread').checked,pending]);
+    if (content === lastContent) return;lastContent = content;
+    $('subscriptions-all').setAttribute('aria-pressed',String(!filter));
+    $('subscriptions-accounts').replaceChildren();
+    for (const account of data.accounts) {
+      const row = node('div','','subscriptions-account');row.dataset.username = account.username;
+      const choose = button(`@${account.username}`,()=>select(account.username),'ui-menu-item');choose.setAttribute('aria-pressed',String(filter === account.username));
+      const meta = node('small',`${account.unread} 未读 · ${account.count} 缓存${account.error ? ' · 检查失败' : ''}`);
+      const tools = node('div','','subscriptions-account-tools');
+      const toggle = button(account.enabled ? '暂停' : '启用',()=>call('set-enabled',{username:account.username,enabled:!account.enabled}));
+      toggle.setAttribute('aria-label',`${account.enabled ? '暂停' : '启用'} @${account.username}`);
+      const remove = button('删除',()=>call('remove',account.username,'已删除订阅和该账号的缓存。'));
+      remove.setAttribute('aria-label',`删除 @${account.username}`);
+      for (const el of [toggle,remove]) {el.disabled = pending || Boolean(data.storeError);el.className = 'text-button';}
+      tools.append(toggle,remove);row.append(choose,meta,tools);$('subscriptions-accounts').append(row);
+    }
+    $('subscriptions-feed-title').textContent = filter ? `@${filter}` : '全部动态';
+    const accounts = data.accounts.filter(a => !filter || a.username === filter);
+    $('subscriptions-account-status').replaceChildren();
+    for (const account of accounts) {
+      const status = node('div',`@${account.username} · ${account.enabled ? '每小时检查' : '已暂停'} · ${time(account.checkedAt)}${account.error ? ` · ${account.error}` : ''}`);
+      if (account.error) status.append(' ',button('打开主页',()=>call('open-profile',account.username),'text-button'));
+      $('subscriptions-account-status').append(status);
+    }
+    const posts = data.posts.filter(p => (!filter || p.username === filter) && (!$('subscriptions-unread').checked || p.unread));
+    $('subscriptions-posts').replaceChildren();
+    for (const post of posts) {
+      const card = node('article','','ui-card subscriptions-post');card.dataset.postId = post.id;
+      const heading = node('div','','subscriptions-post-heading');heading.append(node('strong',`@${post.username}`),node('span',time(post.publishedAt)));
+      if (post.unread) heading.append(node('span','未读','subscriptions-new'));
+      // 动态正文始终通过 textContent 写入，不插入远程 HTML、图片或可执行链接。
+      card.append(heading,node('p',post.text));
+      if (post.truncated) card.append(node('p','内容已截取，完整内容请查看原文。','subscriptions-truncated'));
+      const actions = node('div','','subscriptions-post-actions'), value = {username:post.username,id:post.id};
+      if (post.unread) actions.append(button('标为已读',()=>call('mark-read',value)));
+      actions.append(button('查看原文 ↗',()=>call('open-post',value)));
+      for (const el of actions.children) el.disabled = pending;
+      card.append(actions);$('subscriptions-posts').append(card);
+    }
+    $('subscriptions-empty').hidden = posts.length > 0;
+    $('subscriptions-empty').textContent = !data.accounts.length ? '还没有订阅，添加一个 X 账号开始阅读。' : $('subscriptions-unread').checked ? '暂时没有未读动态。' : data.busy ? '正在读取公开动态，首次检查最多需要半分钟…' : '暂无缓存。可点击“立即检查”；首次读取的历史动态默认已读。';
+  }
+  async function load() {
+    if (view.hidden || loading || pending) return;loading = true;const requestedAt = revision;
+    try {const result = await window.whale.subscriptions('snapshot');if (requestedAt !== revision) return;if (result.error) throw Error(result.error);data = result.value;render();}
+    catch (err) {error(err.message || '无法读取订阅。');}finally {loading = false;}
+  }
+  $('subscriptions-form').addEventListener('submit',async event=>{
+    event.preventDefault();const input = $('subscriptions-input');
+    if (await call('add',input.value,'已添加订阅；首次读取只建立基线，之后的新动态才计入未读。')) input.value = '';
+  });
+  $('subscriptions-all').addEventListener('click',()=>select(''));
+  $('subscriptions-unread').addEventListener('change',render);
+  $('subscriptions-refresh').addEventListener('click',()=>call('refresh'));
+  $('subscriptions-read-all').addEventListener('click',()=>call('mark-read',null,'已全部标为已读。'));
+  $('subscriptions-clear').addEventListener('click',()=>call('clear-cache',undefined,'缓存已清除，订阅、已读状态和去重进度已保留。'));
+  new MutationObserver(()=>{if (!view.hidden) void load();}).observe(view,{attributes:true,attributeFilter:['hidden']});
+  void load();return {renderSummary};
+}

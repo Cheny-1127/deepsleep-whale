@@ -2,6 +2,7 @@
 import { createHookSettingsView, showView } from './hooks-view.mjs';
 import { createReminderView } from './reminders-view.mjs';
 import { createWechatView } from './wechat-view.mjs';
+import { createMessageSubscriptionsView } from './message-subscriptions-view.mjs';
 import { createMailView } from './mail-view.mjs';
 import { createArcheryView } from './archery-view.mjs';
 import { createQuotaView } from './quota-view.mjs';
@@ -39,6 +40,7 @@ const hooksView=createHookSettingsView({render});
 const remindersView=createReminderView({render,action,floating});
 const wechatView=createWechatView();
 createMailView();
+const subscriptionsView=createMessageSubscriptionsView();
 createArcheryView();
 createQuotaView();
 createGroupUsageView();
@@ -81,6 +83,7 @@ function render(data) {
   remindersView.render(data);
   wechatView.render(data.wechat);
   shortcutsView.render(data);
+  subscriptionsView?.renderSummary(data.subscriptions);
   // 主进程频繁广播状态，只有动作或播放版本变化才重置动画与气泡。
   const nextKey=`${data.state}:${data.revision}:${data.demo}`;
   const previous=current;

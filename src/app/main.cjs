@@ -1,5 +1,5 @@
 'use strict';
-const { app, ipcMain, Notification, shell, clipboard, net, safeStorage, dialog } = require('electron');
+const { app, ipcMain, Notification, shell, clipboard, net, safeStorage, dialog, powerMonitor } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
@@ -26,6 +26,8 @@ const {createGroupUsage}=require('../channels/quota-group-usage.cjs');
 const {createShortcutSettings}=require('./shortcut-settings.cjs');
 const {createPetQuotaSettings}=require('./pet-quota-settings.cjs');
 const {createPetQuota}=require('../channels/pet-quota.cjs');
+const {createMessageSubscriptions}=require('../channels/message-subscriptions.cjs');
+const {createXSubscriptionReader}=require('./x-subscription-reader.cjs');
 const QRCode=require('qrcode');
 
 const dataDir = dataDirectory();
@@ -33,7 +35,7 @@ fs.mkdirSync(dataDir, { recursive: true });
 app.setPath('userData', dataDir);
 app.setName('鲸鱼娘');
 if (!app.requestSingleInstanceLock()) { app.quit(); } else {
-  let bridge,wechat,mail,archery,quota,groupUsage,petQuota;
+  let bridge,wechat,mail,archery,quota,groupUsage,petQuota,subscriptions;
   let eventQueue=Promise.resolve();
   const cursorState=process.env.WHALE_CURSOR_STATE_DB||path.join(os.homedir(),'Library','Application Support','Cursor','User','globalStorage','state.vscdb');
   const cursorChats=createCursorChatOpener({stateFile:cursorState,openExternal:url=>shell.openExternal(url)});
@@ -100,7 +102,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   function snapshot() {
     // 两个窗口共享同一份主进程状态，避免小屋和悬浮桌宠各自计时、各自累计成长。
     const tasks = activity.snapshot();
-    return { trackingRows:petQuotaSettings.snapshot().trackingConfigs.length, petVisible:windows.isPetVisible(),shortcuts:shortcuts.snapshot(),wechat:wechat?.snapshot()||null,hookAdapters:hooks.adapters,hookAvailability:hooks.availability,sourceStatus,codexApprovalSync:codexRuntime.snapshot(),clientRunning:{...clientRunning},completionExpanded, busyExpanded, reminderView, settings:hooks.settings, nurture: nurture.snapshot(), activity: tasks, ...behavior.snapshot(), bridge: Boolean(bridge), bridgeError, reminderError };
+    return { subscriptions:subscriptions?.summary()||null,trackingRows:petQuotaSettings.snapshot().trackingConfigs.length, petVisible:windows.isPetVisible(),shortcuts:shortcuts.snapshot(),wechat:wechat?.snapshot()||null,hookAdapters:hooks.adapters,hookAvailability:hooks.availability,sourceStatus,codexApprovalSync:codexRuntime.snapshot(),clientRunning:{...clientRunning},completionExpanded, busyExpanded, reminderView, settings:hooks.settings, nurture: nurture.snapshot(), activity: tasks, ...behavior.snapshot(), bridge: Boolean(bridge), bridgeError, reminderError };
   }
   function canObserveCodexApproval() {
     return hooks.settings.sources.codex&&hooks.settings.events.codex?.PermissionRequest!==false&&clientRunning.codex===true&&
@@ -232,6 +234,33 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     if(!mail)return {error:'邮箱接入正在初始化'};
     try{return {value:await mail.action(name,value)};}catch(error){return {error:error.message};}
   });
+  // 订阅正文只向小屋主框架开放；远程采集页没有 preload，也不能借用此通道。
+  ipcMain.handle('message-subscriptions',async(event,name,value)=>{
+    if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw Error('仅允许在小屋查看消息订阅');
+    if(!subscriptions)return {error:'消息订阅正在初始化'};
+    try {
+      let result;
+      switch(name) {
+        case 'snapshot':result=subscriptions.snapshot();break;
+        case 'add':result=subscriptions.add(value);break;
+        case 'set-enabled':result=subscriptions.setEnabled(value);break;
+        case 'remove':result=subscriptions.remove(value);break;
+        case 'clear-cache':result=subscriptions.clearCache();break;
+        case 'mark-read':result=subscriptions.markRead(value);break;
+        case 'refresh':result=await subscriptions.refresh();break;
+        case 'open-post':
+          await shell.openExternal(subscriptions.postUrl(value));
+          result=subscriptions.markRead(value);break;
+        case 'open-profile': {
+          const account=subscriptions.snapshot().accounts.find(a=>a.username===value);
+          if(!account)throw Error('订阅账号不存在。');
+          await shell.openExternal(`https://x.com/${account.username}`);result=subscriptions.snapshot();break;
+        }
+        default:throw Error('不支持的订阅操作');
+      }
+      return {value:result};
+    }catch(error){return {error:error.message};}
+  });
   // Archery 仅向小屋主框架开放，逐笔审批还须由主进程弹框确认。
   ipcMain.handle('archery',async(event,name,value)=>{
     if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋查看 Archery');
@@ -286,7 +315,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     if(panel)data.accounts=quota.snapshot().accounts.map(({id,name})=>({id,name}));
     return {value:data};
   });
-  app.on('before-quit', () => { petQuota?.close();groupUsage?.close();quota?.close();archery?.close();mail?.close();wechat?.close();codexRuntime.close();bridge?.close(); titles.close();cursorTitles.close(); });
+  app.on('before-quit', () => { subscriptions?.close();petQuota?.close();groupUsage?.close();quota?.close();archery?.close();mail?.close();wechat?.close();codexRuntime.close();bridge?.close(); titles.close();cursorTitles.close(); });
   app.whenReady().then(async () => {
     // 先确认客户端运行状态，再过滤临时会话、同步已读，避免清掉退出时暂存的提醒。
     await refreshClients();
@@ -316,6 +345,10 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     quota=createQuotaPanel({dataDir,tokenFile:process.env.WHALE_QUOTA_TOKEN_FILE||path.join(__dirname,'../../token'),fetchImpl:(url,options)=>net.fetch(url,options)});
     groupUsage=createGroupUsage({dataDir,tokenFile:process.env.WHALE_QUOTA_TOKEN_FILE||path.join(__dirname,'../../token'),fetchImpl:(url,options)=>net.fetch(url,options)});
     petQuota=createPetQuota({settings:petQuotaSettings,quota,groups:groupUsage});petQuota.start();
+    subscriptions=createMessageSubscriptions({dataDir,readPosts:createXSubscriptionReader(),onChange:broadcast});
+    subscriptions.start();
+    // 休眠期间不积压轮询；唤醒只补查已到期账号，正常的一小时节奏保持不变。
+    powerMonitor.on('resume',()=>void subscriptions.checkDue());
     for(const source of SOURCES)void hooks.refresh(source);
     try {
       const acceptEvent = event => {

@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('whale', {
   mail: (name, value) => ipcRenderer.invoke('mail', name, value),
   // 只转发通道名。Archery 凭据、审批确认和额度 token 都留在主进程。
   archery: (name, value) => ipcRenderer.invoke('archery', name, value),
+  subscriptions: (name, value) => ipcRenderer.invoke('message-subscriptions', name, value),
   quota: (name, value) => ipcRenderer.invoke('quota', name, value),
   quotaGroup: (name, value) => ipcRenderer.invoke('quota-group', name, value),
   petQuota: (name, value) => ipcRenderer.invoke('pet-quota', name, value),
