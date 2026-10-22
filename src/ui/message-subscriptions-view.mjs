@@ -4,6 +4,7 @@ const node = (tag, text, className) => {const el = document.createElement(tag);e
 
 export function createMessageSubscriptionsView() {
   const view = $('subscriptions-view');if (!view) return;
+  const recommendations = [...view.querySelectorAll('[data-recommended-username]')];
   let data, filter = '', pending = false, loading = false, lastContent = '', revision = 0;
   function renderSummary(summary) {
     const count = summary?.unread || 0;
@@ -33,6 +34,12 @@ export function createMessageSubscriptionsView() {
     for (const id of ['subscriptions-add','subscriptions-refresh','subscriptions-read-all']) $(id).disabled = pending || Boolean(data?.storeError);
     // 清理可中止正在进行的自动采集；手动操作仍串行，避免响应乱序覆盖页面。
     $('subscriptions-clear').disabled = pending || Boolean(data?.storeError) || !data?.posts.length;
+    // 推荐仅提供添加入口；订阅结果沿用主进程快照，失败不会误显示为已订阅。
+    for (const recommended of recommendations) {
+      const subscribed = data?.accounts.some(a => a.username === recommended.dataset.recommendedUsername);
+      recommended.textContent = subscribed ? '已订阅' : '添加订阅';
+      recommended.disabled = pending || !data || Boolean(data.storeError) || subscribed || data.accounts.length >= data.accountLimit;
+    }
     if (!data) return;
     $('subscriptions-refresh').disabled ||= data.busy || !data.accounts.some(a => a.enabled);
     $('subscriptions-refresh').textContent = data.busy ? '正在检查…' : '立即检查';
@@ -95,6 +102,7 @@ export function createMessageSubscriptionsView() {
     if (await call('add',input.value,'已添加订阅；首次读取只建立基线，之后的新动态才计入未读。')) input.value = '';
   });
   $('subscriptions-all').addEventListener('click',()=>select(''));
+  for (const recommended of recommendations) recommended.addEventListener('click',()=>call('add',recommended.dataset.recommendedUsername,'已添加订阅；首次读取只建立基线，之后的新动态才计入未读。'));
   $('subscriptions-unread').addEventListener('change',render);
   $('subscriptions-refresh').addEventListener('click',()=>call('refresh'));
   $('subscriptions-read-all').addEventListener('click',()=>call('mark-read',null,'已全部标为已读。'));
