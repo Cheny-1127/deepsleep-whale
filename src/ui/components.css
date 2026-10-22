@@ -80,3 +80,12 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--ui-accent); }
 .ui-menu-item[aria-selected="true"], .ui-menu-item[aria-checked="true"], .quota-picker-options button[aria-selected="true"] { background: var(--ui-selected); color: var(--ui-accent); }
 .ui-menu-item:focus-visible, .quota-picker-options button:focus-visible { outline-offset: -2px; }
 .ui-alert { padding: 12px; border-radius: var(--ui-radius-control); background: var(--ui-danger-surface); color: var(--ui-danger); font-size: var(--ui-font-small); line-height: 1.7; overflow-wrap: anywhere; }
+
+/* 时长输入组合：数值与公共下拉入口连成一组，保持统一的尺寸和焦点样式。 */
+.ui-duration { display: inline-flex; align-items: stretch; }
+.ui-duration > input { width: 70px; min-width: 0; margin: 0; border-radius: var(--ui-radius-control) 0 0 var(--ui-radius-control); font-variant-numeric: tabular-nums; appearance: textfield; }
+.ui-duration > input::-webkit-inner-spin-button, .ui-duration > input::-webkit-outer-spin-button { appearance: none; margin: 0; }
+.ui-duration > .quota-group-picker { width: 76px; margin-left: -1px; }
+.ui-duration > .quota-group-picker > summary { border-radius: 0 var(--ui-radius-control) var(--ui-radius-control) 0; }
+.ui-duration .quota-group-menu { width: 100%; min-width: 90px; }
+.ui-duration .quota-picker-options { padding-top: 0; }
