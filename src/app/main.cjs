@@ -27,6 +27,7 @@ const {createShortcutSettings}=require('./shortcut-settings.cjs');
 const {createPetQuotaSettings}=require('./pet-quota-settings.cjs');
 const {createPetQuota}=require('../channels/pet-quota.cjs');
 const {createMessageSubscriptions}=require('../channels/message-subscriptions.cjs');
+const {createSubscriptionTranslator}=require('../channels/subscription-translation.cjs');
 const {createXSubscriptionReader}=require('./x-subscription-reader.cjs');
 const QRCode=require('qrcode');
 
@@ -248,6 +249,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
         case 'clear-cache':result=subscriptions.clearCache();break;
         case 'mark-read':result=subscriptions.markRead(value);break;
         case 'refresh':result=await subscriptions.refresh();break;
+        case 'translate':result=await subscriptions.translate(value);break;
         case 'open-post':
           await shell.openExternal(subscriptions.postUrl(value));
           result=subscriptions.markRead(value);break;
@@ -345,7 +347,8 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     quota=createQuotaPanel({dataDir,tokenFile:process.env.WHALE_QUOTA_TOKEN_FILE||path.join(__dirname,'../../token'),fetchImpl:(url,options)=>net.fetch(url,options)});
     groupUsage=createGroupUsage({dataDir,tokenFile:process.env.WHALE_QUOTA_TOKEN_FILE||path.join(__dirname,'../../token'),fetchImpl:(url,options)=>net.fetch(url,options)});
     petQuota=createPetQuota({settings:petQuotaSettings,quota,groups:groupUsage});petQuota.start();
-    subscriptions=createMessageSubscriptions({dataDir,readPosts:createXSubscriptionReader(),onChange:broadcast});
+    subscriptions=createMessageSubscriptions({dataDir,readPosts:createXSubscriptionReader(),
+      translateText:createSubscriptionTranslator({fetchImpl:(url,options)=>net.fetch(url,options)}),onChange:broadcast});
     subscriptions.start();
     // 休眠期间不积压轮询；唤醒只补查已到期账号，正常的一小时节奏保持不变。
     powerMonitor.on('resume',()=>void subscriptions.checkDue());

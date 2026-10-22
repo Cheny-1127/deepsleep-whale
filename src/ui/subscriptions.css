@@ -28,6 +28,8 @@
 .subscriptions-post-heading strong { color: var(--ui-text); }
 .subscriptions-post p { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.9; margin: 14px 0; }
 .subscriptions-post .subscriptions-truncated { color: var(--ui-text-muted); font-size: var(--ui-font-small); }
+.subscriptions-translation { border-top: 1px solid var(--ui-divider); padding-top: 14px; }
+.subscriptions-translation > strong { color: var(--ui-accent); font-size: var(--ui-font-small); }
 .subscriptions-post-actions { justify-content: flex-end; }
 .subscriptions-badge { padding: 2px 5px; background: var(--ui-accent); color: var(--ui-on-accent); border-radius: var(--ui-radius-control); font-size: var(--ui-font-caption); }
 .subscriptions-new { color: var(--ui-accent); background: var(--ui-selected); padding: 2px 6px; border-radius: var(--ui-radius-control); }

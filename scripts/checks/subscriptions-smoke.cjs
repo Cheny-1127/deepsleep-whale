@@ -2,15 +2,21 @@
 const {_electron:electron}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
 const root=path.resolve(__dirname,'../..'),dir=fs.mkdtempSync('/tmp/whale-subscriptions-ui-'),bootstrap=path.join(dir,'bootstrap.cjs');
-// 隔离主进程保留真实 IPC/持久化，只替换网络采集并拦截外部跳转。
+// 隔离主进程保留真实 IPC/持久化，只替换网络采集、翻译并拦截外部跳转。
 fs.writeFileSync(bootstrap,`const {shell,Notification}=require('electron');Notification.isSupported=()=>false;
-global.subscriptionsFixture={step:1,base:String((BigInt(Date.now()-600000)-1288834974657n)<<22n),calls:[],opened:[],fail:false,hold:false};shell.openExternal=async url=>global.subscriptionsFixture.opened.push(url);
+global.subscriptionsFixture={step:1,base:String((BigInt(Date.now()-600000)-1288834974657n)<<22n),calls:[],opened:[],fail:false,hold:false,translationCalls:[],translationFail:false,translationHold:false};shell.openExternal=async url=>global.subscriptionsFixture.opened.push(url);
 const archery=require(${JSON.stringify(path.join(root,'src/channels/archery-pending.cjs'))}),createArchery=archery.createArcheryPending;
 archery.createArcheryPending=options=>createArchery({...options,readConfig:()=>{throw Error('isolated');}});
 require(${JSON.stringify(path.join(root,'src/app/x-subscription-reader.cjs'))}).createXSubscriptionReader=()=>async(username,{signal})=>{
  const f=global.subscriptionsFixture;f.calls.push(username);if(f.hold)await new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(Error('aborted')),{once:true}));
  if(f.fail)throw Object.assign(Error('secret diagnostics'),{code:'X_PUBLIC_UNAVAILABLE'});
  return Array.from({length:f.step},(_,i)=>({username,id:String(BigInt(f.base)+BigInt(i+1)),text:'动态 '+(i+1)+' <img src=x onerror=alert(1)>'}));
+};
+require(${JSON.stringify(path.join(root,'src/channels/subscription-translation.cjs'))}).createSubscriptionTranslator=()=>async(text,{signal})=>{
+ const f=global.subscriptionsFixture;f.translationCalls.push(text);
+ if(f.translationHold)await new Promise((resolve,reject)=>{f.releaseTranslation=resolve;signal.addEventListener('abort',()=>reject(Error('cancelled')),{once:true});});
+ if(f.translationFail)throw Error('secret translation diagnostics');
+ return '中文：额度即将重置。 <img src=x onerror=alert(1)>';
 };
 require(${JSON.stringify(path.join(root,'src/main.cjs'))});`);
 let app;
@@ -35,14 +41,39 @@ async function launch() {
   assert.equal(await panel.locator('#subscriptions-recommend-tibo').textContent(),'已订阅');assert.ok(await panel.locator('#subscriptions-recommend-tibo').isDisabled());
   assert.equal(await panel.locator('.subscriptions-post img').count(),0);
   assert.ok(!(JSON.stringify(await panel.evaluate(()=>window.whale.snapshot()))).includes('onerror=alert'));
+  assert.equal(await app.evaluate(()=>global.subscriptionsFixture.translationCalls.length),0,'fetch never auto-translates');
+  await panel.getByRole('button',{name:'翻译成中文',exact:true}).click();
+  await panel.waitForFunction(()=>document.querySelector('.subscriptions-translation')?.textContent.includes('额度即将重置'));
+  assert.equal(await panel.locator('.subscriptions-translation img').count(),0);
+  assert.ok(await panel.getByRole('button',{name:'译文已保存',exact:true}).isDisabled());
+  const translatedValue=await panel.locator('.subscriptions-post').evaluate(el=>({username:'thsottiaux',id:el.dataset.postId}));
+  await panel.evaluate(value=>window.whale.subscriptions('translate',{...value,text:'must not translate renderer content'}),translatedValue);
+  assert.equal(await app.evaluate(()=>global.subscriptionsFixture.translationCalls.length),1);
+  await app.close();app=null;panel=await launch();panel.on('pageerror',error=>errors.push(error.message));
+  await panel.waitForFunction(()=>document.querySelector('.subscriptions-translation'));
+  assert.equal(await app.evaluate(()=>global.subscriptionsFixture.translationCalls.length),0,'restart uses saved translation');
+  const deniedSource=await panel.evaluate(()=>window.whale.subscriptions('translate',{username:'thsottiaux',id:'99999999',text:'arbitrary source'}));
+  assert.ok(deniedSource.error);assert.equal(await app.evaluate(()=>global.subscriptionsFixture.translationCalls.length),0);
   const pet=app.windows().find(page=>page.url().endsWith('/pet.html'));assert.ok(pet);
   assert.equal(await pet.evaluate(async()=>{try{await window.whale.subscriptions('snapshot');return 'allowed';}catch{return 'denied';}}),'denied');
+  assert.equal(await pet.evaluate(async()=>{try{await window.whale.subscriptions('translate',{});return 'allowed';}catch{return 'denied';}}),'denied');
   const bad=await panel.evaluate(()=>window.whale.subscriptions('open-profile','https://evil.test'));assert.ok(bad.error);
   await panel.locator('#subscriptions-input').fill('@THSOTTIAUX');await panel.locator('#subscriptions-add').click();await panel.waitForFunction(()=>document.querySelector('#subscriptions-error').textContent.includes('已在订阅'));
   // 使用稳定的 ID 基点，避免两次测试请求因当前时间变化制造额外新帖。
-  await app.evaluate(()=>{const f=global.subscriptionsFixture;f.step=3;});
+  await app.evaluate(({},id)=>{const f=global.subscriptionsFixture;f.base=String(BigInt(id)-1n);f.step=3;},translatedValue.id);
   await panel.locator('#subscriptions-refresh').click();await panel.waitForFunction(()=>document.querySelectorAll('.subscriptions-post').length===3);
   assert.ok(await panel.locator('#subscriptions-badge').isVisible());
+  assert.equal(await panel.locator('.subscriptions-translation').count(),1,'refresh reuses saved translation');
+  await app.evaluate(()=>{global.subscriptionsFixture.translationFail=true;});
+  await panel.getByRole('button',{name:'翻译成中文',exact:true}).first().click();
+  await panel.waitForFunction(()=>document.querySelector('.subscriptions-post .ui-alert'));
+  assert.ok(!(await panel.locator('#subscriptions-posts').textContent()).includes('secret translation'));
+  await app.evaluate(()=>{const f=global.subscriptionsFixture;f.translationFail=false;f.translationHold=true;});
+  await panel.getByRole('button',{name:'重试翻译',exact:true}).click();
+  await panel.waitForFunction(()=>[...document.querySelectorAll('.subscriptions-post button')].some(el=>el.textContent==='翻译中…'));
+  assert.ok(await panel.locator('#subscriptions-clear').isEnabled());assert.ok(await panel.locator('#subscriptions-refresh').isEnabled());
+  await app.evaluate(()=>{const f=global.subscriptionsFixture;f.translationHold=false;f.releaseTranslation();});
+  await panel.waitForFunction(()=>document.querySelectorAll('.subscriptions-translation').length===2);
   await panel.locator('#subscriptions-unread').check();assert.equal(await panel.locator('.subscriptions-post').count(),2);
   await panel.getByRole('button',{name:'标为已读',exact:true}).first().click();assert.equal(await panel.locator('.subscriptions-post').count(),1);
   await panel.locator('#subscriptions-unread').uncheck();
@@ -60,7 +91,11 @@ async function launch() {
     assert.ok(await panel.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
     fs.mkdirSync(path.join(root,'out'),{recursive:true});await panel.screenshot({path:path.join(root,'out',`subscriptions-${width}.png`),fullPage:true});
   }
+  await app.evaluate(()=>{global.subscriptionsFixture.translationHold=true;});
+  await panel.getByRole('button',{name:'翻译成中文',exact:true}).click();
+  await panel.waitForFunction(()=>[...document.querySelectorAll('.subscriptions-post button')].some(el=>el.textContent==='翻译中…'));
   await panel.locator('#subscriptions-clear').click();assert.equal(await panel.locator('.subscriptions-post').count(),0);assert.equal(await panel.locator('.subscriptions-account').count(),1);
+  assert.equal(await panel.locator('.subscriptions-translation').count(),0);
   await app.close();app=null;panel=await launch();
   await panel.waitForFunction(()=>document.querySelector('#subscriptions-status').textContent.includes('1 个订阅'));
   assert.equal(await panel.locator('.subscriptions-post').count(),0);assert.equal(await app.evaluate(()=>global.subscriptionsFixture.calls.length),0,'restart does not refetch before hourly deadline');
@@ -77,5 +112,5 @@ async function launch() {
   await panel.waitForFunction(()=>document.querySelectorAll('.subscriptions-post').length===1);
   assert.equal(await panel.locator('.subscriptions-account').count(),1);assert.ok(await panel.locator('#subscriptions-recommend-tibo').isDisabled());
   await panel.getByRole('button',{name:'删除 @thsottiaux',exact:true}).click();assert.ok(await panel.locator('#subscriptions-recommend-tibo').isEnabled());
-  assert.deepEqual(errors,[]);console.log('Subscriptions UI OK: link input, baseline, unread/read, filtering, pause, safe links/text, failure cache, clear/restart, delete, IPC and 860/1060px layout');
+  assert.deepEqual(errors,[]);console.log('Subscriptions UI OK: translation/save/restart/retry/cancel, link input, unread/read, filtering, safe links/text, clear/restart, IPC and 860/1060px layout');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{if(app)await app.close();fs.rmSync(dir,{recursive:true,force:true});});
