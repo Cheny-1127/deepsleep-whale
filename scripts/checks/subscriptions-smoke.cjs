@@ -25,9 +25,14 @@ async function launch() {
   let panel=await launch();const errors=[];panel.on('pageerror',error=>errors.push(error.message));
   await panel.waitForFunction(()=>document.querySelector('#subscriptions-status').textContent.includes('0 个订阅'));
   assert.ok(await panel.locator('#home-view').isHidden());
+  assert.equal(await panel.locator('#nav-home').evaluate(el=>el.nextElementSibling.id),'nav-subscriptions');
+  assert.equal(await app.evaluate(()=>global.subscriptionsFixture.calls.length),0,'recommendations do not auto-subscribe or fetch');
+  assert.ok(await panel.locator('#subscriptions-recommend-tibo').isEnabled());
+  fs.mkdirSync(path.join(root,'out'),{recursive:true});await panel.screenshot({path:path.join(root,'out','subscriptions-recommendations.png'),fullPage:true});
   await panel.locator('#subscriptions-input').fill('https://x.com/thsottiaux/status/2113162277688070445');await panel.locator('#subscriptions-add').click();
   await panel.waitForFunction(()=>document.querySelectorAll('.subscriptions-post').length===1);
   assert.equal(await panel.locator('#subscriptions-badge').isHidden(),true);
+  assert.equal(await panel.locator('#subscriptions-recommend-tibo').textContent(),'已订阅');assert.ok(await panel.locator('#subscriptions-recommend-tibo').isDisabled());
   assert.equal(await panel.locator('.subscriptions-post img').count(),0);
   assert.ok(!(JSON.stringify(await panel.evaluate(()=>window.whale.snapshot()))).includes('onerror=alert'));
   const pet=app.windows().find(page=>page.url().endsWith('/pet.html'));assert.ok(pet);
@@ -67,5 +72,10 @@ async function launch() {
   await panel.locator('#subscriptions-all').click();assert.equal(await panel.locator('.subscriptions-post').count(),1);
   await panel.getByRole('button',{name:'删除 @openai',exact:true}).click();
   await panel.getByRole('button',{name:'删除 @thsottiaux',exact:true}).click();assert.equal(await panel.locator('.subscriptions-account').count(),0);
+  assert.ok(await panel.locator('#subscriptions-recommend-tibo').isEnabled());
+  await panel.locator('#subscriptions-recommend-tibo').click();
+  await panel.waitForFunction(()=>document.querySelectorAll('.subscriptions-post').length===1);
+  assert.equal(await panel.locator('.subscriptions-account').count(),1);assert.ok(await panel.locator('#subscriptions-recommend-tibo').isDisabled());
+  await panel.getByRole('button',{name:'删除 @thsottiaux',exact:true}).click();assert.ok(await panel.locator('#subscriptions-recommend-tibo').isEnabled());
   assert.deepEqual(errors,[]);console.log('Subscriptions UI OK: link input, baseline, unread/read, filtering, pause, safe links/text, failure cache, clear/restart, delete, IPC and 860/1060px layout');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{if(app)await app.close();fs.rmSync(dir,{recursive:true,force:true});});

@@ -1,5 +1,8 @@
 /* 仅定义订阅页的排版；卡片、按钮、输入框和错误提示共用 components.css。 */
 .subscriptions-management { margin-bottom: 20px; }
+.subscriptions-recommendations { margin-bottom: 20px; }
+.subscriptions-recommendation { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; }
+.subscriptions-recommendation p { margin: 6px 0 0; font-size: var(--ui-font-small); color: var(--ui-text-muted); }
 .subscriptions-toolbar, .subscriptions-add, .subscriptions-feed-heading, .subscriptions-post-heading, .subscriptions-post-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .subscriptions-toolbar > span, .subscriptions-hint, #subscriptions-feedback, #subscriptions-account-status { color: var(--ui-text-muted); font-size: var(--ui-font-small); line-height: 1.7; }
 #subscriptions-feedback { color: var(--ui-accent); }
