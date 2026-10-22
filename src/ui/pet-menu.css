@@ -1,12 +1,10 @@
-:root{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;font-size:13px;color:#354e44;font-synthesis:none}
-*{box-sizing:border-box}
-body{margin:0;background:transparent;overflow:hidden;user-select:none}
-[hidden]{display:none!important}
-.pet-menu-panel{position:absolute;width:168px;padding:5px;background:#fafcf9fa;border:1px solid #d6e2d7;border-radius:12px;box-shadow:0 4px 12px #234b3526;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#b9ccbd transparent}
-.pet-menu-panel button{font:inherit;display:flex;align-items:center;gap:10px;width:100%;min-height:32px;padding:6px 9px;border:0;border-radius:7px;background:transparent;color:inherit;text-align:left;white-space:nowrap;cursor:default;outline:none}
-.pet-menu-panel button:hover,.pet-menu-panel button:focus-visible,.pet-menu-panel button[aria-expanded="true"]{background:#e1ede2;color:#276454}
-.pet-menu-panel button:disabled{color:#a6b3a8;background:transparent}
-.pet-menu-panel button:focus-visible{box-shadow:inset 0 0 0 1px #83ab95}
-.menu-icon{width:17px;flex:none;text-align:center;color:#779b82;font-size:17px;line-height:18px}
-.menu-arrow{margin-left:auto;color:#89a18d;font-size:16px;line-height:16px}
-.menu-separator{height:1px;background:#e0e8de;margin:5px 8px}
+@import url("components.css");
+
+body { background: transparent; overflow: hidden; user-select: none; }
+.pet-menu-panel { --ui-menu-item-padding: 6px 9px; position: absolute; width: 168px; padding: 5px; color: var(--ui-text); background: var(--ui-surface-soft); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-card); box-shadow: var(--ui-popup-shadow); overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--ui-border-control) transparent; }
+.pet-menu-panel button { justify-content: flex-start; min-height: 32px; white-space: nowrap; cursor: default; }
+.pet-menu-panel button:active { transform: none; }
+.pet-menu-panel button:disabled { background: transparent; }
+.menu-icon { width: 17px; flex: none; text-align: center; color: var(--ui-accent); font-size: 17px; line-height: 18px; }
+.menu-arrow { margin-left: auto; color: var(--ui-text-subtle); font-size: 16px; line-height: 16px; }
+.menu-separator { height: 1px; background: var(--ui-divider); margin: 5px 8px; }

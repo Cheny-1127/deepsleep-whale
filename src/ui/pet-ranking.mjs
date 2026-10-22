@@ -6,6 +6,7 @@ const group = document.getElementById('group');
 const picker = document.getElementById('group-picker');
 const groupButton = document.getElementById('group-button');
 const optionsBox = document.getElementById('group-options');
+const source = document.getElementById('source');
 function resize() {
   const card = document.querySelector('.ranking-card').getBoundingClientRect();
   if (picker.open) openHeight = Math.max(openHeight, picker.querySelector('.quota-group-menu').getBoundingClientRect().bottom);
@@ -49,8 +50,11 @@ async function render(action = 'snapshot', groupId) {
   refresh.setAttribute('aria-busy', String(action === 'refresh'));
   try {
     const data = action === 'select' ? await window.ranking.selectGroup(groupId) : await window.ranking[action]();
+    // 共用弹窗切换账号后，旧请求即使迟到也不能覆盖新账号的来源和榜单。
     if(stamp !== generation)return;
     latest = data;
+    source.textContent = `${data.source.configName} · ${data.source.accountName}`;
+    source.title = source.textContent;
     checkedAt = data.checkedAt;
     busy = data.busy === true;
     group.textContent = data.groupId === null ? '全部分组' : data.groupName;
@@ -104,4 +108,8 @@ document.addEventListener('visibilitychange', () => void render());
 setInterval(() => void render(), 5000);
 void render();
 
-window.ranking.onOpen(() => {generation++;picker.open = false;if(polling)reopen=true;else void render();});
+window.ranking.onOpen(() => {
+  // 每次打开先清除旧来源；正在读取时只安排一次补读，避免沿用上一个账号的标识。
+  generation++;source.textContent = '正在读取…';source.title = '';picker.open = false;
+  if(polling)reopen=true;else void render();
+});

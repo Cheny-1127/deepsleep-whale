@@ -1,6 +1,6 @@
 const $=id=>document.getElementById('wechat-'+id);
 const statuses={disconnected:'未连接','logging-in':'正在扫码',connecting:'连接中',connected:'已连接',reconnecting:'正在重连',paused:'已暂停',expired:'登录失效',error:'连接异常'};
-const jobs={queued:'排队中',running:'排查中',approval:'等待审批',question:'等待回答',completed:'已完成',failed:'未完成',interrupted:'已中断',cancelled:'已取消'};
+const jobs={queued:'排队中',running:'排查中',recovering:'恢复跟踪中',approval:'等待审批',question:'等待回答',completed:'已完成',failed:'未完成',interrupted:'已中断',cancelled:'已取消'};
 export function createWechatView() {
   if(!$('view'))return {render(){}};
   let latest,dirty=false,busy=false,rowsKey='',jobsKey='',selectedChat='',openTask='',detailVersion=0,clientKey='',draft=[];
@@ -212,7 +212,7 @@ export function createWechatView() {
     $('forget').hidden=!data.account&&!data.error;
     for(const button of $('view').querySelectorAll('button'))button.disabled=busy||button.dataset.edge==='true';
     $('login').disabled=busy||!data.storageAvailable||Boolean(data.qr)||Boolean(data.active);
-    const locked=busy||Boolean(data.active)||data.jobs.some(job=>job.state==='queued');
+    const locked=busy||Boolean(data.active)||data.jobs.some(job=>['queued','recovering'].includes(job.state));
     for(const input of $('settings').querySelectorAll('input,select,button'))input.disabled=locked||input.dataset.edge==='true';
     $('check').disabled=busy;
     $('add-codex').disabled=locked||draft.length>=12;$('add-cursor').disabled=locked||draft.length>=12;

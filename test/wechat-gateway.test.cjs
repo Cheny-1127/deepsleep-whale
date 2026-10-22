@@ -561,3 +561,87 @@ test('explicit chats next reopens the chat menu so zero retries cannot become mo
   await h.login();h.push(h.message('list','/chats'),h.message('select','1'),h.message('fail','/chats next'));await until(()=>h.sent.length===3);assert.match(h.sent[2].text,/查询失败/);
   h.push(h.message('retry','0'));await until(()=>h.sent.length===4);assert.match(h.sent[3].text,/最终对话/);assert.equal(h.runs.length,0);
 });
+
+function recoveringState(overrides={}) {
+  const state=fresh();state.enabled=true;state.account={id:'bot',token:'private-token',owner:'owner'};state.allowed=['owner'];state.contexts.owner='saved-context';
+  state.jobs=[{id:'recover-job',sender:'owner',state:'running',startedAt:Date.now()-1000,exchange:{request:'只执行一次'},
+    route:{clientId:state.clients[0].id,settings:{backend:'codex',cwd:process.cwd(),binary:'',configHome:'',profile:''},threadId:'original-thread',transport:'desktop'},
+    checkpoint:{messageId:'original-message',turnId:'original-turn',submitted:true},...overrides}];return state;
+}
+test('restart restores a saved desktop watcher and delivers its result without resubmitting the request',async t=>{
+  const initial=recoveringState(),h=harness(t,initial);h.gateway.start();await until(()=>h.runs.length===1);
+  const run=h.runs[0];assert.equal(run.options.recovering,true);assert.equal(run.options.text,undefined);
+  assert.deepEqual(run.options.checkpoint,initial.jobs[0].checkpoint);assert.equal(run.options.session,'original-thread');
+  assert.equal(h.saved.jobs[0].startedAt,initial.jobs[0].startedAt);assert.equal(h.gateway.snapshot().jobs[0].state,'recovering');
+  run.options.onCheckpoint(initial.jobs[0].checkpoint);assert.equal(h.gateway.snapshot().jobs[0].state,'running');
+  run.resolve('原任务最终结果');await until(()=>h.sent.length===1);assert.equal(h.sent[0].text,'原任务最终结果');
+  assert.equal(h.saved.jobs[0].delivery,'sent');assert.equal(h.saved.jobs[0].state,'completed');
+  assert.ok(!JSON.stringify(h.gateway.snapshot()).includes('original-message'));
+});
+test('restart notices for untraceable and queued tasks survive delivery failures without replay or duplicate notices',async t=>{
+  for(const kind of ['legacy','queued','local'])await t.test(kind,async t=>{
+    const initial=recoveringState();if(kind==='legacy')delete initial.jobs[0].checkpoint;
+    if(kind==='queued')initial.jobs[0].state='queued';if(kind==='local')initial.jobs[0].route.transport='local';
+    const h=harness(t,initial);h.sendError=Error('offline');h.gateway.start();await until(()=>h.saved.outbox.length===1);
+    const id=h.saved.outbox[0].id;assert.equal(h.runs.length,0);assert.equal(h.saved.jobs[0].state,'interrupted');assert.match(h.saved.outbox[0].parts.join(''),/重启|中断/);
+    h.gateway.close();const reboot=harness(t,h.saved);reboot.gateway.start();await until(()=>reboot.sent.length===1);
+    assert.equal(reboot.sent[0].id,id+'-0');assert.equal(reboot.runs.length,0);assert.equal(reboot.saved.jobs[0].delivery,'sent');
+    reboot.gateway.close();const again=harness(t,reboot.saved);again.gateway.start();await tick();assert.equal(again.sent.length,0);assert.equal(again.runs.length,0);
+  });
+});
+test('recovery failure explicitly reports interrupted or unknown execution and never retries execution',async t=>{
+  for(const code of ['TURN_INTERRUPTED','RECOVERY_UNKNOWN'])await t.test(code,async t=>{
+    const h=harness(t,recoveringState());h.gateway.start();await until(()=>h.runs.length===1);h.runs[0].reject(new AgentError(code,'desktop'));
+    await until(()=>h.sent.length===1);assert.equal(h.saved.jobs[0].state,'interrupted');assert.match(h.sent[0].text,/中断/);assert.match(h.sent[0].text,/不会自动重新执行/);assert.equal(h.runs.length,1);
+  });
+});
+test('shutdown detaches desktop watching before clearing interactions and ignores late completion',async t=>{
+  const h=harness(t,recoveringState());h.gateway.start();await until(()=>h.runs.length===1);const run=h.runs[0];
+  run.detach=()=>{run.detached=true;};h.gateway.close();assert.equal(run.detached,true);assert.equal(run.cancelled,undefined);
+  run.resolve('关闭后迟到的结果');await tick();assert.equal(h.saved.jobs[0].state,'recovering');assert.equal(h.saved.outbox.length,0);assert.equal(h.sent.length,0);
+});
+test('restart recovers a stored completed reply whose pending outbox is missing without starting an agent',async t=>{
+  const h=harness(t,recoveringState({state:'completed',delivery:'pending',exchange:{request:'原问题',response:'已保存的结果'}}));
+  h.gateway.start();await until(()=>h.sent.length===1);assert.equal(h.sent[0].text,'已保存的结果');assert.equal(h.runs.length,0);assert.equal(h.saved.jobs[0].delivery,'sent');
+});
+test('revoked senders cannot receive restart notices or have their desktop work recovered',async t=>{
+  for(const checkpoint of [undefined,{messageId:'saved',turnId:'turn',submitted:true}]) {
+    const state=recoveringState({checkpoint});state.allowed=[];const h=harness(t,state);h.gateway.start();await tick();
+    assert.equal(h.runs.length,0);assert.equal(h.sent.length,0);assert.equal(h.saved.outbox.length,0);
+  }
+});
+
+test('restarted pending questions are discarded and only the revalidated live question can be answered',async t=>{
+  const initial=recoveringState({state:'question'});initial.outbox=[{id:'stale',sender:'owner',parts:['失效的问题'],index:0,questionId:'stale-question'}];
+  const h=harness(t,initial);h.gateway.start();await until(()=>h.runs.length===1);
+  assert.equal(h.sent.length,0);assert.equal(h.saved.outbox.length,0);
+  h.runs[0].options.onCheckpoint(initial.jobs[0].checkpoint);
+  const answer=h.runs[0].options.onUserInput({questions:[{id:'current',question:'仍有效的问题',options:[]}]});
+  await until(()=>h.sent.length===1);assert.match(h.sent[0].text,/仍有效的问题/);assert.ok(!h.sent[0].text.includes('失效'));
+  h.push(h.message('answer','继续'));assert.deepEqual(await answer,{answers:{current:{answers:['继续']}}});assert.equal(h.runs.length,1);
+  h.runs[0].resolve('完成');await until(()=>h.saved.jobs[0].state==='completed');
+});
+test('a full delivery queue retains restart notices and emits them after capacity becomes available',async t=>{
+  const state=recoveringState({checkpoint:undefined});state.allowed.push('other');
+  state.outbox=Array.from({length:100},(_,i)=>({id:'existing-'+i,sender:'other',parts:['已有消息'],index:0}));
+  const h=harness(t,state);h.sendError=Error('offline');h.gateway.start();await until(()=>h.gateway.snapshot().status==='connected');
+  assert.equal(h.saved.jobs[0].recoveryNotice,true);assert.equal(h.saved.outbox.length,100);assert.equal(h.runs.length,0);
+  await h.gateway.action('remove-user','other');h.sendError=null;await h.gateway.action('retry');
+  await until(()=>h.sent.length===1);assert.equal(h.sent[0].sender,'owner');assert.match(h.sent[0].text,/重启/);assert.equal(h.saved.jobs[0].delivery,'sent');
+});
+test('reconnecting discards old approvals and only accepts a newly validated approval token',async t=>{
+  const h=harness(t);await h.login();h.push(h.message('task','检查'));await until(()=>h.runs.length===1);
+  h.sendError=Error('offline');const first=h.runs[0].options.onApproval({kind:'command',detail:'pwd',cwd:process.cwd()});
+  await until(()=>h.saved.outbox.some(item=>item.parts[0].includes('/allow ')));
+  const stale=h.saved.outbox.find(item=>item.parts[0].includes('/allow ')).parts[0].match(/\/allow ([\w-]+)/)[1];
+  h.runs[0].options.onRecovering();
+  assert.equal(h.saved.jobs[0].state,'recovering');assert.equal(h.saved.outbox.some(item=>item.parts[0].includes('/allow '+stale)),false);
+  assert.equal(await first,false);
+  h.runs[0].options.onCheckpoint({messageId:'submitted',turnId:'own-turn',submitted:true});
+  const second=h.runs[0].options.onApproval({kind:'command',detail:'pwd',cwd:process.cwd()});
+  await until(()=>h.saved.outbox.some(item=>item.parts[0].includes('/allow ')));
+  const current=h.saved.outbox.find(item=>item.parts[0].includes('/allow ')).parts[0].match(/\/allow ([\w-]+)/)[1];
+  assert.notEqual(stale,current);h.push(h.message('stale','/allow '+stale));await until(()=>h.saved.seen.includes('stale'));
+  assert.equal(h.saved.jobs[0].state,'approval');h.push(h.message('current','/allow '+current));assert.equal(await second,true);
+  h.runs[0].resolve('完成');await until(()=>!h.gateway.snapshot().active);
+});

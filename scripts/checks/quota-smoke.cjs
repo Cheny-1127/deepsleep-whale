@@ -462,19 +462,44 @@ let app;
   await panel.locator('#quota-group-selected').waitFor();
   await panel.waitForFunction(()=>document.getElementById('quota-group-selected').textContent==='OpenAI');
   const independent=await state();assert.equal(independent.ranking.groupId,11);assert.equal(independent.extraTrackings[0].ranking.groupId,14);assert.equal(independent.extraTrackings[1].ranking.groupId,null);
-  await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().find(win=>win.webContents.getURL().endsWith('/pet.html')).show());
+  await app.evaluate(({BrowserWindow,screen})=>{
+    const win=BrowserWindow.getAllWindows().find(win=>win.webContents.getURL().endsWith('/pet.html')),area=screen.getDisplayMatching(win.getBounds()).workArea;
+    win.setPosition(area.x+Math.round(area.width/2),area.y+Math.min(160,Math.max(0,area.height-win.getBounds().height-30)));win.show();
+  });
   await bar(3).waitFor();
   const rankingWindow=app.waitForEvent('window');await bar(2).locator('[data-field="ranking"]').click();const ranking=await rankingWindow;
+  async function rankingPlacement(target) {
+    for(let i=0;i<100;i++) {
+      const rect=await target.boundingBox(),bounds=await app.evaluate(({BrowserWindow,screen})=>{
+        const windows=BrowserWindow.getAllWindows(),pet=windows.find(win=>win.webContents.getURL().endsWith('/pet.html')),popup=windows.find(win=>win.webContents.getURL().endsWith('/pet-ranking.html'));
+        return {pet:pet.getContentBounds(),popup:popup.getBounds(),area:screen.getDisplayMatching(pet.getBounds()).workArea};
+      });
+      const {pet,popup,area}=bounds,anchorBottom=pet.y+rect.y+rect.height;
+      if(Math.abs(popup.y+popup.height-anchorBottom)<=1) {
+        assert.ok(popup.x>=area.x&&popup.y>=area.y&&popup.x+popup.width<=area.x+area.width&&popup.y+popup.height<=area.y+area.height,'榜单留在当前屏幕内');
+        return popup.y+popup.height;
+      }
+      await new Promise(resolve=>setTimeout(resolve,20));
+    }
+    assert.fail('榜单没有对齐被点击的账号条');
+  }
   await ranking.waitForFunction(()=>document.getElementById('group').textContent==='zzz-agent-group');
   await ranking.waitForSelector('#users li');
+  assert.equal(await ranking.locator('#source').textContent(),'流量跟踪配置-2 · another-account');
+  const secondaryBottom=await rankingPlacement(bar(2));
   assert.equal(await ranking.locator('#users li').first().locator('.name').textContent(),'user-one@example.test');
   await ranking.getByLabel('消费榜分组',{exact:true}).click();await ranking.getByRole('option',{name:'yuchaoyuan-group',exact:true}).click();
   await ranking.waitForFunction(()=>document.getElementById('group').textContent==='yuchaoyuan-group'&&!document.getElementById('refresh').disabled);
   assert.equal((await state()).settings.trackingConfigs[0].groupId,13);assert.equal((await state()).ranking.groupId,11);
   await ranking.keyboard.press('Escape');
   await bar(3).locator('[data-field="ranking"]').click();await ranking.waitForFunction(()=>document.getElementById('group').textContent==='全部分组');
+  assert.equal(await ranking.locator('#source').textContent(),'流量跟踪配置-3 · 暂不跟踪');
+  const thirdBottom=await rankingPlacement(bar(3));assert.ok(thirdBottom>secondaryBottom,'副条榜单随各条位置向下移动');
+  await ranking.screenshot({path:'/tmp/whale-pet-ranking-multi.png'});
   await ranking.keyboard.press('Escape');
   await pet.locator('#pet-ranking-button').click();await ranking.waitForFunction(()=>document.getElementById('group').textContent==='OpenAI');
+  assert.equal(await ranking.locator('#source').textContent(),'流量跟踪配置 · test-codex-account');
+  assert.ok(await rankingPlacement(pet.locator('#pet-quota-controls'))<secondaryBottom,'主条榜单独立对齐主条');
   await ranking.keyboard.press('Escape');
   assert.match((await pet.evaluate(()=>window.whale.petQuota('choose-account',3))).error,/占用/,'没有空闲账号时提示占用');
   await panel.evaluate(()=>window.whale.petQuota('update-config',{id:2,patch:{accountId:null}}));
@@ -529,7 +554,18 @@ let app;
   assert.deepEqual(restored.settings.trackingConfigs.map(item=>item.id),[3,4]);assert.equal(restored.settings.trackingConfigs[0].groupId,null);
   assert.equal(restored.extraTrackings[0].tracking.accountId,6);assert.equal(restored.extraTrackings[1].tracking.accountId,null);assert.equal(restored.ranking.groupId,11);
   assert.equal(await panel.locator('#quota-pet-title').textContent(),'流量跟踪配置');assert.deepEqual(errors,[]);
-  console.log('Multiple tracking UI OK: exclusive saved and temporary accounts, unrestricted primary, conflict clearing, independent groups, copy/delete, per-account refresh and restart');
+  // 三条副本封顶，主配置与副配置的复制入口统一禁用；删除后恢复入口。
+  await panel.locator('#quota-pet-copy').click();await card(5).waitFor();
+  await panel.waitForFunction(()=>document.getElementById('quota-pet-copy').disabled&&document.querySelectorAll('.quota-pet-card [data-field="copy"]:disabled').length===3);
+  assert.match(await panel.locator('#quota-pet-copy').getAttribute('title'),/最多只能创建 3 条副配置/);
+  for(const id of ['primary',3,4,5])assert.match((await panel.evaluate(id=>window.whale.petQuota('copy-config',id),id)).error,/最多只能创建 3 条副配置/);
+  assert.equal((await state()).settings.trackingConfigs.length,3,'直接 IPC 也不能创建第四条副本');
+  await field(5,'delete').click();await card(5).waitFor({state:'detached'});
+  await panel.waitForFunction(()=>!document.getElementById('quota-pet-copy').disabled&&document.querySelectorAll('.quota-pet-card [data-field="copy"]:disabled').length===0);
+  await field(4,'copy').click();await card(6).waitFor();
+  assert.deepEqual((await state()).settings.trackingConfigs.map(config=>config.id),[3,4,6],'删除后可重新复制，编号不复用');
+  assert.deepEqual(errors,[]);
+  console.log('Multiple tracking UI OK: exclusive saved and temporary accounts, unrestricted primary, conflict clearing, independent groups, copy/delete, per-account refresh, restart and three-copy limit');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{
   if(app)await app.close();
   fs.rmSync(dir,{recursive:true,force:true});

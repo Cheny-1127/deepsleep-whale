@@ -1,0 +1,36 @@
+/* 统一调整配色、字号和尺寸的入口；页面只覆盖布局或紧凑尺寸，不另写同类控件外观。 */
+:root {
+  --ui-font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+  --ui-font-body: 13px;
+  --ui-font-control: 12px;
+  --ui-font-small: 11px;
+  --ui-font-caption: 10px;
+  --ui-text-strong: #243b3b;
+  --ui-text: #43564d;
+  --ui-text-muted: #60766b;
+  --ui-text-subtle: #85928b;
+  --ui-accent: #326e5c;
+  --ui-accent-hover: #265b4b;
+  --ui-on-accent: #fff;
+  --ui-canvas: #f5f7f4;
+  --ui-surface: #fff;
+  --ui-surface-soft: #fafbf9;
+  --ui-hover: #f3f6f3;
+  --ui-selected: #e5f0e7;
+  --ui-border: #dce5de;
+  --ui-border-control: #d6dfd8;
+  --ui-divider: #e9eee7;
+  --ui-focus: #6bbcb3;
+  --ui-danger: #a52e34;
+  --ui-danger-surface: #fff0ec;
+  --ui-radius-control: 8px;
+  --ui-radius-card: 12px;
+  --ui-radius-menu: 10px;
+  --ui-control-height: 38px;
+  --ui-control-padding: 8px 12px;
+  --ui-icon-size: 28px;
+  --ui-icon-padding: 4px;
+  --ui-card-padding: 20px;
+  --ui-popup-shadow: 0 8px 24px #243b3b24;
+  --ui-disabled-opacity: .5;
+}

@@ -1,0 +1,82 @@
+@import url("tokens.css");
+@import url("quota-picker.css");
+
+/* 所有窗口引用这一层；业务样式保留排列、宽度和内容专属的颜色。 */
+:root { font-family: var(--ui-font-family); font-size: var(--ui-font-body); color: var(--ui-text-strong); font-synthesis: none; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+[hidden] { display: none !important; }
+:where(button, input, select, textarea) { font: inherit; }
+button { border: 0; background: transparent; color: inherit; cursor: pointer; transition: background .15s, color .15s, transform .15s; }
+button:active { transform: translateY(1px); }
+button:disabled { cursor: default; opacity: var(--ui-disabled-opacity); }
+button:focus-visible, summary:focus-visible, .pet-art:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+input[type="checkbox"], input[type="radio"] { accent-color: var(--ui-accent); }
+
+.ui-card { padding: var(--ui-card-padding); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-card); background: var(--ui-surface); }
+.primary, .outline, .soft, .ui-select-trigger, .quota-group-picker > summary {
+  min-height: var(--ui-control-height);
+  padding: var(--ui-control-padding);
+  border: 1px solid var(--ui-border-control);
+  border-radius: var(--ui-radius-control);
+  font-size: var(--ui-font-control);
+  line-height: 20px;
+  color: var(--ui-text-muted);
+  background: var(--ui-surface);
+}
+.primary { border-color: transparent; background: var(--ui-accent); color: var(--ui-on-accent); }
+.primary:hover:not(:disabled) { background: var(--ui-accent-hover); }
+.outline:hover:not(:disabled), .soft:hover:not(:disabled), .ui-select-trigger:hover, .quota-group-picker > summary:hover { background: var(--ui-hover); }
+.soft { background: var(--ui-selected); color: var(--ui-accent); }
+
+/* 原生下拉框与自绘下拉框使用同一尺寸、边框和字号；复选框与开关不套用输入框外观。 */
+:where(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="hidden"]), select, textarea) {
+  min-height: var(--ui-control-height);
+  padding: var(--ui-control-padding);
+  border: 1px solid var(--ui-border-control);
+  border-radius: var(--ui-radius-control);
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  font-size: var(--ui-font-control);
+  line-height: 20px;
+}
+:where(input, select, textarea):focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+:where(input, select, textarea):disabled { opacity: var(--ui-disabled-opacity); }
+
+.ui-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--ui-icon-size);
+  height: var(--ui-icon-size);
+  padding: var(--ui-icon-padding);
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-muted);
+  background: transparent;
+  line-height: 1;
+}
+.ui-icon-button:hover:not(:disabled) { background: var(--ui-hover); }
+.ui-icon-button[aria-busy="true"] svg { animation: ui-spin 1s linear infinite; }
+@keyframes ui-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .ui-icon-button[aria-busy="true"] svg { animation: none; } }
+
+.ui-menu-item, .quota-picker-options button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: var(--ui-menu-item-padding, 9px 12px);
+  border-radius: var(--ui-radius-control);
+  background: transparent;
+  color: var(--ui-text);
+  text-align: left;
+  font-size: var(--ui-font-control);
+  line-height: 18px;
+}
+.ui-menu-item:hover:not(:disabled), .ui-menu-item:focus-visible, .ui-menu-item[aria-expanded="true"],
+.quota-picker-options button:hover:not(:disabled), .quota-picker-options button:focus-visible { background: var(--ui-hover); }
+.ui-menu-item[aria-selected="true"], .ui-menu-item[aria-checked="true"], .quota-picker-options button[aria-selected="true"] { background: var(--ui-selected); color: var(--ui-accent); }
+.ui-menu-item:focus-visible, .quota-picker-options button:focus-visible { outline-offset: -2px; }
+.ui-alert { padding: 12px; border-radius: var(--ui-radius-control); background: var(--ui-danger-surface); color: var(--ui-danger); font-size: var(--ui-font-small); line-height: 1.7; overflow-wrap: anywhere; }

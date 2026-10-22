@@ -144,3 +144,101 @@ test('waiting timeout does not interrupt somebody elses desktop turn, and reject
   assert.equal(first.desktop.wire.some(m=>m.method==='thread-follower-interrupt-turn'||m.method==='thread-follower-start-turn'),false);
   const second=await setup(t);await assert.rejects(second.run({text:'desktop-rejected'}).promise,e=>e.code==='DELIVERY_UNKNOWN'&&!e.message.includes('private-api-key')&&!e.message.includes('private.example'));
 });
+
+test('persists the submission identity before sending and the server turn ID before completing',async t=>{
+  const {desktop,run}=await setup(t),checkpoints=[];
+  const task=run({timeoutMs:200,onCheckpoint:checkpoint=>{
+    if(checkpoint.submitted&&!checkpoint.turnId)assert.equal(desktop.wire.some(m=>m.method==='thread-follower-start-turn'),false);
+    checkpoints.push(structuredClone(checkpoint));
+  }});
+  await until(()=>desktop.wire.some(m=>m.method==='thread-follower-start-turn'));
+  desktop.complete();await task.promise;
+  const request=desktop.wire.find(m=>m.method==='thread-follower-start-turn');
+  assert.ok(checkpoints.some(x=>x.messageId===request.params.turnStart.request.clientUserMessageId&&x.submitted&&!x.turnId));
+  assert.deepEqual(checkpoints.at(-1),{messageId:request.params.turnStart.request.clientUserMessageId,submitted:true,turnId:'forwarded-turn'});
+});
+test('checkpoint save failure prevents desktop submission',async t=>{
+  const {desktop,run}=await setup(t);
+  await assert.rejects(run({timeoutMs:200,onCheckpoint:()=>{throw Error('private storage error');}}).promise,e=>e.code==='TRACKING_STORE'&&!e.message.includes('private'));
+  assert.equal(desktop.wire.some(m=>m.method==='thread-follower-start-turn'),false);
+});
+test('restart reads only the saved completed turn even when a later turn exists',async t=>{
+  const {desktop,run}=await setup(t);
+  desktop.state.turnHistory.history.entitiesByKey.recovered={turnId:'saved-turn',status:'completed',params:{clientUserMessageId:'saved-message'},items:[{type:'agentMessage',phase:'commentary',text:'不发进度'},{type:'agentMessage',phase:'final_answer',text:'原任务完整结果'}]};
+  desktop.state.turnHistory.history.entitiesByKey.current={turnId:'later-turn',status:'completed',params:{clientUserMessageId:'later-message'},items:[{type:'agentMessage',phase:'final_answer',text:'不要转发后续对话'}]};
+  const result=await run({timeoutMs:200,recovering:true,checkpoint:{messageId:'saved-message',turnId:'saved-turn',submitted:true}}).promise;
+  assert.equal(result.text,'原任务完整结果');assert.equal(desktop.wire.some(m=>m.method==='thread-follower-start-turn'),false);
+});
+test('recovery can correlate an accepted message whose start response was lost and continue watching it',async t=>{
+  const {desktop,run}=await setup(t),checkpoints=[];
+  desktop.state.turnHistory.history.entitiesByKey.current={turnId:'accepted-turn',status:'inProgress',params:{clientUserMessageId:'saved-message'},items:[]};desktop.state.threadRuntimeStatus.type='active';
+  const task=run({timeoutMs:200,recovering:true,checkpoint:{messageId:'saved-message',turnId:'',submitted:true},onCheckpoint:value=>checkpoints.push(value)});
+  await until(()=>checkpoints.some(x=>x.turnId==='accepted-turn'));
+  assert.equal(desktop.wire.some(m=>m.method==='thread-follower-start-turn'),false);
+  desktop.complete('后来完成');assert.equal((await task.promise).text,'后来完成');
+});
+test('unknown, conflicting and interrupted recovered turns never submit or interrupt work',async t=>{
+  for(const kind of ['missing','conflicting','interrupted','unsubmitted'])await t.test(kind,async t=>{
+    const {desktop,run}=await setup(t);
+    desktop.state.turnHistory.history.entitiesByKey.current={turnId:kind==='conflicting'?'different-turn':'saved-turn',status:kind==='interrupted'?'interrupted':'completed',params:{clientUserMessageId:kind==='missing'?'unrelated':'saved-message'},items:[]};
+    const checkpoint={messageId:'saved-message',turnId:kind==='missing'?'absent':'saved-turn',submitted:kind!=='unsubmitted'};
+    await assert.rejects(run({timeoutMs:200,recovering:true,checkpoint}).promise,e=>e.code===(kind==='interrupted'?'TURN_INTERRUPTED':kind==='conflicting'?'DESKTOP_PROTOCOL':'RECOVERY_UNKNOWN'));
+    assert.equal(desktop.wire.some(m=>['thread-follower-start-turn','thread-follower-interrupt-turn'].includes(m.method)),false);
+  });
+});
+test('detaching for shutdown preserves the desktop turn for recovery',async t=>{
+  const {desktop,run}=await setup(t),task=run();
+  await until(()=>desktop.wire.some(m=>m.method==='thread-follower-start-turn'));
+  assert.equal(typeof task.detach,'function');task.detach();await assert.rejects(task.promise,e=>e.code==='DELIVERY_UNKNOWN');
+  assert.equal(desktop.wire.some(m=>m.method==='thread-follower-interrupt-turn'),false);
+});
+test('recovery timeout releases tracking without interrupting the original desktop turn',async t=>{
+  const {desktop,run}=await setup(t);
+  desktop.state.turnHistory.history.entitiesByKey.current={turnId:'saved-turn',status:'inProgress',params:{clientUserMessageId:'saved-message'},items:[]};desktop.state.threadRuntimeStatus.type='active';
+  await assert.rejects(run({recovering:true,checkpoint:{messageId:'saved-message',turnId:'saved-turn',submitted:true},timeoutMs:40}).promise,e=>e.code==='RECOVERY_UNKNOWN');
+  assert.equal(desktop.wire.some(m=>m.method==='thread-follower-interrupt-turn'),false);
+});
+test('temporary disconnect restores the same desktop result without resubmitting text',async t=>{
+  const {desktop}=await setup(t),home=path.dirname(path.dirname(desktop.socketPath));
+  const task=startWechatAgent({settings:{backend:'codex',cwd:fs.realpathSync(home),configHome:home},session:'desktop-fixture',transport:'desktop',text:'一次执行',timeoutMs:500,retryDelayMs:5,reconnectTimeoutMs:200});
+  await until(()=>desktop.wire.some(m=>m.method==='thread-follower-start-turn'));
+  for(const socket of desktop.connections)socket.destroy();desktop.complete('断线期间完成');
+  assert.equal((await task.promise).text,'断线期间完成');
+  assert.equal(desktop.wire.filter(m=>m.method==='thread-follower-start-turn').length,1);
+  assert.ok(desktop.wire.filter(m=>m.params?.following===true).length>=2);
+});
+
+test('recovery can be cancelled before validation without interrupting a saved or unrelated turn',async t=>{
+  const {desktop,run}=await setup(t);
+  const task=run({recovering:true,checkpoint:{messageId:'saved-message',turnId:'saved-turn',submitted:true}});task.cancel();
+  await assert.rejects(task.promise,e=>e.code==='CANCELLED');
+  assert.equal(desktop.wire.some(m=>m.method==='thread-follower-interrupt-turn'),false);
+});
+test('repeated connection failures are bounded and never resend an already submitted desktop message',async t=>{
+  const {desktop}=await setup(t),home=path.dirname(path.dirname(desktop.socketPath));
+  const task=startWechatAgent({settings:{backend:'codex',cwd:fs.realpathSync(home),configHome:home},session:'desktop-fixture',transport:'desktop',text:'只发一次',timeoutMs:400,retryDelayMs:5,reconnectTimeoutMs:35});
+  await until(()=>desktop.wire.some(m=>m.method==='thread-follower-start-turn'));
+  await desktop.close();await assert.rejects(task.promise,e=>e.code==='RECOVERY_UNKNOWN');
+  assert.equal(desktop.wire.filter(m=>m.method==='thread-follower-start-turn').length,1);
+});
+test('a recovery connection that never responds also expires within the reconnect window',async t=>{
+  const net=require('node:net'),{once}=require('node:events'),home=fs.mkdtempSync('/tmp/whale-stalled-');
+  t.after(()=>fs.rmSync(home,{recursive:true,force:true}));fs.mkdirSync(path.join(home,'ipc'),{mode:0o700});
+  const sockets=new Set(),server=net.createServer(socket=>{sockets.add(socket);socket.on('error',()=>{});});
+  const socketPath=path.join(home,'ipc/ipc.sock');server.listen(socketPath);await once(server,'listening');fs.chmodSync(socketPath,0o600);
+  t.after(async()=>{for(const socket of sockets)socket.destroy();await new Promise(resolve=>server.close(resolve));});
+  const task=startWechatAgent({settings:{backend:'codex',cwd:fs.realpathSync(home),configHome:home},session:'desktop-fixture',transport:'desktop',recovering:true,
+    checkpoint:{messageId:'saved-message',turnId:'saved-turn',submitted:true},timeoutMs:500,reconnectTimeoutMs:35});
+  const started=Date.now();await assert.rejects(task.promise,e=>e.code==='RECOVERY_UNKNOWN');
+  assert.ok(Date.now()-started<300,'a silent connection must not wait for the full task deadline');
+});
+test('recovered questions are revalidated against the original live request before returning an answer',async t=>{
+  const {desktop,run}=await setup(t);let answer;
+  desktop.state.turnHistory.history.entitiesByKey.current={turnId:'saved-turn',status:'inProgress',params:{clientUserMessageId:'saved-message'},items:[]};desktop.state.threadRuntimeStatus.type='active';
+  desktop.state.requests=[{id:'live-question',method:'item/tool/requestUserInput',params:{threadId:'desktop-fixture',turnId:'saved-turn',questions:[{id:'mode',question:'仍在等待的问题'}]}}];
+  const task=run({recovering:true,checkpoint:{messageId:'saved-message',turnId:'saved-turn',submitted:true},onUserInput:()=>new Promise(resolve=>{answer=resolve;})});
+  await until(()=>answer);assert.equal(desktop.wire.some(m=>m.method==='thread-follower-submit-user-input'),false);
+  answer({answers:{mode:{answers:['继续']}}});await until(()=>desktop.wire.some(m=>m.method==='thread-follower-submit-user-input'));
+  const request=desktop.wire.find(m=>m.method==='thread-follower-submit-user-input');assert.equal(request.params.requestId,'live-question');assert.equal(request.targetClientId,'desktop-owner');
+  desktop.complete();await task.promise;assert.equal(desktop.wire.some(m=>m.method==='thread-follower-start-turn'),false);
+});

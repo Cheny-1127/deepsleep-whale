@@ -82,7 +82,10 @@ export function createPetQuotaSettingsView() {
     document.getElementById('quota-accounts-body').hidden=!data.settings.accountsExpanded;
     document.getElementById('quota-account-tools').hidden=!data.settings.accountsExpanded;
     for(const card of cards.values()) {
-      const config=configFor(card);card.get('copy').disabled=saving;
+      // 主配置不占副本名额；所有复制入口共用同一上限，删除后由快照统一恢复。
+      const config=configFor(card), copyLimitReached=configs.length>=3;
+      card.get('copy').disabled=saving||copyLimitReached;
+      card.get('copy').title=copyLimitReached ? '最多只能创建 3 条副配置，请先删除已有副配置' : card.id==='primary' ? '复制流量跟踪配置' : `复制流量跟踪配置-${card.id}`;
       if(card.id!=='primary') {
         // 主配置抢占后立即同步副账号；只丢弃冲突的账号草稿，保留阈值和分组草稿。
         if(card.baseline)card.baseline.accountId=config.accountId;

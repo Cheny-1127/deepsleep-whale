@@ -151,6 +151,23 @@ test('multiple configs have stable IDs and independent temporary accounts, thres
   assert.equal(restored.snapshot().extraTrackings[0].tracking.accountId,7,'重启恢复保存账号');
 });
 
+test('copy allows three secondary configs, rejects every source at the limit and resumes after deletion', t => {
+  const f=fixture(t);
+  const options={settings:f.settings,quota:{snapshot:()=>({accounts:[]})},
+    groups:{snapshot:()=>({groupId:13}),dailySnapshot:()=>({groups:[],users:[],groupId:13})}};
+  const service=createPetQuota(options);
+  service.copyConfig();service.copyConfig(2);service.copyConfig(3);
+  assert.deepEqual(f.settings.snapshot().trackingConfigs.map(config=>config.id),[2,3,4]);
+  const saved=fs.readFileSync(path.join(f.dir,'pet-quota-settings.json'),'utf8');
+  for(const id of ['primary',2,3,4])assert.throws(()=>service.copyConfig(id),/最多只能创建 3 条副配置/);
+  assert.equal(fs.readFileSync(path.join(f.dir,'pet-quota-settings.json'),'utf8'),saved);
+  const restarted=createPetQuota({...options,settings:createPetQuotaSettings({dataDir:f.dir})});
+  assert.throws(()=>restarted.copyConfig(),/最多只能创建 3 条副配置/);
+  service.deleteConfig(3);service.copyConfig(4);
+  assert.deepEqual(f.settings.snapshot().trackingConfigs.map(config=>config.id),[2,4,5]);
+  assert.equal(f.settings.snapshot().nextConfigId,6);
+});
+
 test('refresh status and errors follow the tracked account including temporary secondary selections', t => {
   const f=fixture(t);f.settings.update({accountId:5});
   const data={accounts:[{id:5},{id:6}],busy:true,refreshingAccountIds:[6],accountRefreshErrors:{6:'读取账号额度失败'}};
@@ -162,6 +179,17 @@ test('refresh status and errors follow the tracked account including temporary s
   assert.equal(value.extraTrackings[1].tracking.busy,false);
   service.updateConfig(2,{accountId:null});service.selectAccount(6,3);value=service.snapshot();
   assert.equal(value.extraTrackings[1].tracking.busy,true);assert.match(value.extraTrackings[1].tracking.error,/失败/);
+});
+test('ranking identifies its source config and effective temporary account without exposing account details', t => {
+  const f=fixture(t);f.settings.update({accountId:5});
+  const data={accounts:[{id:5,name:'主账号'},{id:6,name:'副账号',credentials:'private-token'}]};
+  const service=createPetQuota({settings:f.settings,quota:{snapshot:()=>data},groups:{snapshot:()=>({groupId:13}),dailySnapshot:()=>({groups:[],users:[],groupId:13})}});
+  service.copyConfig();
+  assert.deepEqual(service.rankingSnapshot().source,{configName:'流量跟踪配置',accountName:'主账号'});
+  assert.deepEqual(service.rankingSnapshot(2).source,{configName:'流量跟踪配置-2',accountName:'暂不跟踪'});
+  service.selectAccount(6,2);
+  assert.deepEqual(service.rankingSnapshot(2).source,{configName:'流量跟踪配置-2',accountName:'副账号'});
+  assert.equal(f.settings.snapshot().trackingConfigs[0].accountId,null);assert.ok(!JSON.stringify(service.rankingSnapshot(2)).includes('private-token'));
 });
 
 test('legacy single secondary config and multi toggle migrate without losing primary values', t => {

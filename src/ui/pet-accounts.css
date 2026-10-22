@@ -1,1 +1,12 @@
-html,body{height:100%;overflow:hidden}.ranking-card{height:100%;display:flex;flex-direction:column}#hint{margin:5px 0 10px;color:#85928b;font-size:10px}#accounts{overflow-y:auto;min-height:0}#accounts button{width:100%;display:flex;align-items:center;gap:9px;text-align:left;padding:9px 7px;border-radius:8px;font-size:11px;color:#43564d}#accounts button:hover{background:#edf3ec}#accounts button[aria-checked="true"]{background:#e5f0e7;color:#326e5c}.account-check{width:15px;flex-shrink:0;color:#326e5c}.account-info{min-width:0;display:grid;gap:4px}.account-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.account-detail{font-size:10px;color:#85928b}#error{margin:8px 0 0;font-size:11px;color:#a52e34}
+@import url("popup.css");
+
+html, body { height: 100%; overflow: hidden; }
+.ranking-card { height: 100%; display: flex; flex-direction: column; }
+#hint { margin: 5px 0 10px; color: var(--ui-text-subtle); font-size: var(--ui-font-caption); }
+#accounts { --ui-menu-item-padding: 9px 7px; overflow-y: auto; min-height: 0; }
+#accounts button { justify-content: flex-start; gap: 9px; }
+.account-check { width: 15px; flex-shrink: 0; color: var(--ui-accent); }
+.account-info { min-width: 0; display: grid; gap: 4px; }
+.account-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-detail { font-size: var(--ui-font-caption); color: var(--ui-text-subtle); }
+#error { margin: 8px 0 0; font-size: var(--ui-font-small); color: var(--ui-danger); }

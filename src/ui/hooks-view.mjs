@@ -21,7 +21,7 @@ export function createHookSettingsView({render}) {
     if(!hookSettingsBuilt) {
       hookSettingsBuilt=true;
       for(const adapter of data.hookAdapters) {
-        const card=document.createElement('section');card.className='hook-source';
+        const card=document.createElement('section');card.className='ui-card hook-source';
         const heading=document.createElement('div');heading.className='hook-source-heading';
         const name=document.createElement('h2');name.textContent=adapter.name;
         const toggle=document.createElement('label');toggle.className='source-switch';
