@@ -159,7 +159,8 @@ function createWindows({ snapshot, performAction, collapseReminders, rankingSnap
     }
   });
   app.on('second-instance', showPanel);
-  app.on('activate', showPanel);
+  // 忽略窗口初始化前的启动激活事件；启动后点击 Dock 仍可主动打开小屋。
+  app.on('activate', () => {if (pet && !pet.isDestroyed()) showPanel();});
   app.on('before-quit', () => { quitting = true;closeAccountMenu();petMenu.close();petRanking.close(); });
 
   return {
@@ -168,8 +169,9 @@ function createWindows({ snapshot, performAction, collapseReminders, rankingSnap
     isPanel:sender=>sender===panel?.webContents,
     isPet:sender=>sender===pet?.webContents,
     toggleRanking:id=>{petMenu.close();return petRanking.toggle(id);},
-    start() {
-      createPanel(); createPet();
+    start({showPanelOnStartup = true} = {}) {
+      if (showPanelOnStartup) createPanel();
+      createPet();
       const icon = nativeImage.createFromPath(path.join(__dirname, '../../assets/icon.png')).resize({ width:20, height:20 });
       tray = new Tray(icon);
       tray.setToolTip('鲸鱼娘');

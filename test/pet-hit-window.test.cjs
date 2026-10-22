@@ -1,7 +1,7 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const {EventEmitter}=require('node:events');
-function fixture() {
+function fixture(startOptions) {
   const app=new EventEmitter(),ipcMain=new EventEmitter(),handlers=new Map(),windows=[];
   ipcMain.handle=(name,handler)=>handlers.set(name,handler);
   class Window extends EventEmitter {
@@ -21,9 +21,9 @@ function fixture() {
   const source=fs.readFileSync(path.join(__dirname,'../src/app/windows.cjs'),'utf8');
   vm.runInNewContext(source,{module,__dirname:path.join(__dirname,'../src/app'),require:name=>name==='electron'?electron:name==='./pet-menu.cjs'?
     {createPetMenu:()=>({close(){},open(){},isOpen:()=>false,refresh(){}})}:name==='./pet-ranking.cjs'?{createPetRanking:()=>({close(){},toggle(){},isOpen:()=>false})}:require(name)});
-  const api=module.exports.createWindows({snapshot:()=>({}),performAction(){},collapseReminders(){}});api.start();
-  const [panel,pet]=windows,event={sender:pet.webContents,senderFrame:pet.webContents.mainFrame};
-  return {ipcMain,handlers,api,panel,pet,event};
+  const api=module.exports.createWindows({snapshot:()=>({}),performAction(){},collapseReminders(){}});api.start(startOptions);
+  const panel=windows.find(win=>win.bounds.width===1060),pet=windows.find(win=>win.bounds.width===220),event={sender:pet.webContents,senderFrame:pet.webContents.mainFrame};
+  return {ipcMain,handlers,api,panel,pet,event,windows,app};
 }
 test('pet starts click-through, enables visible hit targets and forwards movement while ignoring clicks',()=>{
   const f=fixture();assert.equal(f.pet.ignored.at(-1)?.ignore,true,'transparent startup area must not block other apps');
@@ -52,4 +52,10 @@ test('hiding and showing retains the renderer hit state so a stationary cursor o
   const f=fixture();f.ipcMain.emit('pet-interactive',f.event,true);
   f.pet.emit('hide');f.pet.emit('show');
   assert.equal(f.pet.ignored.at(-1).ignore,false,'renderer may deduplicate the unchanged true hit state after show');
+});
+test('startup can omit the panel completely while explicit opening still creates it',()=>{
+  const f=fixture({showPanelOnStartup:false});
+  assert.equal(f.windows.length,1);assert.equal(f.panel,undefined);assert.equal(f.api.isPetVisible(),true);
+  f.api.showPanel();
+  assert.equal(f.windows.length,2);assert.equal(f.api.isPanel(f.windows[1].webContents),true);
 });

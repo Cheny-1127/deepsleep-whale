@@ -76,7 +76,7 @@ actionTabs.forEach((tab,index)=>{
 function render(data) {
   lastData=data;
   // 以原生窗口状态为准，托盘或右键隐藏桌宠后，小屋按钮也会同步。
-  if($('pet-visibility-toggle'))$('pet-visibility-toggle').textContent=data.petVisible?'↙ 隐藏桌宠':'↗ 显示桌宠';
+  if($('pet-visibility-toggle'))$('pet-visibility-toggle').textContent=data.petVisible?'隐藏':'显示';
   hooksView.render(data);
   remindersView.render(data);
   wechatView.render(data.wechat);
@@ -126,6 +126,7 @@ function render(data) {
   $('growth-value').textContent=`${data.nurture.totalWorkSessions} 次回复`;
   $('notifications').checked=data.settings.notifications;
   $('sound').checked=data.settings.sound;
+  $('show-panel-on-startup').checked=data.settings.showPanelOnStartup;
   $('demo-label').hidden=!data.demo;
   $('cycle').textContent=data.cycle?'■ 停止连播':'▶ 连播日常动作';
   $('cycle').setAttribute('aria-pressed',String(data.cycle));
@@ -149,6 +150,13 @@ if (floating) {
 }
 if($('cycle')) {
   for(const setting of ['sound','notifications']) $(setting).addEventListener('change',event=>action(setting,event.target.checked));
+  $('show-panel-on-startup').addEventListener('change',async event=>{
+    const input=event.currentTarget,error=$('startup-settings-error');
+    input.disabled=true;error.hidden=true;
+    try {render(await window.whale.action('showPanelOnStartup',input.checked));}
+    catch {input.checked=lastData.settings.showPanelOnStartup;error.textContent='启动设置保存失败，请重试。';error.hidden=false;}
+    finally {input.disabled=false;}
+  });
   $('cycle').addEventListener('click',()=>action('cycle',!lastData?.cycle));
 }
 window.whale.subscribe(render);
