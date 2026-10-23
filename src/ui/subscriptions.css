@@ -43,3 +43,9 @@
 .subscriptions-post-heading { padding: 0; text-align: left; line-height: 1.7; }
 button.subscriptions-post-heading { border-radius: var(--ui-radius-control); }
 button.subscriptions-post-heading:hover:not(:disabled) { background: var(--ui-hover); }
+
+/* 阅读页提高正文和操作字号，正文尺寸由公共阅读变量统一控制。 */
+#subscriptions-view { --ui-font-control: 14px; --ui-font-small: 13px; }
+.subscriptions-post > .subscriptions-post-body, .subscriptions-translation p { font-size: var(--ui-font-reading); }
+.subscriptions-post-body.is-collapsed { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.subscriptions-expand { color: var(--ui-accent); font-size: var(--ui-font-control); padding: 4px 0; }
