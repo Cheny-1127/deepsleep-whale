@@ -1,5 +1,5 @@
 'use strict';
-const { app, ipcMain, Notification, shell, clipboard, net, safeStorage, dialog, powerMonitor } = require('electron');
+const { app, ipcMain, Notification, shell, clipboard, net, safeStorage, dialog, powerMonitor, Menu, BrowserWindow } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
@@ -251,6 +251,17 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
         case 'delete-post':result=subscriptions.deletePost(value);break;
         case 'refresh':result=await subscriptions.refresh();break;
         case 'translate':result=await subscriptions.translate(value);break;
+        case 'copy-menu': {
+          // 只根据账号和消息 ID 读取本地原文或译文，忽略页面传入的正文；折叠时也复制完整内容。
+          const post=subscriptions.snapshot().posts.find(p=>p.username===value?.username && p.id===value?.id);
+          if(!post)throw Error('消息不存在。');
+          const text=value.translation===true ? post.translation?.text : post.text;
+          if(typeof text!=='string' || !text)throw Error('没有可复制的内容。');
+          // 右键仅打开菜单，用户选择后才写入纯文本剪贴板，不改变阅读进度或页面状态。
+          Menu.buildFromTemplate([{label:'复制内容',click:()=>clipboard.writeText(text)}])
+            .popup({window:BrowserWindow.fromWebContents(event.sender)});
+          break;
+        }
         case 'open-post':
           await shell.openExternal(subscriptions.postUrl(value));
           result=subscriptions.markRead(value);break;
