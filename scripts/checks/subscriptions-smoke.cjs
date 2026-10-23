@@ -207,6 +207,15 @@ async function launch() {
   await panel.waitForFunction(()=>document.querySelectorAll('.subscriptions-post').length===1);
   assert.equal(await panel.locator('.subscriptions-account').count(),1);assert.ok(await panel.locator('#subscriptions-recommend-tibo').isDisabled());
   await panel.locator('#subscriptions-tab-manage').click();
+  await panel.locator('#subscriptions-tab-feed').click();
+  const deletedId=await panel.locator('.subscriptions-post').getAttribute('data-post-id');
+  const deleteMessage=panel.locator('.subscriptions-post').getByRole('button',{name:'删除消息',exact:true});
+  assert.equal(await deleteMessage.evaluate(el=>el.previousElementSibling.textContent),'中文翻译');
+  await deleteMessage.click();assert.equal(await panel.locator('.subscriptions-post').count(),0);
+  const deletedCache=JSON.parse(fs.readFileSync(path.join(dir,'message-subscriptions.json'),'utf8')).accounts[0];
+  assert.equal(deletedCache.posts.length,0);assert.ok(deletedCache.deletedIds.includes(deletedId));
+  await panel.locator('#subscriptions-refresh').click();assert.equal(await panel.locator('.subscriptions-post').count(),0,'刷新不恢复被删除的正文');
+  await panel.locator('#subscriptions-tab-manage').click();
   await panel.getByRole('button',{name:'删除 @thsottiaux',exact:true}).click();assert.ok(await panel.locator('#subscriptions-recommend-tibo').isEnabled());
   assert.deepEqual(errors,[]);console.log('Subscriptions UI OK: top-right actions, translation expand/collapse/cache/restart/retry/cancel, link input, unread/read, filtering, safe links/text, clear/restart, IPC and 860/1060px layout');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{if(app)await app.close();fs.rmSync(dir,{recursive:true,force:true});});

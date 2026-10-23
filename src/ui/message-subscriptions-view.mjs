@@ -156,7 +156,15 @@ export function createMessageSubscriptionsView() {
       translateButton.disabled = pending || translating || (!post.translation && Boolean(data.storeError));
       translateButton.setAttribute('aria-expanded',String(expanded));
       if (post.translation) translateButton.setAttribute('aria-controls',`subscription-translation-${post.username}-${post.id}`);
-      actions.append(translateButton);header.append(heading,actions);
+      const deleteButton = button('',()=>call('delete-post',value,'消息及译文已从本地缓存删除。'),'ui-icon-button subscriptions-delete');
+      deleteButton.setAttribute('aria-label','删除消息');deleteButton.title = '删除消息';deleteButton.disabled = pending || Boolean(data.storeError);
+      // 复用配置页的垃圾桶图标与公共图标按钮样式，远程正文仍只通过 textContent 展示。
+      const icon = document.createElementNS('http://www.w3.org/2000/svg','svg');
+      icon.setAttribute('viewBox','0 0 20 20');icon.setAttribute('width','20');icon.setAttribute('height','20');
+      icon.setAttribute('fill','none');icon.setAttribute('stroke','currentColor');icon.setAttribute('stroke-width','1.5');icon.setAttribute('aria-hidden','true');
+      const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+      path.setAttribute('d','M3 5h14M8 5V3h4v2M5 5l1 12h8l1-12M8 8v6m4-6v6');path.setAttribute('stroke-linecap','round');path.setAttribute('stroke-linejoin','round');
+      icon.append(path);deleteButton.append(icon);actions.append(translateButton,deleteButton);header.append(heading,actions);
       // 动态正文始终通过 textContent 写入，不插入远程 HTML、图片或可执行链接。
       const body = node('p',post.text,'subscriptions-post-body');
       const bodyExpanded = expandedBodies.has(key);body.classList.toggle('is-collapsed',!bodyExpanded);

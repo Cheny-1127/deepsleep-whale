@@ -33,10 +33,11 @@ function createMessageSubscriptions({dataDir, readPosts, translateText, onChange
         if (names.has(username) || typeof a.enabled !== 'boolean' || typeof a.initialized !== 'boolean' ||
           !stamp(a.attemptedAt) || !stamp(a.checkedAt) || (a.latestId !== null && !validPostId(a.latestId)) ||
           !Array.isArray(a.unreadIds) || a.unreadIds.length > LIMIT || !a.unreadIds.every(validPostId) ||
-          !Array.isArray(a.posts) || a.posts.length > LIMIT) throw Error();
+          !Array.isArray(a.posts) || a.posts.length > LIMIT ||
+          (a.deletedIds !== undefined && (!Array.isArray(a.deletedIds) || !a.deletedIds.every(validPostId)))) throw Error();
         names.add(username);
         // v1 无法区分默认已读和实际阅读，按本次约定一次性恢复现有缓存为未读。
-        return {username, displayName:displayName(a.displayName), enabled:a.enabled, initialized:a.initialized, latestId:a.latestId, unreadIds:[...new Set([...a.unreadIds,...(saved.version === 1 ? a.posts.map(p=>p.id) : [])])].sort((a,b)=>compareIds(b,a)).slice(0,LIMIT),
+        return {username, deletedIds:[...new Set(a.deletedIds || [])], displayName:displayName(a.displayName), enabled:a.enabled, initialized:a.initialized, latestId:a.latestId, unreadIds:[...new Set([...a.unreadIds,...(saved.version === 1 ? a.posts.map(p=>p.id) : [])])].sort((a,b)=>compareIds(b,a)).slice(0,LIMIT),
           attemptedAt:a.attemptedAt, checkedAt:a.checkedAt, error:typeof a.error === 'string' ? a.error.slice(0, 160) : '',
           posts:a.posts.map(item => cachedPost(item, username, clock.now()))};
       });
@@ -105,8 +106,10 @@ function createMessageSubscriptions({dataDir, readPosts, translateText, onChange
           const result = await readPosts(username, {signal:controller.signal});
           if (closed || epoch !== batch) break;
           if (!Array.isArray(result) || result.length > LIMIT) throw Error('invalid response');
-          const incoming = result.map(item => projectPost(item, username, clock.now()));
           const next = structuredClone(state);a = next.accounts.find(item => item.username === username);
+          // 删除记录只保留去重 ID；按最新状态过滤，避免在途检查把已经删除的正文写回。
+          const deleted = new Set(a.deletedIds);
+          const incoming = result.map(item => projectPost(item, username, clock.now())).filter(post=>!deleted.has(post.id));
           // 昵称属于账号资料，独立于正文缓存保存；偶尔读取不到时保留已有昵称。
           a.displayName = incoming.find(p=>p.displayName)?.displayName || a.displayName || '';
           const unread = new Set(a.unreadIds);
@@ -145,7 +148,7 @@ function createMessageSubscriptions({dataDir, readPosts, translateText, onChange
     return mutate(next => {
       if (next.accounts.some(a => a.username === username)) throw Error('这个账号已在订阅列表中。');
       if (next.accounts.length >= ACCOUNT_LIMIT) throw Error(`最多订阅 ${ACCOUNT_LIMIT} 个账号。`);
-      next.accounts.push({username, enabled:true, initialized:false, latestId:null, unreadIds:[], posts:[], checkedAt:null, attemptedAt:null, error:''});
+      next.accounts.push({username, enabled:true, initialized:false, latestId:null, unreadIds:[], deletedIds:[], posts:[], checkedAt:null, attemptedAt:null, error:''});
     });
   }
   function setEnabled(value) {
@@ -165,6 +168,16 @@ function createMessageSubscriptions({dataDir, readPosts, translateText, onChange
       const a = account(next,value?.username);
       if (!validPostId(value?.id) || !a.posts.some(p => p.id === value.id)) throw Error('动态不存在。');
       a.unreadIds = a.unreadIds.filter(id => id !== value.id);
+    });
+  }
+  function deletePost(value) {
+    return mutate(next => {
+      const a = account(next,value?.username);
+      if (!validPostId(value?.id) || !a.posts.some(p=>p.id === value.id)) throw Error('动态不存在。');
+      // 从持久化缓存中移除整条正文及译文，同时清理未读；commit 会中止该条翻译。
+      a.posts = a.posts.filter(p=>p.id !== value.id);
+      a.unreadIds = a.unreadIds.filter(id=>id !== value.id);
+      a.deletedIds = [...new Set([...a.deletedIds,value.id])];
     });
   }
   function postUrl(value) {
@@ -200,7 +213,7 @@ function createMessageSubscriptions({dataDir, readPosts, translateText, onChange
     }).then(snapshot);
     onChange();return task.promise;
   }
-  return {snapshot, summary, add, setEnabled, remove, clearCache, markRead, refresh, postUrl, translate,
+  return {snapshot, summary, add, setEnabled, remove, clearCache, markRead, deletePost, refresh, postUrl, translate,
     start() {if (closed || started) return;started = true;void refresh(false);},
     checkDue:() => refresh(false),
     close() {closed = true;invalidate();for (const task of translations.values()) task.controller.abort();translations.clear();translationErrors.clear();}};

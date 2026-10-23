@@ -248,6 +248,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
         case 'remove':result=subscriptions.remove(value);break;
         case 'clear-cache':result=subscriptions.clearCache();break;
         case 'mark-read':result=subscriptions.markRead(value);break;
+        case 'delete-post':result=subscriptions.deletePost(value);break;
         case 'refresh':result=await subscriptions.refresh();break;
         case 'translate':result=await subscriptions.translate(value);break;
         case 'open-post':

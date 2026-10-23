@@ -53,3 +53,5 @@ button.subscriptions-post-heading:hover:not(:disabled) { background: var(--ui-ho
 .subscriptions-post-body[aria-disabled="true"] { cursor: default; }
 
 #subscriptions-search { width: 210px; max-width: 100%; }
+
+.subscriptions-delete { min-height: var(--ui-control-height); width: var(--ui-control-height); }

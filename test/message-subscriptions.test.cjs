@@ -61,6 +61,36 @@ test('full posts are not overwritten by later truncated previews, and translatio
   const result=s.snapshot().posts[0];assert.equal(result.text,original.text);assert.equal(result.truncated,false);
   assert.deepEqual(result.translation,original.translation);assert.equal(result.unread,false);
 });
+test('deleting a post removes source, translation and unread from disk, and refresh or restart cannot restore it',async t=>{
+  const f=fixture(t),s=f.service;s.add('thsottiaux');s.add('openai');await s.refresh();
+  const value={username:'thsottiaux',id:f.post(1).id};await s.translate(value);s.deletePost(value);
+  assert.equal(s.summary().unread,1);assert.equal(s.snapshot().posts.length,1);assert.equal(s.snapshot().posts[0].username,'openai');
+  const saved=JSON.parse(fs.readFileSync(path.join(f.dir,'message-subscriptions.json'),'utf8')).accounts.find(a=>a.username===value.username);
+  assert.deepEqual(saved.posts,[]);assert.deepEqual(saved.unreadIds,[]);assert.deepEqual(saved.deletedIds,[value.id]);
+  await s.refresh();assert.equal(s.snapshot().posts.length,1);s.close();
+  const restarted=f.create();await restarted.refresh();assert.equal(restarted.snapshot().posts.length,1);
+  restarted.clearCache();await restarted.refresh();assert.equal(restarted.snapshot().posts.length,1);
+  assert.throws(()=>restarted.deletePost(value),/不存在/);
+});
+test('deleting during an in-flight refresh or translation prevents late content from returning',async t=>{
+  const f=fixture(t),s=f.service;s.add('thsottiaux');await s.refresh();let readDone,translateDone;
+  f.setResponse(()=>new Promise(resolve=>{readDone=resolve;}));
+  f.setTranslator(()=>new Promise(resolve=>{translateDone=resolve;}));
+  const translation=s.translate({username:'thsottiaux',id:f.post(1).id}),refresh=s.refresh();await turn();
+  s.deletePost({username:'thsottiaux',id:f.post(1).id});assert.equal(f.translationCalls[0].signal.aborted,true);
+  translateDone('迟到译文');readDone([f.post(2),f.post(1)]);await Promise.all([translation,refresh]);
+  assert.deepEqual(s.snapshot().posts.map(p=>p.id),[f.post(2).id]);assert.equal(s.summary().unread,1);
+  assert.equal(s.snapshot().posts[0].translation,undefined);
+});
+test('failed post deletion leaves memory, disk and running translation intact',async t=>{
+  const f=fixture(t),s=f.service;s.add('thsottiaux');await s.refresh();let done;
+  f.setTranslator(()=>new Promise(resolve=>{done=resolve;}));const task=s.translate({username:'thsottiaux',id:f.post(1).id});await turn();
+  const file=path.join(f.dir,'message-subscriptions.json'),before=fs.readFileSync(file,'utf8');
+  fs.mkdirSync(file+'.tmp');assert.throws(()=>s.deletePost({username:'thsottiaux',id:f.post(1).id}),/保存失败/);
+  assert.equal(s.snapshot().posts.length,1);assert.equal(s.summary().unread,1);assert.equal(f.translationCalls[0].signal.aborted,false);
+  assert.equal(fs.readFileSync(file,'utf8'),before);fs.rmdirSync(file+'.tmp');done('保留译文');await task;
+  assert.equal(s.snapshot().posts[0].translation.text,'保留译文');
+});
 test('clear cache retains account, read state and the high-water mark, including after restart', async t => {
   const f = fixture(t), s = f.service;s.add('thsottiaux');await s.refresh();s.markRead(null);
   f.setResponse(async () => [f.post(2),f.post(1)]);await s.refresh();
