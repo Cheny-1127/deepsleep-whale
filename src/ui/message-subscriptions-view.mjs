@@ -101,10 +101,11 @@ export function createMessageSubscriptionsView() {
     $('subscriptions-managed-accounts').replaceChildren();
     $('subscriptions-manage-empty').hidden = data.accounts.length > 0;
     for (const account of data.accounts) {
-      const row = node('div','','subscriptions-account');row.dataset.username = account.username;
-      const choose = button(`@${account.username}`,()=>select(account.username),'ui-menu-item');choose.setAttribute('aria-pressed',String(filter === account.username));
-      const meta = node('small',`${account.unread} 未读 · ${account.count} 缓存${account.error ? ' · 检查失败' : ''}`);
-      row.append(choose,meta);$('subscriptions-accounts').append(row);
+      const choose = button('',()=>select(account.username),'outline subscriptions-account');
+      choose.dataset.username = account.username;choose.setAttribute('aria-pressed',String(filter === account.username));
+      choose.append(node('span',`@${account.username}`));
+      if (account.unread) choose.append(node('small',`${account.unread} 未读`));
+      $('subscriptions-accounts').append(choose);
       const managed = node('div','','subscriptions-managed-account');
       managed.append(node('strong',`@${account.username}`),node('small',`${account.enabled ? '每小时检查' : '已暂停'} · ${account.count} 缓存`));
       const tools = node('div','','subscriptions-account-tools');
@@ -130,7 +131,10 @@ export function createMessageSubscriptionsView() {
       const key = `${post.username}/${post.id}`, value = {username:post.username,id:post.id};
       const expanded = Boolean(post.translation) && expandedTranslations.has(key);
       const header = node('div','','subscriptions-post-header');
-      const heading = node('div','','subscriptions-post-heading');heading.append(node('strong',`@${post.username}`),node('span',time(post.publishedAt)));
+      // 未读标题本身就是点击入口，原生按钮同时支持 Enter/空格；不绑定正文或翻译按钮。
+      const heading = post.unread ? button('',()=>call('mark-read',value),'subscriptions-post-heading') : node('div','','subscriptions-post-heading');
+      if (post.unread) {heading.disabled = pending || Boolean(data.storeError);heading.setAttribute('aria-label',`未读，点击设为已读：@${post.username} ${time(post.publishedAt)}`);heading.title = '点击设为已读';}
+      heading.append(node('strong',`@${post.username}`),node('span',time(post.publishedAt)));
       if (post.unread) {
         const dot = node('span','','subscriptions-unread-dot');
         dot.setAttribute('role','img');dot.setAttribute('aria-label','未读');heading.prepend(dot);
@@ -152,11 +156,6 @@ export function createMessageSubscriptionsView() {
         translated.append(node('strong','中文译文'),node('p',post.translation.text));card.append(translated);
       }
       if (post.translationError) card.append(node('p',post.translationError,'ui-alert'));
-      if (post.unread) {
-        const readActions = node('div','','subscriptions-post-read-actions');
-        const readButton = button('标为已读',()=>call('mark-read',value));readButton.disabled = pending;
-        readActions.append(readButton);card.append(readActions);
-      }
       $('subscriptions-posts').append(card);
     }
     $('subscriptions-empty').hidden = posts.length > 0;

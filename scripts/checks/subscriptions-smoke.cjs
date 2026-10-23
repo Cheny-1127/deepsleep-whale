@@ -99,7 +99,7 @@ async function launch() {
   await panel.screenshot({path:path.join(root,'out','subscriptions-unread.png'),fullPage:true});
   assert.equal(await panel.locator('.subscriptions-translation').count(),1,'refresh reuses saved translation');
   assert.ok(await savedCard.locator('.subscriptions-translation').isHidden(),'refresh retains the collapsed state');
-  await panel.locator('[data-username="thsottiaux"] .ui-menu-item').click();
+  await panel.locator('button[data-username="thsottiaux"]').click();
   assert.ok(await savedCard.locator('.subscriptions-translation').isHidden(),'filtering retains the collapsed state');
   await savedCard.getByRole('button',{name:'中文翻译',exact:true}).click();
   assert.ok(await savedCard.locator('.subscriptions-translation').isVisible());
@@ -120,12 +120,14 @@ async function launch() {
   await panel.waitForFunction(()=>document.querySelectorAll('.subscriptions-translation').length===2);
   assert.equal(await panel.locator('.subscriptions-translation:visible').count(),0,'再次进入所有译文收起');
   await panel.locator('#subscriptions-unread').check();assert.equal(await panel.locator('.subscriptions-post').count(),2);
-  await panel.getByRole('button',{name:'标为已读',exact:true}).first().click();assert.equal(await panel.locator('.subscriptions-post').count(),1);
+  assert.equal(await panel.getByRole('button',{name:'标为已读',exact:true}).count(),0,'移除卡片底部的已读按钮');
+  await panel.locator('button.subscriptions-post-heading').first().focus();await panel.keyboard.press('Enter');assert.equal(await panel.locator('.subscriptions-post').count(),1);
   assert.equal(await panel.locator('.subscriptions-unread-dot').count(),1,'标为已读仅移除对应绿点');
   await panel.locator('#subscriptions-unread').uncheck();
-  await panel.locator('.subscriptions-post').filter({has:panel.locator('.subscriptions-unread-dot')}).getByRole('button',{name:'查看原文 ↗',exact:true}).click();
+  await panel.locator('.subscriptions-unread-dot').click();
   await panel.waitForFunction(()=>document.querySelectorAll('.subscriptions-unread-dot').length===0);
   assert.equal(await panel.locator('.subscriptions-unread-dot').count(),0,'查看原文后取消最后一条未读绿点');
+  await panel.getByRole('button',{name:'查看原文 ↗',exact:true}).first().click();
   const opened=await app.evaluate(()=>global.subscriptionsFixture.opened);assert.match(opened[0],/^https:\/\/x\.com\/thsottiaux\/status\/\d+$/);
   assert.ok(await panel.locator('#subscriptions-read-all').isDisabled(),'全部已读后禁用重复操作');
   await panel.waitForFunction(()=>document.querySelector('#subscriptions-badge').hidden);
@@ -140,6 +142,8 @@ async function launch() {
   for(const width of [1060,860]) {
     await app.evaluate(({BrowserWindow},width)=>BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/index.html')).setSize(width,770),width);
     assert.ok(await panel.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+    assert.ok(await panel.evaluate(()=>document.querySelector('.subscriptions-accounts').getBoundingClientRect().bottom <= document.querySelector('.subscriptions-feed').getBoundingClientRect().top),'横向筛选位于动态上方');
+
     const placement=await panel.locator('.subscriptions-post').first().evaluate(card=>{
       const header=card.querySelector('.subscriptions-post-header').getBoundingClientRect();
       const actions=card.querySelector('.subscriptions-post-actions').getBoundingClientRect();
@@ -163,8 +167,8 @@ async function launch() {
   await panel.locator('#subscriptions-tab-feed').click();
   await panel.waitForFunction(()=>document.querySelectorAll('.subscriptions-post').length===1);
   assert.equal(await panel.locator('.subscriptions-account').count(),2);
-  await panel.locator('[data-username="thsottiaux"] .ui-menu-item').click();assert.equal(await panel.locator('.subscriptions-post').count(),0);
-  await panel.locator('[data-username="openai"] .ui-menu-item').click();assert.equal(await panel.locator('.subscriptions-post').count(),1);
+  await panel.locator('button[data-username="thsottiaux"]').click();assert.equal(await panel.locator('.subscriptions-post').count(),0);
+  await panel.locator('button[data-username="openai"]').click();assert.equal(await panel.locator('.subscriptions-post').count(),1);
   await panel.locator('#subscriptions-all').click();assert.equal(await panel.locator('.subscriptions-post').count(),1);
   await panel.locator('#subscriptions-tab-manage').click();
   await panel.getByRole('button',{name:'删除 @openai',exact:true}).click();
