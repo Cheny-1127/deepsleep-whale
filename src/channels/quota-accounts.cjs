@@ -10,7 +10,7 @@ function normalizeInterval(value) {
   return {value:value.value,unit:value.unit};
 }
 const REQUEST_TIMEOUT_MS = 60 * 1000;
-const DEFAULT_LIST_SETTINGS = {showName: true, showPlatform: true, showRemaining: true, showRefresh: true, showFiveHour: true};
+const DEFAULT_LIST_SETTINGS = {showName: true, showPlatform: true, showRemaining: true, showCredits: true, showRefresh: true, showFiveHour: true};
 
 function remainingPercent(used) {
   if (typeof used !== 'number' || !Number.isFinite(used)) return null;
@@ -38,7 +38,12 @@ function projectAccount(item) {
   if (!item || !Number.isSafeInteger(item.id)) return null;
   const fiveHourUsed = readPercent(item, 'codex_5h_used_percent');
   const sevenDayUsed = readPercent(item, 'codex_7d_used_percent');
-  if (fiveHourUsed == null && sevenDayUsed == null) return null;
+  // 网关的点数快照以十进制字符串返回；显式校验，避免把空值或异常值当成 0。
+  const balance = item.extra?.codex_credits_snapshot?.credits?.balance;
+  const numericBalance = typeof balance === 'string' && /^\d+(?:\.\d+)?$/.test(balance.trim()) ? Number(balance) : balance;
+  const creditsBalance = typeof numericBalance === 'number' && Number.isFinite(numericBalance) && numericBalance >= 0 ? numericBalance : null;
+  // 只有点数、没有百分比窗口的账号也要保留，供独立点数列展示。
+  if (fiveHourUsed == null && sevenDayUsed == null && creditsBalance == null) return null;
   // 剩余额度由网关已保存的已用百分比折算，不携带凭据，也不据此请求上游。
   // 只读取可用张数，不向页面传递完整重置卡快照。
   const resetCardCount = item.extra?.codex_reset_credit_snapshot?.available_count;
@@ -56,6 +61,7 @@ function projectAccount(item) {
     name: typeof item.name === 'string' ? item.name : '',
     fiveHourRemaining: remainingPercent(fiveHourUsed),
     sevenDayRemaining: remainingPercent(sevenDayUsed),
+    creditsBalance,
     fiveHourResetAt: resetAt('codex_5h_reset_at'),
     sevenDayResetAt: resetAt('codex_7d_reset_at'),
     fiveHourWindowMinutes: windowMinutes('codex_5h_window_minutes'),
@@ -129,7 +135,7 @@ function createQuotaPanel({tokenFile, dataDir, baseUrl, fetchImpl, clock = {now:
   try {
     const saved = JSON.parse(fs.readFileSync(listSettingsFile, 'utf8'));
     for (const key of Object.keys(DEFAULT_LIST_SETTINGS)) if (typeof saved?.[key] === 'boolean') listSettings[key] = saved[key];
-    if (!['showName', 'showPlatform', 'showRemaining', 'showRefresh'].some(key => listSettings[key])) listSettings = {...DEFAULT_LIST_SETTINGS};
+    if (!['showName', 'showPlatform', 'showRemaining', 'showCredits', 'showRefresh'].some(key => listSettings[key])) listSettings = {...DEFAULT_LIST_SETTINGS};
   } catch {} // 列配置独立于额度缓存，切换账号或刷新失败也保留显示偏好。
   const allPaused = () => state.accounts.length > 0 && state.accounts.every(account => disabledAccountIds.has(account.id));
   function snapshot() {
@@ -278,7 +284,7 @@ function createQuotaPanel({tokenFile, dataDir, baseUrl, fetchImpl, clock = {now:
     if (!value || typeof value !== 'object' || !Object.keys(value).length ||
       Object.entries(value).some(([key, enabled]) => !Object.hasOwn(DEFAULT_LIST_SETTINGS, key) || typeof enabled !== 'boolean')) throw new Error('无效的列表配置');
     const next = {...listSettings, ...value};
-    if (!['showName', 'showPlatform', 'showRemaining', 'showRefresh'].some(key => next[key])) throw new Error('请至少保留一列');
+    if (!['showName', 'showPlatform', 'showRemaining', 'showCredits', 'showRefresh'].some(key => next[key])) throw new Error('请至少保留一列');
     // 显示列只改变本地界面，不触发远程刷新或重置下次刷新时间。
     try {
       if (!listSettingsFile) throw new Error();

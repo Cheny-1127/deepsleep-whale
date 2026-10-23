@@ -245,6 +245,9 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
         case 'snapshot':result=subscriptions.snapshot();break;
         case 'add':result=subscriptions.add(value);break;
         case 'set-enabled':result=subscriptions.setEnabled(value);break;
+        case 'set-remark':result=subscriptions.setRemark(value);break;
+        // 推荐理由与关注状态独立，未关注时也允许保存。
+        case 'set-recommendation-reason':result=subscriptions.setRecommendationReason(value);break;
         case 'remove':result=subscriptions.remove(value);break;
         case 'clear-cache':result=subscriptions.clearCache();break;
         case 'mark-read':result=subscriptions.markRead(value);break;

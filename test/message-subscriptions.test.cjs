@@ -259,3 +259,51 @@ test('avatars are cached once per account, survive restart and missing images wi
   restarted.close();saved.accounts[0].avatar='https://evil.test/image.png';fs.writeFileSync(file,JSON.stringify(saved));
   const invalid=f.create();assert.equal(invalid.snapshot().accounts[0].avatar,'');assert.equal(invalid.snapshot().storeError,'');
 });
+
+
+test('remarks persist through add, refresh, unfollow, cache clear and restart without changing account names',async t=>{
+  const f=fixture(t),s=f.service;s.add({username:'@THSOTTIAUX',remark:'  AI 动态  '});
+  assert.equal(s.snapshot().accounts[0].remark,'AI 动态');
+  f.setResponse(async()=>[{...f.post(1),displayName:'Tibo'}]);await s.refresh();
+  s.setRemark({username:'thsottiaux',remark:'<img src=x>'});s.setEnabled({username:'thsottiaux',enabled:false});
+  assert.equal(s.snapshot().accounts[0].displayName,'Tibo');assert.equal(s.snapshot().accounts[0].remark,'<img src=x>');
+  s.clearCache();s.close();const restarted=f.create();
+  assert.equal(restarted.snapshot().accounts[0].remark,'<img src=x>');assert.equal(restarted.snapshot().accounts[0].enabled,false);
+  restarted.setEnabled({username:'thsottiaux',enabled:true});restarted.setRemark({username:'thsottiaux',remark:''});
+  assert.equal(restarted.snapshot().accounts[0].remark,'');
+});
+test('invalid remarks and failed saves preserve saved accounts and legacy accounts default to empty remarks',async t=>{
+  const f=fixture(t),s=f.service;s.add('thsottiaux');assert.equal(s.snapshot().accounts[0].remark,'');
+  const file=path.join(f.dir,'message-subscriptions.json'),original=fs.readFileSync(file,'utf8');
+  for(const remark of [null,42,'x'.repeat(201),'first\nsecond']) {
+    assert.throws(()=>s.setRemark({username:'thsottiaux',remark}),/备注/);
+    assert.throws(()=>s.add({username:'openai',remark}),/备注/);
+  }
+  fs.mkdirSync(file+'.tmp');assert.throws(()=>s.setRemark({username:'thsottiaux',remark:'new'}),/保存失败/);
+  assert.equal(s.snapshot().accounts[0].remark,'');assert.equal(fs.readFileSync(file,'utf8'),original);
+  const saved=JSON.parse(original);delete saved.accounts[0].remark;fs.writeFileSync(file,JSON.stringify(saved));
+  assert.equal(f.create().snapshot().accounts[0].remark,'');
+});
+
+
+test('recommendation reasons can be saved before following and survive refresh, removal, cache clear and restart',async t=>{
+  const f=fixture(t),s=f.service;
+  assert.deepEqual(s.snapshot().recommendationReasons,{});
+  s.setRecommendationReason({username:'@THSOTTIAUX',reason:'  关注产品更新  '});
+  assert.equal(s.snapshot().recommendationReasons.thsottiaux,'关注产品更新');
+  assert.equal(s.snapshot().accounts.length,0);assert.equal(f.calls.length,0);
+  s.add({username:'thsottiaux',remark:'独立备注'});await s.refresh();
+  s.setEnabled({username:'thsottiaux',enabled:false});s.clearCache();s.remove('thsottiaux');s.close();
+  const restarted=f.create();assert.equal(restarted.snapshot().recommendationReasons.thsottiaux,'关注产品更新');
+  assert.equal(restarted.snapshot().accounts.length,0);
+  restarted.setRecommendationReason({username:'thsottiaux',reason:''});restarted.close();
+  assert.equal(f.create().snapshot().recommendationReasons.thsottiaux,'');
+});
+test('invalid reasons and failed persistence preserve the previous saved reason and do not create subscriptions',t=>{
+  const f=fixture(t),s=f.service;s.setRecommendationReason({username:'thsottiaux',reason:'original'});
+  const file=path.join(f.dir,'message-subscriptions.json'),original=fs.readFileSync(file,'utf8');
+  for(const reason of [null,42,'x'.repeat(201),'line\nbreak']) assert.throws(()=>s.setRecommendationReason({username:'thsottiaux',reason}),/推荐理由/);
+  fs.mkdirSync(file+'.tmp');assert.throws(()=>s.setRecommendationReason({username:'thsottiaux',reason:'new'}),/保存失败/);
+  assert.equal(s.snapshot().recommendationReasons.thsottiaux,'original');assert.equal(fs.readFileSync(file,'utf8'),original);
+  assert.equal(s.snapshot().accounts.length,0);
+});

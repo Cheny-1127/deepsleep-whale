@@ -1,6 +1,6 @@
 const $ = id => document.getElementById('quota-' + id);
 const columns = [['showName', 'show-name', 'name-heading'], ['showPlatform', 'show-platform', 'platform-heading'],
-  ['showRemaining', 'show-remaining', 'remaining-heading'], ['showRefresh', 'show-refresh', 'refresh-heading']];
+  ['showRemaining', 'show-remaining', 'remaining-heading'], ['showCredits', 'show-credits', 'credits-heading'], ['showRefresh', 'show-refresh', 'refresh-heading']];
 const settings = [...columns, ['showFiveHour', 'show-five-hour']];
 
 function resetCountdown(at) {
@@ -196,7 +196,13 @@ export function createQuotaView() {
         empty.textContent = '暂无适用额度';
         windows.append(empty);
       }
-      row.append(title, quotaPlatform(account), windows, refreshCell);
+      const credits = document.createElement('td');
+      credits.className = 'quota-credits';
+      // 点数为 0 是有效余额；未知显示破折号，独立列与表头共用显示设置。
+      const knownBalance = typeof account.creditsBalance === 'number' && Number.isFinite(account.creditsBalance) && account.creditsBalance >= 0;
+      credits.textContent = knownBalance ? account.creditsBalance.toLocaleString('en-US', {maximumFractionDigits: 10}) : '—';
+      credits.title = knownBalance ? `点数余额：${account.creditsBalance}` : '暂无点数数据';
+      row.append(title, quotaPlatform(account), windows, credits, refreshCell);
       columns.forEach(([key], index) => { row.children[index].hidden = data.listSettings?.[key] === false; });
       return row;
     }));

@@ -12,7 +12,7 @@ function fixture(t) {
   const create=()=>{
     const panel=createQuotaPanel({dataDir:dir,tokenFile,clock,fetchImpl:async url=>{
       calls.push(url);if(offline)throw Error('private-request-diagnostics');
-      const item={id:5,name:'cached-account',platform:'openai',type:'oauth',credentials:{plan_type:'prolite',access_token:'private-access-token'},extra:{codex_5h_used_percent:used,codex_5h_window_minutes:0,codex_7d_window_minutes:10080,codex_5h_reset_at:'2026-10-20T15:00:00Z',codex_7d_reset_at:'2026-10-27T15:00:00Z',codex_reset_credit_snapshot:{available_count:2}}};
+      const item={id:5,name:'cached-account',platform:'openai',type:'oauth',credentials:{plan_type:'prolite',access_token:'private-access-token'},extra:{codex_5h_used_percent:used,codex_5h_window_minutes:0,codex_7d_window_minutes:10080,codex_5h_reset_at:'2026-10-20T15:00:00Z',codex_7d_reset_at:'2026-10-27T15:00:00Z',codex_reset_credit_snapshot:{available_count:2},codex_credits_snapshot:{credits:{balance:'62500.0000000000',private_details:'private-credit-details'}}}};
       return {ok:true,json:async()=>({data:new URL(url).pathname.endsWith('/5')?item:{items:[item],pages:1}})};
     }});
     panels.push(panel);return panel;
@@ -24,7 +24,7 @@ function fixture(t) {
 test('successful quota data is saved without credentials and restored before any request',async t=>{
   const f=fixture(t),first=f.create();const success=await first.refresh();first.close();
   const serialized=fs.readFileSync(f.cacheFile,'utf8');
-  assert.ok(!serialized.includes('private-api-key'));assert.ok(!serialized.includes('private-access-token'));assert.ok(!serialized.includes('credentials'));
+  assert.ok(!serialized.includes('private-api-key'));assert.ok(!serialized.includes('private-access-token'));assert.ok(!serialized.includes('credentials'));assert.ok(!serialized.includes('private-credit-details'));assert.equal(success.accounts[0].creditsBalance,62500);
   assert.equal(fs.statSync(f.cacheFile).mode&0o777,0o600);
   f.setNow(2000);const restarted=f.create(),cached=restarted.snapshot();
   assert.deepEqual(cached.accounts,success.accounts);assert.equal(cached.accounts[0].fiveHourWindowMinutes,0);assert.equal(cached.accounts[0].sevenDayWindowMinutes,10080);assert.equal(cached.accounts[0].sevenDayResetAt,'2026-10-27T15:00:00Z');assert.equal(cached.checkedAt,1000);assert.equal(cached.nextRefreshAt,301000);
@@ -95,4 +95,18 @@ test('cached fields are allowlisted and paused accounts remain paused after rest
   await restarted.refresh();assert.equal(f.calls.length,1);
   restarted.setRefreshEnabled({id:5,enabled:true});
   assert.equal(restarted.snapshot().nextRefreshAt,700000,'从本地缓存恢复的账号重新开启后应恢复轮询');
+});
+
+
+test('legacy caches and invalid credit balances restore as unknown while zero remains zero',async t=>{
+  const f=fixture(t),first=f.create();await first.refresh();first.close();
+  const original=JSON.parse(fs.readFileSync(f.cacheFile,'utf8'));
+  for(const balance of [undefined,null,-1,'62500',{},0,12.125]) {
+    const saved=structuredClone(original);saved.accounts[0].creditsBalance=balance;
+    fs.writeFileSync(f.cacheFile,JSON.stringify(saved));
+    const restored=f.create();
+    assert.equal(restored.snapshot().accounts[0].creditsBalance,typeof balance==='number'&&balance>=0?balance:null);
+    assert.equal(restored.snapshot().cacheError,'');restored.close();
+  }
+  assert.equal(f.calls.length,1,'读取旧缓存不新增请求');
 });

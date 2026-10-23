@@ -8,10 +8,23 @@ const {projectAccount, listAccountQuotas, createQuotaPanel} = require('../src/ch
 
 test('account quota is the remaining percent and drops credentials', () => {
   const account = projectAccount({id: 5, name: 'yuchaoyuan-codex', platform: 'openai', codex_5h_used_percent: 0, codex_7d_used_percent: 4, credentials: {access_token: 'secret'}});
-  assert.deepEqual(account, {id: 5, name: 'yuchaoyuan-codex', fiveHourRemaining: 100, sevenDayRemaining: 96, fiveHourResetAt: null, sevenDayResetAt: null, fiveHourWindowMinutes: null, sevenDayWindowMinutes: null, resetCardCount: null, subscriptionType: null, platform: 'openai', authType: null, subscriptionExpiresAt: null});
+  assert.deepEqual(account, {id: 5, name: 'yuchaoyuan-codex', fiveHourRemaining: 100, sevenDayRemaining: 96, creditsBalance: null, fiveHourResetAt: null, sevenDayResetAt: null, fiveHourWindowMinutes: null, sevenDayWindowMinutes: null, resetCardCount: null, subscriptionType: null, platform: 'openai', authType: null, subscriptionExpiresAt: null});
   assert.equal(projectAccount({id: 6, name: 'zzz-codex', extra: {codex_5h_used_percent: 85, codex_7d_used_percent: 120}}).fiveHourRemaining, 15);
   assert.equal(projectAccount({id: 6, name: 'zzz-codex', extra: {codex_5h_used_percent: 85, codex_7d_used_percent: 120}}).sevenDayRemaining, 0);
   assert.equal(projectAccount({id: 1, name: 'no-quota'}), null);
+});
+
+test('credit balances accept decimal strings and zero, reject invalid data and retain credit-only accounts', () => {
+  const account = balance => projectAccount({id: 8, extra: {codex_credits_snapshot: {credits: {balance, has_credits: true, private_details: 'not-for-ui'}}}});
+  for (const [raw, expected] of [['62500.0000000000', 62500], ['0', 0], [0, 0], ['12.125', 12.125]]) {
+    assert.equal(account(raw).creditsBalance, expected);
+    assert.equal(account(raw).sevenDayRemaining, null);
+    assert.ok(!JSON.stringify(account(raw)).includes('not-for-ui'));
+  }
+  for (const raw of [undefined, null, '', ' ', 'oops', 'Infinity', '-1', -1, Infinity, NaN, true, {}, []]) {
+    assert.equal(account(raw), null);
+    assert.equal(projectAccount({id: 8, codex_7d_used_percent: 20, extra: {codex_credits_snapshot: {credits: {balance: raw}}}}).creditsBalance, null);
+  }
 });
 
 test('platform details expose only type and a valid subscription expiry', () => {
