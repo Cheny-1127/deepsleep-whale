@@ -29,6 +29,15 @@ test('today follows Shanghai midnight, independently of the machine timezone', (
   assert.equal(shanghaiDate(Date.parse('2026-10-20T16:00:00Z')), '2026-10-21');
 });
 
+test('ranking collapse persists independently without fetching or changing group, period or pet ranking', async t => {
+  const f = fixture(t);await f.panel.openDaily();await f.panel.select({groupId:14,period:'week'});
+  const count = f.calls.length, daily = f.panel.dailySnapshot(), before = f.panel.snapshot();
+  const collapsed = f.panel.setExpanded(false);
+  assert.equal(collapsed.expanded,false);assert.equal(f.calls.length,count);assert.equal(collapsed.groupId,before.groupId);assert.equal(collapsed.period,before.period);
+  assert.deepEqual(f.panel.dailySnapshot(),daily);assert.equal(f.create().snapshot().expanded,false);
+  assert.throws(() => f.panel.setExpanded('false'));assert.equal(f.panel.setExpanded(true).expanded,true);
+});
+
 test('weekly ranking starts on Monday across Sunday, Monday, and year boundaries', () => {
   for (const [at, start] of [['2026-10-20', '2026-10-19'], ['2026-10-25', '2026-10-19'], ['2026-10-26', '2026-10-26'], ['2027-01-01', '2026-12-28']]) {
     assert.deepEqual(rankingRange(Date.parse(`${at}T12:00:00+08:00`), 'week'), {date: at, startDate: start});

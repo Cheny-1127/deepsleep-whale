@@ -23,6 +23,7 @@ const {createMailStore}=require('../channels/mail-store.cjs');
 const {createArcheryPending}=require('../channels/archery-pending.cjs');
 const {createQuotaPanel}=require('../channels/quota-accounts.cjs');
 const {createGroupUsage}=require('../channels/quota-group-usage.cjs');
+const {createKeyUsage}=require('../channels/quota-key-usage.cjs');
 const {createShortcutSettings}=require('./shortcut-settings.cjs');
 const {createSidebarSettings}=require('./sidebar-settings.cjs');
 const {createPetQuotaSettings}=require('./pet-quota-settings.cjs');
@@ -37,7 +38,7 @@ fs.mkdirSync(dataDir, { recursive: true });
 app.setPath('userData', dataDir);
 app.setName('鲸鱼娘');
 if (!app.requestSingleInstanceLock()) { app.quit(); } else {
-  let bridge,wechat,mail,archery,quota,groupUsage,petQuota,subscriptions;
+  let bridge,wechat,mail,archery,quota,groupUsage,keyUsage,petQuota,subscriptions;
   let eventQueue=Promise.resolve();
   const cursorState=process.env.WHALE_CURSOR_STATE_DB||path.join(os.homedir(),'Library','Application Support','Cursor','User','globalStorage','state.vscdb');
   const cursorChats=createCursorChatOpener({stateFile:cursorState,openExternal:url=>shell.openExternal(url)});
@@ -300,9 +301,15 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   });
   ipcMain.handle('quota-group',async(event,name,value)=>{
     if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋查看分组用量');
+    if(['keys-snapshot','keys-open','keys-search','keys-select','keys-refresh'].includes(name)) {
+      // Key 消费与用户排行共用受限 IPC 入口，但账号选择、缓存及刷新流程互相独立。
+      if(!keyUsage)return {error:'Key 用量正在初始化'};
+      try{return {value:name==='keys-search'?await keyUsage.search(value):name==='keys-select'?await keyUsage.select(value):name==='keys-refresh'?await keyUsage.refresh():name==='keys-open'?await keyUsage.open():keyUsage.snapshot()};}
+      catch{return {error:'无法读取 Key 用量，请稍后重试。'};}
+    }
     if(!groupUsage)return {error:'分组用量正在初始化'};
-    if(!['snapshot','open','refresh','select'].includes(name))return {error:'不支持的分组用量操作'};
-    try{return {value:name==='select'?await groupUsage.select(value):name==='refresh'?await groupUsage.refresh(value):name==='open'?await groupUsage.open():groupUsage.snapshot()};}
+    if(!['snapshot','open','refresh','select','set-expanded'].includes(name))return {error:'不支持的分组用量操作'};
+    try{return {value:name==='set-expanded'?groupUsage.setExpanded(value):name==='select'?await groupUsage.select(value):name==='refresh'?await groupUsage.refresh(value):name==='open'?await groupUsage.open():groupUsage.snapshot()};}
     catch{return {error:'无法读取分组用量，请检查组 ID 后重试。'};}
   });
   ipcMain.handle('pet-quota',async(event,name,value)=>{
@@ -339,7 +346,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     if(panel)data.accounts=quota.snapshot().accounts.map(({id,name})=>({id,name}));
     return {value:data};
   });
-  app.on('before-quit', () => { subscriptions?.close();petQuota?.close();groupUsage?.close();quota?.close();archery?.close();mail?.close();wechat?.close();codexRuntime.close();bridge?.close(); titles.close();cursorTitles.close(); });
+  app.on('before-quit', () => { subscriptions?.close();petQuota?.close();keyUsage?.close();groupUsage?.close();quota?.close();archery?.close();mail?.close();wechat?.close();codexRuntime.close();bridge?.close(); titles.close();cursorTitles.close(); });
   app.whenReady().then(async () => {
     // 先确认客户端运行状态，再过滤临时会话、同步已读，避免清掉退出时暂存的提醒。
     await refreshClients();
@@ -368,6 +375,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     archery.start();
     quota=createQuotaPanel({dataDir,tokenFile:process.env.WHALE_QUOTA_TOKEN_FILE||path.join(__dirname,'../../token'),fetchImpl:(url,options)=>net.fetch(url,options)});
     groupUsage=createGroupUsage({dataDir,tokenFile:process.env.WHALE_QUOTA_TOKEN_FILE||path.join(__dirname,'../../token'),fetchImpl:(url,options)=>net.fetch(url,options)});
+    keyUsage=createKeyUsage({dataDir,tokenFile:process.env.WHALE_QUOTA_TOKEN_FILE||path.join(__dirname,'../../token'),fetchImpl:(url,options)=>net.fetch(url,options)});
     petQuota=createPetQuota({settings:petQuotaSettings,quota,groups:groupUsage});petQuota.start();
     subscriptions=createMessageSubscriptions({dataDir,readPosts:createXSubscriptionReader(),
       translateText:createSubscriptionTranslator({fetchImpl:(url,options)=>net.fetch(url,options)}),onChange:broadcast});

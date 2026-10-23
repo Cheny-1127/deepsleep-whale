@@ -37,7 +37,7 @@ function createGroupUsage({tokenFile, dataDir, baseUrl = 'https://openai.minitvc
   const origin = String(baseUrl).replace(/\/+$/, '');
   const file = dataDir ? path.join(dataDir, 'quota-group-usage.json') : null;
   const entries = new Map();
-  let groupId = 13, period = 'day', groups = [], groupsCheckedAt = null, groupsAttemptedAt = null, groupsError = '';
+  let groupId = 13, period = 'day', expanded = true, groups = [], groupsCheckedAt = null, groupsAttemptedAt = null, groupsError = '';
   let flight = null, passiveFlight = false, flightEntryKey = null, timer, deadline, controller, closed = false, cacheError = '', nextRefreshAt = null;
   const key = (id, date, strategy = 'day') => `${id ?? 'all'}:${strategy}:${date}`;
   const source = () => createHash('sha256').update(JSON.stringify([origin, fs.readFileSync(tokenFile, 'utf8').trim()])).digest('hex');
@@ -58,6 +58,7 @@ function createGroupUsage({tokenFile, dataDir, baseUrl = 'https://openai.minitvc
             error: failedAt === null ? '' : '读取用户排行失败，30 分钟后自动重试。'};
         });
         groupId = saved.groupId;
+        expanded = saved.expanded !== false;
         period = validPeriod(saved.period) ? saved.period : 'day';
         groups = Array.isArray(saved.groups) && saved.groups.length <= 2000 ? saved.groups.map(projectGroup) : [];
         groupsCheckedAt = timestamp(saved.groupsCheckedAt);
@@ -71,7 +72,7 @@ function createGroupUsage({tokenFile, dataDir, baseUrl = 'https://openai.minitvc
   }
   function snapshot() {
     const item = current();
-    return {...item, users: item.users.map(user => ({...user})), groups: groups.map(group => ({...group})), groupsError,
+    return {...item, expanded, users: item.users.map(user => ({...user})), groups: groups.map(group => ({...group})), groupsError,
       busy: Boolean(flight), nextRefreshAt, cacheError};
   }
   function save() {
@@ -79,7 +80,7 @@ function createGroupUsage({tokenFile, dataDir, baseUrl = 'https://openai.minitvc
     try {
       // 按分组、策略和日期隔离，最多保留 20 份摘要；兼容迁移旧版每日缓存。
       const values = [...entries.values()].slice(-20).map(({error, ...item}) => item);
-      fs.writeFileSync(file + '.tmp', JSON.stringify({version: 2, source: source(), groupId, period, groups, groupsCheckedAt, entries: values}), {mode: 0o600});
+      fs.writeFileSync(file + '.tmp', JSON.stringify({version: 2, source: source(), groupId, period, expanded, groups, groupsCheckedAt, entries: values}), {mode: 0o600});
       fs.renameSync(file + '.tmp', file);
       cacheError = '';
     } catch { cacheError = '本地分组用量缓存保存失败，重启后可能无法保留最新数据。'; }
@@ -224,7 +225,12 @@ function createGroupUsage({tokenFile, dataDir, baseUrl = 'https://openai.minitvc
     save();
     return open();
   }
-  return {snapshot, open, refresh, select, close, dailySnapshot, openDaily, refreshDaily};
+  function setExpanded(value) {
+    // 折叠是持久化的显示偏好，不改变查询条件，也不触发用户排行或桌宠榜单刷新。
+    if (typeof value !== 'boolean') throw Error('无效的折叠状态');
+    expanded = value;save();return snapshot();
+  }
+  return {snapshot, open, refresh, select, close, dailySnapshot, openDaily, refreshDaily, setExpanded};
 }
 
 module.exports = {createGroupUsage, shanghaiDate, rankingRange, projectUser};

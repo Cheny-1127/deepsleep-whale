@@ -32,6 +32,9 @@ export function createGroupUsageView() {
   function render(data) {
     latest = data;
     const working = busy || data.busy;
+    $('toggle').setAttribute('aria-expanded', String(data.expanded !== false));
+    $('body').hidden = data.expanded === false;
+    $('tools').hidden = data.expanded === false;
     $('status').textContent = data.error ? `同步更新失败（${time(data.failedAt)}）` : '';
     $('status').hidden = !data.error;
     $('error').textContent = data.error || '';$('error').hidden = !data.error;
@@ -98,6 +101,10 @@ export function createGroupUsageView() {
     finally {busy = false;if (latest) render(latest);}
   }
   $('refresh').addEventListener('click', () => void change());
+  $('toggle').addEventListener('click', async () => {
+    if (!latest) return;
+    try {render(await invoke('set-expanded', latest.expanded === false));} catch {failure();}
+  });
   for (const option of $('period-options').querySelectorAll('button')) option.addEventListener('click', () => {
     $('period-picker').open = false;$('period-button').focus();
     if (latest && option.dataset.period !== latest.period) void change({groupId: latest.groupId, period: option.dataset.period});
