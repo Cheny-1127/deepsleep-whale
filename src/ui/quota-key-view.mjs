@@ -6,14 +6,25 @@ export function createKeyUsageView() {
   if (!$('picker')) return;
   let latest, busy = false, polling = false, sequence = 0, searchSequence = 0, timer, listKey = '';
   const collapsedGroups = new Set();
-  // 整卡折叠只影响当前窗口展示；保留表格节点，重新展开时无需重建或重新查费。
-  $('toggle').addEventListener('click',() => {
+  // 整卡折叠偏好由主进程落盘；保留表格节点，展开时复用仍有效的消费缓存。
+  $('toggle').addEventListener('click',async () => {
+    if ($('toggle').disabled) return;
     const expanded = $('toggle').getAttribute('aria-expanded') !== 'true';
-    $('toggle').setAttribute('aria-expanded',String(expanded));
-    $('body').hidden = !expanded;$('tools').hidden = !expanded;
-    $('collapsed-summary').hidden = expanded;
-    if (!expanded) {$('picker').open = false;clearSearch();}
+    $('toggle').disabled = true;
+    try {
+      const data = await invoke('set-expanded',expanded);
+      if (latest) latest = {...latest,expanded:data.expanded};
+      renderExpanded(data.expanded !== false);
+      $('cache-error').textContent = data.cacheError || '';$('cache-error').hidden = !data.cacheError;
+      if (expanded && !busy && !polling) void load();
+    } catch {$('error').textContent = '无法保存折叠状态，请稍后重试。';$('error').hidden = false;}
+    finally {$('toggle').disabled = false;}
   });
+  function renderExpanded(expanded) {
+    $('toggle').setAttribute('aria-expanded',String(expanded));
+    $('body').hidden = !expanded;$('tools').hidden = !expanded;$('collapsed-summary').hidden = expanded;
+    if (!expanded) {$('picker').open = false;clearSearch();}
+  }
   async function invoke(name, value) {
     const result = await window.whale.quotaGroup('keys-' + name,value);
     if (result.error) throw Error(result.error);
@@ -21,6 +32,7 @@ export function createKeyUsageView() {
   }
   function render(data) {
     latest = data;
+    renderExpanded(data.expanded !== false);
     const working = busy || data.busy;
     $('selected').textContent = data.user ? `${data.user.email} #${data.user.id}` : '请选择账号';
     $('refresh').disabled = working || !data.user;

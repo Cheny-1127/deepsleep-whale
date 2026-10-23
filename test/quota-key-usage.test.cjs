@@ -43,6 +43,22 @@ test('one selected user batches every key once and exposes only projected fields
   assert.equal(fs.statSync(path.join(f.dir,'quota-key-usage.json')).mode&0o777,0o600);
 });
 
+test('card collapse survives restart, pauses open refresh and preserves user cache',async t => {
+  const f = fixture(t);await f.panel.search();await f.panel.select(9);
+  const before = f.panel.snapshot(), count = f.calls.length;
+  assert.equal(f.panel.setExpanded(false).expanded,false);
+  assert.equal(f.calls.length,count);assert.throws(() => f.panel.setExpanded('false'));
+  const restarted = f.create();assert.equal(restarted.snapshot().expanded,false);
+  assert.deepEqual(restarted.snapshot().keys,before.keys);assert.equal(restarted.snapshot().user.id,9);
+  f.setNow(Date.parse('2026-10-24T12:30:00+08:00'));
+  await restarted.open();assert.equal(f.calls.length,count,'收起时打开页面不查费');
+  restarted.setExpanded(true);await restarted.open();assert.equal(f.batches().length,2,'展开后更新到期缓存');
+  assert.equal(f.create().snapshot().expanded,true);
+  const file = path.join(f.dir,'quota-key-usage.json'), saved = JSON.parse(fs.readFileSync(file,'utf8'));
+  delete saved.expanded;fs.writeFileSync(file,JSON.stringify(saved));
+  assert.equal(f.create().snapshot().expanded,true,'旧缓存默认展开');
+});
+
 test('open, select and restart reuse a user/day cache for thirty minutes; manual refresh bypasses it',async t => {
   const f = fixture(t);await f.panel.search();await f.panel.select(9);const count = f.calls.length;
   await f.panel.open();await f.panel.select(9);await f.panel.search();assert.equal(f.calls.length,count);

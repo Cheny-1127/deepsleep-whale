@@ -16,7 +16,7 @@ function createKeyUsage({tokenFile, dataDir, baseUrl = 'https://openai.minitvclu
   const origin = String(baseUrl).replace(/\/+$/, '');
   const file = dataDir ? path.join(dataDir,'quota-key-usage.json') : null;
   const entries = new Map(), directory = new Map(), flights = new Map(), searches = new Map(), controllers = new Set();
-  let selected = null, closed = false, cacheError = '';
+  let selected = null, expanded = true, closed = false, cacheError = '';
   // 缓存绑定站点和凭据指纹，切换管理凭据后不复用上一来源的数据，也不保存凭据原文。
   const source = () => createHash('sha256').update(JSON.stringify([origin,fs.readFileSync(tokenFile,'utf8').trim()])).digest('hex');
   const entryKey = (id, date = shanghaiDate(clock.now())) => `${id}:${date}`;
@@ -30,6 +30,8 @@ function createKeyUsage({tokenFile, dataDir, baseUrl = 'https://openai.minitvclu
     if (file && fs.existsSync(file)) {
       const saved = JSON.parse(fs.readFileSync(file,'utf8'));
       if (saved.version === 1 && saved.source === source()) {
+        // 兼容没有折叠偏好的旧缓存，默认展开。
+        expanded = saved.expanded !== false;
         selected = saved.selected === null ? null : userFields(saved.selected);
         if (!Array.isArray(saved.entries) || saved.entries.length > 10) throw Error('invalid cache');
         for (const item of saved.entries) {
@@ -40,13 +42,13 @@ function createKeyUsage({tokenFile, dataDir, baseUrl = 'https://openai.minitvclu
         }
       }
     }
-  } catch {selected = null;entries.clear();cacheError = '本地 Key 用量缓存无法读取，将重新同步。';}
+  } catch {selected = null;expanded = true;entries.clear();cacheError = '本地 Key 用量缓存无法读取，将重新同步。';}
   function save() {
     if (!file || closed) return;
     try {
       const items = [...entries.values()].filter(item => item.checkedAt !== null).slice(-10)
         .map(({userId,date,keys,checkedAt}) => ({userId,date,keys,checkedAt}));
-      fs.writeFileSync(file+'.tmp',JSON.stringify({version:1,source:source(),selected,entries:items}),{mode:0o600});
+      fs.writeFileSync(file+'.tmp',JSON.stringify({version:1,source:source(),selected,expanded,entries:items}),{mode:0o600});
       fs.renameSync(file+'.tmp',file);cacheError = '';
     } catch {cacheError = '本地 Key 用量缓存保存失败，重启后可能无法保留最新数据。';}
   }
@@ -54,7 +56,7 @@ function createKeyUsage({tokenFile, dataDir, baseUrl = 'https://openai.minitvclu
     // 只取当前账号、当天的条目；跨日或切换账号时不会短暂显示上一份消费。
     const date = shanghaiDate(clock.now()), item = selected && entries.get(entryKey(selected.id,date));
     const keys = (item?.keys || []).map(key => ({...key}));
-    return {user:selected && {...selected},date,keys,totalCost:keys.reduce((sum,key) => sum+key.todayCost,0),
+    return {user:selected && {...selected},expanded,date,keys,totalCost:keys.reduce((sum,key) => sum+key.todayCost,0),
       checkedAt:item?.checkedAt ?? null,attemptedAt:item?.attemptedAt ?? null,error:item?.error || '',cacheError,
       busy:Boolean(selected && flights.has(entryKey(selected.id,date)))};
   }
@@ -149,7 +151,12 @@ function createKeyUsage({tokenFile, dataDir, baseUrl = 'https://openai.minitvclu
     selected = {...user};save();return refresh(false);
   }
   function close() {closed = true;for (const controller of controllers) controller.abort();}
-  return {snapshot,search,select,refresh,open:() => refresh(false),close};
+  function setExpanded(value) {
+    // 保存整卡显示偏好，不查费；重启后仍收起，展开时再检查消费缓存是否到期。
+    if (typeof value !== 'boolean') throw Error('无效的折叠状态');
+    expanded = value;save();return snapshot();
+  }
+  return {snapshot,search,select,refresh,setExpanded,open:() => expanded ? refresh(false) : Promise.resolve(snapshot()),close};
 }
 
 module.exports = {createKeyUsage};
