@@ -37,6 +37,8 @@ test('pet projects only one tracked account and at most five daily users, with e
   const daily = {groupId:13, groups:[{id:13, name:'selected group'}], date:'2026-10-20', checkedAt:2, error:'',
     users:Array.from({length:7}, (_, i) => ({user_id:i+1, email:`user-${i}`, actual_cost:7-i, secret:'never-forward'}))};
   const service = createPetQuota({settings:f.settings, quota:{snapshot:()=>accounts}, groups:{dailySnapshot:()=>daily}});
+  assert.equal(service.snapshot().tracking.checkedAt,null,'旧缓存不能用整轮时间冒充账号同步时间');
+  account.lastSyncedAt=500;assert.equal(service.snapshot().tracking.checkedAt,500);
   assert.equal(service.snapshot().ranking.users.length, 5);assert.equal(service.snapshot().ranking.groupName, 'selected group');
   assert.ok(!JSON.stringify(service.snapshot()).includes('never-forward'));assert.ok(!JSON.stringify(service.snapshot()).includes('other'));
   for (const [remaining, tone] of [[30,'green'], [29,'yellow'], [10,'yellow'], [9,'red'], [0,'red']]) {

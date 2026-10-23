@@ -12,7 +12,8 @@ function fixture() {
     append(...children) { this.children.push(...children); }
     replaceChildren(...children) { this.children = children; }
     addEventListener(name, handler) { this.handlers[name] = handler; }
-    click() { this.handlers.click?.(); }
+    click() { return this.handlers.click?.(); }
+    contains(el) {return el?.withinDuration===true;}
     focus() {}
   }
   const elements = new Map();
@@ -31,7 +32,7 @@ function fixture() {
   elements.get('quota-view').hidden = true;
   const window = {whale: {quota: async (name, value) => { calls.push(name); if (name === 'set-refresh' || name === 'set-list' || name === 'set-interval') {saves.push(value);return save(value);} if (name === 'refresh') data = {...data, checkedAt: now, attemptedAt: now, failedAt: null, error: '', nextRefreshAt: now + 300000, busy: false}; return {value: data}; }}};
   const source = fs.readFileSync(path.join(__dirname, '../src/ui/quota-view.mjs'), 'utf8').replace('export function', 'function');
-  vm.runInNewContext(source + '\ncreateQuotaView();', {window, document: {addEventListener() {}, getElementById: id => elements.get(id), createElement: tag => new Element(tag), createElementNS: (_ns, tag) => new Element(tag)}, Date: TestDate, setInterval(callback) { intervals.push(callback); }});
+  vm.runInNewContext(source + '\ncreateQuotaView();', {window, document: {addEventListener() {}, getElementById: id => elements.get(id), createElement: tag => new Element(tag), createElementNS: (_ns, tag) => new Element(tag)}, Date: TestDate, setTimeout, setInterval(callback) { intervals.push(callback); }});
   const get = id => elements.get('quota-' + id);
   return {get, calls, saves, setSave: fn => {save = fn;}, setNow: value => { now = value; }, set: value => { data = {...data, ...value}; },
     async open() { get('view').hidden = false; elements.get('nav-quota').click(); await tick(); },
@@ -53,27 +54,62 @@ test('list preferences hide the five-hour window without hiding weekly quota or 
   assert.deepEqual(view.calls, ['snapshot', 'set-list']);
 });
 
-test('interval drafts survive polling and save with the chosen unit without requesting quota data',async()=>{
-  const view=fixture();view.set({checkedAt:1000});await view.open();
-  assert.equal(view.get('interval-value').value,'5');assert.equal(view.get('interval-unit').value,'minutes');
-  view.get('interval-value').value='2';view.get('interval-value').handlers.input();
-  view.get('interval-hours').click();
-  assert.equal(view.get('interval-value').max,'24');assert.equal(view.get('interval-apply').disabled,false);
-  await view.poll();assert.equal(view.get('interval-value').value,'2');assert.equal(view.get('interval-unit').value,'hours');
-  await view.get('interval-form').handlers.submit({preventDefault(){}});
-  assert.deepEqual(view.calls,['snapshot','snapshot','set-interval']);assert.equal(JSON.stringify(view.saves),JSON.stringify([{value:2,unit:'hours'}]));
-  assert.equal(view.get('interval-apply').disabled,true);assert.match(view.get('interval-feedback').textContent,/2 小时/);
-  view.set({busy:true,nextRefreshAt:null});await view.poll();assert.equal(view.get('interval-value').disabled,true);
+test('each account displays its own last successful sync time including paused accounts and unknown legacy data',async()=>{
+  const view=fixture();view.set({checkedAt:9000,accounts:[{id:5,lastSyncedAt:1000},{id:6,lastSyncedAt:0,refreshEnabled:false},{id:7}]});await view.open();
+  const times=()=>view.get('list').children.map(row=>row.children[3].textContent);
+  assert.deepEqual(times(),[new Date(1000).toLocaleString('sv-SE').replace(' ', '\n'),new Date(0).toLocaleString('sv-SE').replace(' ', '\n'),'尚无同步时间']);
+  view.set({accounts:[{id:5,lastSyncedAt:3000},{id:6,lastSyncedAt:0,refreshEnabled:false},{id:7}]});await view.poll();
+  assert.equal(times()[0],new Date(3000).toLocaleString('sv-SE').replace(' ', '\n'));assert.equal(times()[1],new Date(0).toLocaleString('sv-SE').replace(' ', '\n'));
 });
 
-test('failed interval saves preserve the draft and old schedule, and seconds enforce the five-second minimum',async()=>{
+test('seconds drafts show a live duration, survive polling and save without fetching',async()=>{
+  const view=fixture();view.set({checkedAt:1000,refreshInterval:{value:2,unit:'hours'}});await view.open();
+  assert.equal(view.get('interval-value').value,'7200');assert.equal(view.get('interval-preview').textContent,'2时');
+  view.get('interval-value').value='3665';view.get('interval-value').handlers.input();
+  assert.equal(view.get('interval-preview').textContent,'1时1分5秒');
+  await view.poll();assert.equal(view.get('interval-value').value,'3665');assert.equal(view.saves.length,0);
+  await view.get('interval-form').handlers.submit({preventDefault(){}});
+  assert.deepEqual(view.calls,['snapshot','snapshot','set-interval']);assert.equal(JSON.stringify(view.saves),JSON.stringify([{value:3665,unit:'seconds'}]));
+  assert.equal(view.get('interval-feedback').textContent,'','成功保存不留下提示文字');
+});
+
+test('seconds remain editable and save silently while a refresh is running',async()=>{
+  const view=fixture();view.set({checkedAt:1000,busy:true});await view.open();
+  assert.equal(view.get('interval-value').disabled,false);
+  view.get('interval-value').value='30';view.get('interval-value').handlers.input();
+  await view.get('interval-form').handlers.submit({preventDefault(){}});
+  assert.equal(JSON.stringify(view.saves),JSON.stringify([{value:30,unit:'seconds'}]));
+  assert.equal(view.get('interval-feedback').textContent,'');assert.equal(view.get('interval-retry').hidden,true);
+  assert.equal(view.get('interval-value').disabled,false);assert.equal(view.get('refresh').disabled,true);
+});
+
+test('failed seconds saves retain the draft and offer retry without changing the schedule',async()=>{
   const view=fixture();view.set({checkedAt:1000,nextRefreshAt:301000});await view.open();
-  view.get('interval-seconds').click();
-  assert.equal(view.get('interval-value').min,'5');assert.equal(view.get('interval-value').max,'86400');
   view.setSave(async()=>({error:'private storage error'}));
-  const previous=view.get('checked').textContent;await view.get('interval-form').handlers.submit({preventDefault(){}});
-  assert.equal(view.get('interval-unit').value,'seconds');assert.equal(view.get('interval-apply').disabled,false);
-  assert.equal(view.get('checked').textContent,previous);assert.equal(view.get('settings-error').textContent,'刷新间隔保存失败，请重试。');
+  view.get('interval-value').value='7200';view.get('interval-value').handlers.input();
+  await view.get('interval-form').handlers.submit({preventDefault(){}});
+  assert.equal(view.get('interval-value').value,'7200');assert.equal(view.get('interval-preview').textContent,'2时');
+  assert.equal(view.get('interval-retry').hidden,false);assert.match(view.get('interval-feedback').textContent,/未保存/);
+  view.get('interval-value').value='';view.get('interval-value').handlers.input();
+  await view.get('interval-form').handlers.submit({preventDefault(){}});
+  assert.equal(view.get('interval-value').value,'300');assert.equal(view.saves.length,1);assert.equal(view.get('interval-retry').hidden,true);
+});
+
+test('seconds limits are applied only on completion, empty input restores saved value and decimals remain drafts',async()=>{
+  for(const [input,expected] of [['4',5],['0',5],['-2',5],['0.5',5],['90000',86400],['86401',86400]]) {
+    const view=fixture();view.set({checkedAt:1000});await view.open();
+    view.get('interval-value').value=input;view.get('interval-value').handlers.input();
+    assert.equal(view.get('interval-value').value,input);
+    await view.get('interval-form').handlers.submit({preventDefault(){}});
+    assert.equal(view.get('interval-value').value,String(expected));
+    assert.equal(JSON.stringify(view.saves),JSON.stringify([{value:expected,unit:'seconds'}]));
+    view.get('interval-value').value='';view.get('interval-value').handlers.input();
+    await view.get('interval-form').handlers.submit({preventDefault(){}});
+    assert.equal(view.saves.length,1);assert.equal(view.get('interval-value').value,String(expected));
+    view.get('interval-value').value='5.5';view.get('interval-value').handlers.input();
+    await view.get('interval-form').handlers.submit({preventDefault(){}});
+    assert.equal(view.saves.length,1);assert.match(view.get('interval-feedback').textContent,/整数/);
+  }
 });
 
 test('a zero-length window stays hidden even when the five-hour display setting is enabled', async () => {
@@ -201,7 +237,7 @@ test('opening the page loads account quotas', async () => {
   const view = fixture();
   await view.open();
   assert.deepEqual(view.calls, ['snapshot', 'refresh']);
-  assert.match(view.get('checked').textContent, /刷新时间/);
+  assert.equal(view.get('checked'), undefined);
 });
 
 test('reset countdown updates locally without rebuilding rows or refreshing the account', async () => {
@@ -271,20 +307,23 @@ test('credit balances display separately from percent windows, distinguish zero 
   const view = fixture();
   view.set({accounts: [62500, 0, 12.125, null, undefined, -1, Infinity, '<img src=x>'].map((creditsBalance, id) => ({id, creditsBalance})), checkedAt: 1000});
   await view.open();
-  const balances = () => view.get('list').children.map(row => row.children[3]);
+  const balances = () => view.get('list').children.map(row => row.children[0].children[0]);
   assert.deepEqual(balances().map(el => el.textContent), ['62,500', '0', '12.125', '—', '—', '—', '—', '—']);
   assert.equal(balances()[0].title, '点数余额：62500');
   assert.equal(balances()[3].title, '暂无点数数据');
-  assert.equal(balances()[0].tagName, 'td');
+  assert.equal(balances()[0].tagName, 'div');
   view.get('show-remaining').checked = false;await view.get('show-remaining').handlers.change();
   assert.equal(view.get('list').children[0].children[2].hidden, true);assert.equal(balances()[0].hidden, false);
   view.get('show-credits').checked = false;await view.get('show-credits').handlers.change();
-  assert.equal(view.get('credits-heading').hidden, true);assert.equal(balances()[0].hidden, true);
+  assert.equal(view.get('synced-at-heading').hidden, false);assert.equal(balances()[0].hidden, true);
   view.get('show-credits').checked = true;await view.get('show-credits').handlers.change();
-  assert.equal(view.get('credits-heading').hidden, false);assert.equal(balances()[0].hidden, false);
+  assert.equal(view.get('synced-at-heading').hidden, false);assert.equal(balances()[0].hidden, false);
+  view.get('show-synced-at').checked = false;await view.get('show-synced-at').handlers.change();
+  assert.equal(view.get('synced-at-heading').hidden, true);assert.equal(view.get('list').children[0].children[3].hidden, true);
+  assert.equal(balances()[0].hidden, false,'隐藏刷新时间列不影响账号下方的点数');
   view.set({accounts: [{id: 0, creditsBalance: 62000}]});await view.poll();
   assert.equal(balances()[0].textContent, '62,000');
-  assert.deepEqual(view.calls, ['snapshot', 'set-list', 'set-list', 'set-list', 'snapshot']);
+  assert.deepEqual(view.calls, ['snapshot', 'set-list', 'set-list', 'set-list', 'set-list', 'snapshot']);
 });
 
 test('empty accounts hide the column headers and keep refresh and update status available', async () => {
@@ -293,7 +332,7 @@ test('empty accounts hide the column headers and keep refresh and update status 
   assert.equal(view.get('table').hidden, true);
   assert.equal(view.get('empty').hidden, false);
   assert.equal(view.get('refresh').disabled, false);
-  assert.match(view.get('checked').textContent, /刷新时间/);
+  assert.equal(view.get('checked'), undefined);
 });
 
 
@@ -334,7 +373,7 @@ test('a successful timestamp of zero is cached and does not start another networ
   await view.open();
   assert.deepEqual(view.calls, ['snapshot']);
   assert.equal(view.get('status').textContent, '已同步');
-  assert.match(view.get('checked').textContent, /刷新时间/);
+  assert.equal(view.get('checked'), undefined);
 });
 
 

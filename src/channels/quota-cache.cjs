@@ -8,7 +8,8 @@ function cachedAccount(item) {
   if(!item||!Number.isSafeInteger(item.id)||item.id<=0)throw Error('invalid account');
   const expiresAt=text(item.subscriptionExpiresAt);
   // 只保存界面所需的摘要；读取时也过滤额外字段，不能带入凭据。
-  return {id:item.id,name:text(item.name)||'',fiveHourRemaining:percent(item.fiveHourRemaining),sevenDayRemaining:percent(item.sevenDayRemaining),
+  // 旧缓存缺少账号同步时间时保留未知，不能用整轮时间补齐暂停或失败账号的时间。
+  return {id:item.id,name:text(item.name)||'',lastSyncedAt:timestamp(item.lastSyncedAt),fiveHourRemaining:percent(item.fiveHourRemaining),sevenDayRemaining:percent(item.sevenDayRemaining),
     creditsBalance:typeof item.creditsBalance==='number'&&Number.isFinite(item.creditsBalance)&&item.creditsBalance>=0?item.creditsBalance:null,
     fiveHourResetAt:text(item.fiveHourResetAt)&&Number.isFinite(Date.parse(item.fiveHourResetAt))?item.fiveHourResetAt:null,
     sevenDayResetAt:text(item.sevenDayResetAt)&&Number.isFinite(Date.parse(item.sevenDayResetAt))?item.sevenDayResetAt:null,

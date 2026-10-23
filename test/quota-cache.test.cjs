@@ -24,6 +24,7 @@ function fixture(t) {
 test('successful quota data is saved without credentials and restored before any request',async t=>{
   const f=fixture(t),first=f.create();const success=await first.refresh();first.close();
   const serialized=fs.readFileSync(f.cacheFile,'utf8');
+  assert.equal(success.accounts[0].lastSyncedAt,1000);
   assert.ok(!serialized.includes('private-api-key'));assert.ok(!serialized.includes('private-access-token'));assert.ok(!serialized.includes('credentials'));assert.ok(!serialized.includes('private-credit-details'));assert.equal(success.accounts[0].creditsBalance,62500);
   assert.equal(fs.statSync(f.cacheFile).mode&0o777,0o600);
   f.setNow(2000);const restarted=f.create(),cached=restarted.snapshot();
@@ -31,6 +32,16 @@ test('successful quota data is saved without credentials and restored before any
   assert.equal(f.calls.length,1);assert.ok([...f.jobs].some(job=>job.ms===299000),'恢复剩余等待时间，不能重新等待完整五分钟');
   const timer=[...f.jobs].find(job=>job.ms===299000);f.jobs.delete(timer);f.setNow(301000);timer.fn();await new Promise(setImmediate);
   assert.equal(f.calls.length,2);assert.equal(restarted.snapshot().checkedAt,301000);
+});
+
+test('legacy or invalid account sync times remain unknown rather than inheriting the whole refresh time',async t=>{
+  const f=fixture(t),first=f.create();await first.refresh();first.close();
+  const saved=JSON.parse(fs.readFileSync(f.cacheFile,'utf8'));
+  for(const value of [undefined,null,-1,'1000',8640000000000001,0,2000]) {
+    saved.accounts[0].lastSyncedAt=value;fs.writeFileSync(f.cacheFile,JSON.stringify(saved));
+    const restored=f.create();assert.equal(restored.snapshot().accounts[0].lastSyncedAt,value===0||value===2000?value:null);restored.close();
+  }
+  assert.equal(f.calls.length,1);
 });
 
 test('custom interval and account switches survive restart without overwriting each other',async t=>{

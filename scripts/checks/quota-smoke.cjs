@@ -25,9 +25,9 @@ return {ok:true,json:async()=>({code:0,data:{users:[
 q.createQuotaPanel=options=>createQuota({...options,fetchImpl:async url=>{
 const endpoint=new URL(url).pathname;global.quotaSmoke.calls.push(endpoint);
 if(global.quotaSmoke.holdRequest)await global.quotaSmoke.holdRequest;
-if(global.quotaSmoke.offline)throw Error('synthetic offline');
+if(global.quotaSmoke.offline||endpoint.endsWith('/'+global.quotaSmoke.failAccountId))throw Error('synthetic offline');
 const account=id=>({id,name:id===5?'test-codex-account':'another-account',platform:'openai',type:'oauth',credentials:{plan_type:id===5?'prolite':'pro',subscription_expires_at:'2026-11-19T15:07:00Z'},extra:{codex_5h_used_percent:4,codex_5h_window_minutes:global.quotaSmoke.allFiveHourUnavailable?0:id===5?300:0,codex_7d_window_minutes:10080,codex_5h_reset_at:new Date(Date.now()+3600000).toISOString(),codex_7d_reset_at:new Date(Date.now()+604800000).toISOString(),codex_7d_used_percent:id===6&&global.quotaSmoke.secondaryUsedPercent!=null?global.quotaSmoke.secondaryUsedPercent:30,codex_reset_credit_snapshot:{available_count:id===5?0:2},codex_credits_snapshot:{credits:{balance:id===5?(global.quotaSmoke.creditBalance===undefined?'62500.0000000000':global.quotaSmoke.creditBalance):'0'}}}});
-return {ok:true,json:async()=>({data:endpoint.endsWith('/accounts')?{items:[account(5),account(6)],pages:1}:account(Number(endpoint.split('/').at(-1)))})};
+return {ok:true,json:async()=>({data:endpoint.endsWith('/accounts')?{items:(global.quotaSmoke.listIds||[5,6]).map(account),pages:1}:account(Number(endpoint.split('/').at(-1)))})};
 }});
 require(${JSON.stringify(path.join(root,'src/main.cjs'))});`);
 let app;
@@ -56,9 +56,44 @@ let app;
   }
   let {panel,pet,errors}=await launch();
   assert.deepEqual(await panel.locator('.quota-credits').allTextContents(),['62,500','0']);
+  if(process.env.WHALE_QUOTA_SYNC_ONLY==='1') {
+    const snapshot=async()=>(await panel.evaluate(()=>window.whale.quota('snapshot'))).value;
+    async function refresh() {
+      await panel.locator('#quota-refresh').click();
+      await panel.waitForFunction(()=>!document.getElementById('quota-refresh').disabled);
+      return snapshot();
+    }
+    assert.equal(await panel.locator('#quota-checked').count(),0);
+    const initial=await snapshot();
+    assert.ok(initial.accounts.every(a=>Number.isSafeInteger(a.lastSyncedAt)));
+    await panel.getByRole('switch',{name:'test-codex-account · 刷新',exact:true}).click();
+    await panel.waitForFunction(()=>document.querySelector('#quota-list [role="switch"]').getAttribute('aria-checked')==='false');
+    await app.evaluate(()=>{global.quotaSmoke.calls=[];global.quotaSmoke.listIds=[5,7];});
+    const updated=await refresh();
+    assert.deepEqual(await app.evaluate(()=>global.quotaSmoke.calls),['/api/v1/admin/accounts','/api/v1/admin/accounts/6']);
+    assert.equal(updated.accounts[0].lastSyncedAt,initial.accounts[0].lastSyncedAt);
+    assert.ok(updated.accounts[1].lastSyncedAt>initial.accounts[1].lastSyncedAt);
+    assert.equal(updated.accounts[2].id,7);
+    await app.evaluate(()=>{global.quotaSmoke.failAccountId=6;});
+    const partial=await refresh();
+    assert.equal(partial.accounts[1].lastSyncedAt,updated.accounts[1].lastSyncedAt);
+    assert.ok(partial.accountRefreshErrors[6]);assert.ok(partial.accounts[2].lastSyncedAt>updated.accounts[2].lastSyncedAt);
+    assert.deepEqual(await panel.locator('.quota-account-synced').allTextContents(),await panel.evaluate(accounts=>accounts.map(a=>new Date(a.lastSyncedAt).toLocaleString('sv-SE').replace(' ', '\n')),partial.accounts));
+    for(const width of [860,1060]) {
+      await app.evaluate(({BrowserWindow},width)=>BrowserWindow.getAllWindows().find(win=>win.webContents.getURL().endsWith('/index.html')).setSize(width,900),width);
+      await panel.locator('.quota-card').first().screenshot({path:`/tmp/whale-quota-sync-${width}.png`});
+      assert.equal(await panel.locator('.quota-account-synced').evaluateAll(els=>els.every(el=>el.scrollWidth<=el.clientWidth)),true);
+    }
+    assert.deepEqual(errors,[]);await app.close();app=null;
+    ({panel,pet,errors}=await launch());
+    assert.deepEqual((await snapshot()).accounts,partial.accounts);
+    assert.deepEqual(await app.evaluate(()=>global.quotaSmoke.calls),[]);
+    assert.deepEqual(errors,[]);console.log('Quota list sync UI OK: selective merging, missing-account fallback, per-account timestamps, failures, restart and layouts');return;
+  }
   if(process.env.WHALE_QUOTA_CREDITS_ONLY==='1') {
-    assert.deepEqual(await panel.locator('#quota-table thead th').allTextContents(),['账号名称','订阅信息','剩余用量','点数','刷新']);
-    assert.equal(await panel.locator('#quota-list tr').first().locator('td.quota-credits').evaluate(el=>el.cellIndex),3);
+    assert.deepEqual(await panel.locator('#quota-table thead th').allTextContents(),['账号名称','订阅信息','剩余用量','刷新时间','刷新']);
+    assert.equal(await panel.locator('#quota-list tr').first().locator('.quota-account .quota-credits').count(),1);
+    assert.equal(await panel.locator('.quota-account-synced').first().evaluate(el=>el.cellIndex),3);
     async function refreshCredits(balance) {
       await app.evaluate((_electron,balance)=>{global.quotaSmoke.creditBalance=balance;},balance);
       await panel.locator('#quota-refresh').click();
@@ -84,57 +119,90 @@ let app;
   }
 
   if(process.env.WHALE_QUOTA_MULTI_ONLY!=='1') {
-  // 使用较长间隔检查三种单位，避免真实计时器干扰后续手动刷新调用数断言。
-  assert.equal(await panel.locator('#quota-next').count(),0,'不再展示下次刷新时间');
-  assert.equal(await panel.locator('#quota-account-tools #quota-interval-form').count(),1,'刷新频率位于账号额度标题栏');
-  assert.equal(await panel.locator('label[for="quota-interval-value"]').textContent(),'刷新频率');
-  async function selectUnit(unit) {await panel.locator('#quota-interval-button').click();await panel.locator('#quota-interval-'+unit).click();}
-  for(const [value,unit] of [['2','hours'],['120','minutes'],['7200','seconds']]) {
-    await panel.locator('#quota-interval-value').fill(value);await selectUnit(unit);
-    await panel.locator('#quota-interval-apply').click();
-    await panel.waitForFunction(()=>document.getElementById('quota-interval-apply').disabled&&document.getElementById('quota-interval-feedback').textContent.includes('已保存'));
-    assert.equal((await panel.evaluate(()=>window.whale.quota('snapshot'))).value.refreshIntervalMs,7200000);
+  assert.equal(await panel.locator('#quota-interval-picker').count(),0,'秒数输入不再提供单位菜单');
+  assert.equal(await panel.locator('#quota-interval-apply').count(),0,'不显示常驻保存按钮');
+  async function saveSeconds(raw,expected,blur=false) {
+    await panel.locator('#quota-interval-value').fill(raw);
+    if(blur)await panel.locator('#quota-heading').click();else await panel.locator('#quota-interval-value').press('Enter');
+    let actual;
+    for(let attempt=0;attempt<100;attempt++) {
+      actual=(await panel.evaluate(()=>window.whale.quota('snapshot'))).value.refreshIntervalMs;
+      if(actual===expected*1000)break;
+      await panel.waitForTimeout(25);
+    }
+    assert.equal(actual,expected*1000);
+    await panel.waitForFunction(expected=>document.getElementById('quota-interval-value').value===String(expected)&&!document.getElementById('quota-interval-value').disabled&&document.getElementById('quota-interval-feedback').textContent==='',expected);
   }
-  await panel.locator('#quota-interval-value').fill('4');await panel.locator('#quota-interval-apply').click();
-  assert.equal(await panel.locator('#quota-interval-value').evaluate(el=>el.checkValidity()),false);
+  for(const [seconds,visible,label] of [['59',false,''],['60',true,'1分'],['61',true,'1分1秒'],['30',false,'']]) {
+    await panel.locator('#quota-interval-value').fill(seconds);
+    assert.equal(await panel.locator('#quota-interval-preview').isVisible(),visible);
+    assert.equal(await panel.locator('#quota-interval-preview').textContent(),label);
+    assert.equal(await panel.locator('#quota-interval-preview').evaluate(el=>el.parentElement.id),'quota-interval-control','换算位于输入外框内部');
+  }
+  await panel.locator('#quota-interval-value').fill('3665');
+  assert.equal(await panel.locator('#quota-interval-preview').textContent(),'1时1分5秒');
+  assert.equal((await panel.evaluate(()=>window.whale.quota('snapshot'))).value.refreshIntervalMs,300000,'输入期间不提交');
+  await saveSeconds('3665',3665);await saveSeconds('90000',86400,true);await saveSeconds('3',5);await saveSeconds('7200',7200,true);
+  await panel.locator('#quota-interval-value').fill('');await panel.locator('#quota-heading').click();
+  await panel.waitForFunction(()=>document.getElementById('quota-interval-value').value==='7200');
   assert.equal((await panel.evaluate(()=>window.whale.quota('snapshot'))).value.refreshIntervalMs,7200000);
-  for(const value of [{value:4,unit:'seconds'},{value:25,unit:'hours'}]) assert.match((await panel.evaluate(value=>window.whale.quota('set-interval',value),value)).error,/5 秒至 24 小时/);
-  await selectUnit('hours');await panel.locator('#quota-interval-value').fill('25');
-  assert.equal(await panel.locator('#quota-interval-value').evaluate(el=>el.checkValidity()),false);
-  await panel.locator('#quota-interval-value').fill('2');await panel.locator('#quota-interval-apply').click();
-  await panel.waitForFunction(()=>document.getElementById('quota-interval-feedback').textContent.includes('2 小时'));
+  assert.equal(await panel.locator('#quota-accounts-body').isVisible(),true,'编辑不触发折叠');
   assert.equal(await pet.evaluate(async()=>{try{await window.whale.quota('set-interval',{value:5,unit:'seconds'});return 'allowed';}catch{return 'denied';}}),'denied');
-  await panel.locator('#quota-interval-button').click();
-  assert.equal(await panel.locator('#quota-interval-hours').getAttribute('aria-selected'),'true');
-  await panel.keyboard.press('Home');await panel.keyboard.press('Enter');
-  assert.equal(await panel.locator('#quota-interval-unit').inputValue(),'seconds','键盘可切换公共菜单的单位');
-  await selectUnit('hours');
-  await panel.locator('#quota-interval-button').click();await panel.keyboard.press('Escape');
-  assert.equal(await panel.locator('#quota-interval-picker').evaluate(el=>el.open),false,'Esc 收起菜单');
-  await panel.locator('#quota-interval-button').click();await panel.locator('#quota-heading').click();
-  assert.equal(await panel.locator('#quota-interval-picker').evaluate(el=>el.open),false,'点击外部收起菜单');
-  assert.equal(await panel.locator('#quota-accounts-body').isVisible(),true,'编辑频率不触发标题折叠');
-  // 独立验证新增周期功能，避免榜单等无关窗口影响检查结果。
   if(process.env.WHALE_QUOTA_INTERVAL_ONLY==='1') {
+    // 挂起网络请求，确认编辑频率不会被刷新锁住，也不会提前发起下一轮请求。
+    await app.evaluate(()=>{global.quotaSmoke.holdRequest=new Promise(resolve=>{global.quotaSmoke.releaseRequest=resolve;});});
+    await panel.locator('#quota-refresh').click();
+    await panel.waitForFunction(()=>document.getElementById('quota-refresh').disabled);
+    await saveSeconds('15',15);await saveSeconds('30',30,true);
+    const refreshing=(await panel.evaluate(()=>window.whale.quota('snapshot'))).value;
+    assert.equal(refreshing.busy,true);assert.equal(refreshing.nextRefreshAt,null);
+    assert.equal(await panel.locator('#quota-interval-retry').isVisible(),false);
+    await app.evaluate(()=>{global.quotaSmoke.releaseRequest();global.quotaSmoke.holdRequest=null;});
+    await panel.waitForFunction(()=>!document.getElementById('quota-refresh').disabled);
+    const refreshed=(await panel.evaluate(()=>window.whale.quota('snapshot'))).value;
+    assert.equal(refreshed.refreshIntervalMs,30000);
+    assert.ok(refreshed.nextRefreshAt-refreshed.checkedAt>=30000&&refreshed.nextRefreshAt-refreshed.checkedAt<31000);
+    await saveSeconds('7200',7200);
+    fs.mkdirSync(path.join(dir,'quota-refresh.json.tmp'));
+    await panel.locator('#quota-interval-value').fill('10800');await panel.locator('#quota-interval-value').press('Enter');
+    await panel.waitForFunction(()=>!document.getElementById('quota-interval-retry').hidden);
+    assert.equal(await panel.locator('#quota-interval-value').inputValue(),'10800');
+    assert.equal((await panel.evaluate(()=>window.whale.quota('snapshot'))).value.refreshIntervalMs,7200000);
+    fs.rmdirSync(path.join(dir,'quota-refresh.json.tmp'));await panel.locator('#quota-interval-retry').click();
+    await panel.waitForFunction(()=>document.getElementById('quota-interval-feedback').textContent===''&&document.getElementById('quota-interval-control').getAttribute('aria-busy')==='false');
+    assert.equal((await panel.evaluate(()=>window.whale.quota('snapshot'))).value.refreshIntervalMs,10800000);
+    // 保留旧小时配置重启，验证界面迁移不改变实际频率。
+    await panel.evaluate(()=>window.whale.quota('set-interval',{value:2,unit:'hours'}));
     assert.deepEqual(errors,[]);await app.close();app=null;
     ({panel,pet,errors}=await launch());
-    assert.equal(await panel.locator('#quota-interval-value').inputValue(),'2');
-    assert.equal(await panel.locator('#quota-interval-unit').inputValue(),'hours');
-    assert.equal((await panel.evaluate(()=>window.whale.quota('snapshot'))).value.refreshIntervalMs,7200000);
-    assert.deepEqual(await app.evaluate(()=>global.quotaSmoke.calls),[],'重启使用缓存，保留新周期的剩余等待');
+    assert.equal(await panel.locator('#quota-interval-value').inputValue(),'7200');
+    assert.equal(await panel.locator('#quota-interval-preview').textContent(),'2时');
+    assert.deepEqual(await app.evaluate(()=>global.quotaSmoke.calls),[],'重启复用缓存');
     for(const width of [860,1060]) {
       await app.evaluate(({BrowserWindow},width)=>BrowserWindow.getAllWindows().find(win=>win.webContents.getURL().endsWith('/index.html')).setSize(width,760),width);
-      assert.equal(await panel.locator('#quota-interval-form').evaluate(el=>el.getBoundingClientRect().right<=innerWidth&&document.documentElement.scrollWidth<=innerWidth),true,'设置区域不溢出');
-      await panel.screenshot({path:`/tmp/whale-quota-interval-${width}.png`});
-      await panel.locator('#quota-interval-button').click();
-      const menu=await panel.locator('#quota-interval-picker .quota-group-menu').boundingBox();
-      assert.ok(menu.x>=0&&menu.x+menu.width<=width,'单位菜单不溢出窗口');
-      await panel.screenshot({path:`/tmp/whale-quota-interval-menu-${width}.png`});
-      await panel.keyboard.press('Escape');
+      let previousLayout;const controlWidths=[];
+      assert.equal(await panel.evaluate(()=>CSS.supports('field-sizing','content')),true);
+      for(const seconds of ['5','59','60','120','3665','86399','86400','9999999999']) {
+        await panel.locator('#quota-interval-value').fill(seconds);
+        const layout=await panel.evaluate(()=>['quota-interval-form','quota-refresh','quota-columns-button'].map(id=>{const r=document.getElementById(id).getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};}));
+        if(previousLayout)assert.deepEqual(layout,previousLayout,'切换内容只改变输入框宽度，不移动标签与按钮');
+        previousLayout=layout;
+        const control=await panel.locator('#quota-interval-control').boundingBox();
+        controlWidths.push(control.width);assert.ok(control.width<=176);
+        assert.equal(await panel.locator('#quota-interval-control').evaluate(el=>el.scrollWidth<=el.clientWidth),true,'最长换算也不溢出输入外框');
+        const preview=panel.locator('#quota-interval-preview');
+        assert.equal(await preview.getAttribute('title'),await preview.textContent(),'省略的换算可悬停查看完整内容');
+      }
+      assert.ok(controlWidths[0]<controlWidths[3]&&controlWidths[3]<controlWidths[4],'边框随秒数和换算收缩伸展');
+      await panel.locator('#quota-interval-value').fill('30');
+      await panel.screenshot({path:`/tmp/whale-quota-seconds-short-${width}.png`});
+      await panel.locator('#quota-interval-value').fill('3665');
+      await panel.screenshot({path:`/tmp/whale-quota-seconds-page-${width}.png`});
+      assert.equal(await panel.locator('#quota-interval-form').evaluate(el=>el.getBoundingClientRect().right<=innerWidth&&document.documentElement.scrollWidth<=innerWidth),true,'设置不溢出');
+      const form=await panel.locator('#quota-interval-form').boundingBox();
+      await panel.screenshot({path:`/tmp/whale-quota-seconds-inline-${width}.png`,clip:{x:form.x-10,y:form.y-10,width:form.width+20,height:form.height+20}});
     }
-    assert.deepEqual(errors,[]);
-    console.log('Quota interval UI OK: seconds/minutes/hours, bounds, saved schedule, restart, cache, IPC access and 860/1060px layout');
-    return;
+    assert.deepEqual(errors,[]);console.log('Quota seconds UI OK: live preview, Enter/blur, limits, empty restore, retry, legacy settings, restart and layouts');return;
   }
   assert.deepEqual(await panel.locator('.quota-subscription').allTextContents(),['Pro 100','Pro 200']);
   assert.deepEqual(await panel.locator('.quota-reset-count').allTextContents(),['重置次数 0','重置次数 2']);
@@ -143,7 +211,7 @@ let app;
   assert.deepEqual(await panel.locator('.quota-expiry').allTextContents(),['到期 2026-11-19','到期 2026-11-19']);
   const first=()=>panel.getByRole('switch',{name:'test-codex-account · 刷新',exact:true});
   const second=()=>panel.getByRole('switch',{name:'another-account · 刷新',exact:true});
-  assert.deepEqual(await panel.locator('#quota-table thead th').allTextContents(),['账号名称','订阅信息','剩余用量','点数','刷新']);
+  assert.deepEqual(await panel.locator('#quota-table thead th').allTextContents(),['账号名称','订阅信息','剩余用量','刷新时间','刷新']);
   assert.deepEqual(await panel.locator('#quota-list tr').first().locator('.quota-period').allTextContents(),['5h','7d']);
   assert.match(await panel.locator('.quota-reset-time > span:first-child').first().textContent(),/^\d+h \d+m$/);
   assert.match(await panel.locator('.quota-window-7d .quota-reset-time > span:first-child').first().textContent(),/^\d+d \d+h$/);
@@ -276,7 +344,7 @@ let app;
   await panel.waitForFunction(()=>document.querySelector('#quota-list [role="switch"]').getAttribute('aria-checked')==='false');
   await panel.locator('#quota-refresh').click();
   await panel.waitForFunction(()=>!document.getElementById('quota-refresh').disabled);
-  assert.deepEqual(await app.evaluate(()=>global.quotaSmoke.calls),['/api/v1/admin/accounts','/api/v1/admin/accounts/6']);
+  assert.deepEqual(await app.evaluate(()=>global.quotaSmoke.calls),['/api/v1/admin/accounts','/api/v1/admin/accounts']);
   assert.equal(await pet.evaluate(async()=>{try{await window.whale.quota('set-refresh',{id:6,enabled:false});return 'allowed';}catch{return 'denied';}}),'denied');
   assert.ok((await panel.evaluate(()=>window.whale.quota('set-refresh',{id:'../5',enabled:false}))).error);
   for(const width of [1060,860]) {
@@ -284,9 +352,10 @@ let app;
     await panel.waitForTimeout(100);
     const layout=await panel.evaluate(()=>{
       const box=id=>{const r=document.getElementById(id).getBoundingClientRect();return {x:r.x,right:r.right,y:r.y,bottom:r.bottom};};
-      return {time:box('quota-checked'),heading:box('quota-accounts-heading'),table:box('quota-table'),refresh:box('quota-refresh'),scroll:document.documentElement.scrollWidth,width:innerWidth};
+      return {heading:box('quota-accounts-heading'),table:box('quota-table'),refresh:box('quota-refresh'),scroll:document.documentElement.scrollWidth,width:innerWidth};
     });
-    assert.ok(layout.time.x>layout.heading.right);assert.ok(layout.time.bottom<layout.table.y);assert.ok(layout.time.y>=layout.refresh.bottom);
+    assert.equal(await panel.locator('#quota-checked').count(),0);
+    assert.ok(layout.refresh.bottom<layout.table.y);
     assert.ok(layout.scroll<=layout.width);
     const filters=await panel.locator('.quota-group-controls').evaluate(el=>{
       const label=el.querySelector('#quota-group-label').getBoundingClientRect(),groupButton=el.querySelector('#quota-group-button'),periodButton=el.querySelector('#quota-group-period-button'),button=groupButton.getBoundingClientRect(),period=periodButton.getBoundingClientRect();
@@ -439,7 +508,7 @@ let app;
   await panel.waitForFunction(()=>document.getElementById('quota-accounts-body').hidden&&document.getElementById('quota-pet-body').hidden);
   assert.equal((await panel.evaluate(()=>window.whale.petQuota('snapshot'))).value.settings.accountId,5,'重启保留跟踪账号');
   await panel.locator('#quota-accounts-toggle').click();await panel.waitForFunction(()=>!document.getElementById('quota-accounts-body').hidden&&!document.getElementById('quota-accounts-toggle').disabled);
-  assert.equal(await panel.locator('#quota-interval-value').inputValue(),'2');assert.equal(await panel.locator('#quota-interval-unit').inputValue(),'hours');
+  assert.equal(await panel.locator('#quota-interval-value').inputValue(),'7200');assert.equal(await panel.locator('#quota-interval-preview').textContent(),'2时');
   assert.equal(await panel.locator('#quota-pet-body').isVisible(),false,'独立恢复折叠状态');
   await panel.locator('#quota-pet-toggle').click();await panel.waitForFunction(()=>!document.getElementById('quota-pet-body').hidden&&!document.getElementById('quota-pet-toggle').disabled);
   assert.deepEqual(await app.evaluate(()=>global.quotaSmoke.calls),[],'重启先显示缓存，未满五分钟不发请求');
@@ -475,7 +544,7 @@ let app;
   assert.equal(await panel.locator('#quota-status').textContent(),'已同步');
   await panel.locator('#quota-refresh').click();
   await panel.waitForFunction(()=>!document.getElementById('quota-refresh').disabled);
-  assert.deepEqual(await app.evaluate(()=>global.quotaSmoke.calls),['/api/v1/admin/accounts','/api/v1/admin/accounts/5','/api/v1/admin/accounts/6']);
+  assert.deepEqual(await app.evaluate(()=>global.quotaSmoke.calls),['/api/v1/admin/accounts','/api/v1/admin/accounts']);
   await first().click();await panel.waitForFunction(()=>document.querySelector('#quota-list [role="switch"]').getAttribute('aria-checked')==='false');
   await second().click();await panel.waitForFunction(()=>document.querySelectorAll('#quota-list [role="switch"][aria-checked="false"]').length===2);
   assert.equal(await panel.locator('#quota-refresh').isDisabled(),true);
