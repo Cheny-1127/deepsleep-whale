@@ -48,4 +48,6 @@ button.subscriptions-post-heading:hover:not(:disabled) { background: var(--ui-ho
 #subscriptions-view { --ui-font-control: 14px; --ui-font-small: 13px; }
 .subscriptions-post > .subscriptions-post-body, .subscriptions-translation p { font-size: var(--ui-font-reading); }
 .subscriptions-post-body.is-collapsed { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
-.subscriptions-expand { color: var(--ui-accent); font-size: var(--ui-font-control); padding: 4px 0; }
+.subscriptions-post-body[role="button"] { cursor: pointer; border-radius: var(--ui-radius-control); }
+.subscriptions-post-body[role="button"]:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 4px; }
+.subscriptions-post-body[aria-disabled="true"] { cursor: default; }
