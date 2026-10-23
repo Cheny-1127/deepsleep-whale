@@ -1,6 +1,7 @@
 'use strict';
 const {BrowserWindow, session} = require('electron');
 const {xUsername, projectPost, readXDocument, expandXDocument} = require('../channels/x-posts.cjs');
+const {fetchAvatar} = require('../channels/subscription-avatar.cjs');
 const PARTITION = 'message-subscriptions-x';
 const unavailable = () => Object.assign(Error('公开页面暂未提供可读取的动态。'), {code:'X_PUBLIC_UNAVAILABLE'});
 function allowedRequest(raw) {
@@ -31,7 +32,7 @@ function createXSubscriptionReader() {
     win.webContents.on('will-navigate', event => event.preventDefault());
     win.webContents.on('will-redirect', (event,url) => {if (!allowedRequest(url)) event.preventDefault();});
     let deadline, poll, settled = false, expansionAttempts = 0, collected = null, detailTimer;
-    return new Promise((resolve,reject) => {
+    const posts = await new Promise((resolve,reject) => {
       function finish(error, posts) {
         if (settled) return;settled = true;
         clearTimeout(deadline);clearTimeout(poll);clearTimeout(detailTimer);signal?.removeEventListener('abort',abort);
@@ -62,7 +63,7 @@ function createXSubscriptionReader() {
               const detail = await win.webContents.executeJavaScript(`(${readXDocument.toString()})()`);
               if (settled) return;
               const full = detail.items.find(item=>item.username===username && item.id===post.id && !item.truncated);
-              if (full) {collected[index]={...projectPost(full,username),displayName:full.displayName || post.displayName};break;}
+              if (full) {collected[index]={...projectPost(full,username),displayName:full.displayName || post.displayName,avatarUrl:full.avatarUrl || post.avatarUrl};break;}
               if (detail.empty) break;
             } catch {break;}
             await new Promise(resolve=>setTimeout(resolve,200));
@@ -93,6 +94,10 @@ function createXSubscriptionReader() {
       };
       win.loadURL(`https://x.com/${username}`).then(inspect,error => finish(error));
     });
+    // 每个账号每轮只取一次头像，失败不影响正文；图片转为本地数据，不放开界面远程加载权限。
+    const avatar = await fetchAvatar(posts.find(post=>post.avatarUrl)?.avatarUrl,{fetchImpl:(url,options)=>isolated.fetch(url,options),signal});
+    signal?.throwIfAborted();
+    return posts.map(post=>({...post,avatar}));
   };
 }
 module.exports = {createXSubscriptionReader, allowedRequest};

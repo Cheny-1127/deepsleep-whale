@@ -10,7 +10,7 @@ archery.createArcheryPending=options=>createArchery({...options,readConfig:()=>{
 require(${JSON.stringify(path.join(root,'src/app/x-subscription-reader.cjs'))}).createXSubscriptionReader=()=>async(username,{signal})=>{
  const f=global.subscriptionsFixture;f.calls.push(username);if(f.hold)await new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(Error('aborted')),{once:true}));
  if(f.fail)throw Object.assign(Error('secret diagnostics'),{code:'X_PUBLIC_UNAVAILABLE'});
- return Array.from({length:f.step},(_,i)=>({username,displayName:username==='thsottiaux'?'Tibo':'OpenAI',id:String(BigInt(f.base)+BigInt(i+1)),text:i===1?'短动态': '动态 '+(i+1)+' <img src=x onerror=alert(1)>\\n第二行内容\\n第三行完整正文\\n第四行完整正文'}));
+ return Array.from({length:f.step},(_,i)=>({username,displayName:username==='thsottiaux'?'Tibo':'OpenAI',avatar:username==='thsottiaux'?'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jf1sAAAAASUVORK5CYII=':'',id:String(BigInt(f.base)+BigInt(i+1)),text:i===1?'短动态': '动态 '+(i+1)+' <img src=x onerror=alert(1)>\\n第二行内容\\n第三行完整正文\\n第四行完整正文'}));
 };
 require(${JSON.stringify(path.join(root,'src/channels/subscription-translation.cjs'))}).createSubscriptionTranslator=()=>async(text,{signal})=>{
  const f=global.subscriptionsFixture;f.translationCalls.push(text);
@@ -62,7 +62,10 @@ async function launch() {
   await panel.locator('#subscriptions-search').fill('');
 
   assert.equal(await panel.locator('#subscriptions-recommend-tibo').textContent(),'已订阅');assert.ok(await panel.locator('#subscriptions-recommend-tibo').isDisabled());
-  assert.equal(await panel.locator('.subscriptions-post img').count(),0);
+  assert.equal(await panel.locator('.subscriptions-post-body img').count(),0);
+  assert.equal(await panel.locator('.subscriptions-avatar img').count(),1);
+  await panel.waitForFunction(()=>document.querySelector('.subscriptions-avatar img')?.naturalWidth===1);
+  assert.equal(await panel.locator('.subscriptions-avatar').evaluate(el=>Math.round(el.getBoundingClientRect().width)),32);
   assert.ok(!(JSON.stringify(await panel.evaluate(()=>window.whale.snapshot()))).includes('onerror=alert'));
   assert.equal(await app.evaluate(()=>global.subscriptionsFixture.translationCalls.length),0,'fetch never auto-translates');
   const body=panel.locator('.subscriptions-post-body').first();
@@ -80,6 +83,7 @@ async function launch() {
   await panel.getByRole('button',{name:'中文翻译',exact:true}).click();
   await panel.waitForFunction(()=>document.querySelector('.subscriptions-translation')?.textContent.includes('额度即将重置'));
   assert.equal(await panel.locator('.subscriptions-translation img').count(),0);
+  assert.equal(await panel.locator('.subscriptions-translation > strong').count(),0,'译文不再显示额外标题');
   assert.equal(await panel.getByRole('button',{name:'取消翻译',exact:true}).getAttribute('aria-expanded'),'true');
   await panel.getByRole('button',{name:'取消翻译',exact:true}).click();
   assert.ok(await panel.locator('.subscriptions-translation').isHidden());
@@ -192,6 +196,8 @@ async function launch() {
   await panel.locator('button[data-username="thsottiaux"]').click();
   await panel.locator('#subscriptions-search').fill('tibo');assert.equal(await panel.locator('.subscriptions-post').count(),0);
   await panel.locator('#subscriptions-search').fill('openai');assert.equal(await panel.locator('.subscriptions-post').count(),1);
+  assert.equal(await panel.locator('.subscriptions-avatar').textContent(),'O');
+  assert.equal(await panel.locator('.subscriptions-avatar img').count(),0,'无头像时保留昵称首字占位');
   assert.ok(await panel.locator('button[data-username="thsottiaux"]').isHidden());
   await panel.locator('#subscriptions-search').fill('');
 
