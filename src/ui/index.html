@@ -87,15 +87,26 @@
 </section>
 </section><section id="subscriptions-view" hidden>
 <header><div><div class="eyebrow">A QUIET READING LIST</div><h1>消息订阅</h1><p class="subtitle">每小时看看关注的人说了什么，留到有空再读。</p></div></header>
-<section class="ui-card subscriptions-management">
-<div class="subscriptions-toolbar"><button class="outline" id="subscriptions-refresh">立即检查</button><button class="outline" id="subscriptions-read-all">全部已读</button><button class="outline" id="subscriptions-clear">清除缓存</button><span id="subscriptions-status" role="status"></span></div>
+<div class="ui-tabs" id="subscriptions-tabs" role="tablist" aria-label="消息订阅分区">
+<button id="subscriptions-tab-feed" role="tab" aria-selected="true" aria-controls="subscriptions-panel-feed" tabindex="0">订阅动态</button>
+<button id="subscriptions-tab-manage" role="tab" aria-selected="false" aria-controls="subscriptions-panel-manage" tabindex="-1">订阅管理</button>
+<button id="subscriptions-tab-recommend" role="tab" aria-selected="false" aria-controls="subscriptions-panel-recommend" tabindex="-1">推荐关注</button>
+</div>
 <p id="subscriptions-error" class="ui-alert" role="alert" hidden></p><p id="subscriptions-feedback" role="status" hidden></p>
-<details id="subscriptions-manage" open><summary>添加订阅</summary><form id="subscriptions-form"><label for="subscriptions-input">X 用户名或链接</label><div class="subscriptions-add"><input id="subscriptions-input" placeholder="@用户名、主页或帖子链接" maxlength="500" required autocomplete="off" spellcheck="false"><button class="primary" id="subscriptions-add" type="submit">添加</button></div></form></details>
-<p class="subscriptions-hint">每账号保留最近 100 条已获取动态。点击右上角“中文翻译”将该条公开正文发送至 Google 翻译，译文保存后可离线阅读；“取消翻译”仅收起译文。清除缓存同时清除原文和译文，保留订阅和阅读进度。仅显示公开页面可读内容。</p>
-</section>
-<section class="ui-card subscriptions-recommendations" aria-labelledby="subscriptions-recommendations-title"><h2 id="subscriptions-recommendations-title">推荐关注</h2><div class="subscriptions-recommendation"><div><strong>Tibo</strong><p>@thsottiaux</p></div><button class="outline" id="subscriptions-recommend-tibo" type="button" data-recommended-username="thsottiaux" aria-label="订阅 Tibo（@thsottiaux）">添加订阅</button></div></section>
+<section id="subscriptions-panel-feed" role="tabpanel" aria-labelledby="subscriptions-tab-feed" tabindex="0">
+<div class="subscriptions-toolbar"><button class="outline" id="subscriptions-refresh">立即检查</button><button class="outline" id="subscriptions-read-all">全部已读</button><span id="subscriptions-status" role="status"></span></div>
 <div class="subscriptions-layout"><section class="ui-card subscriptions-accounts" aria-label="订阅账号"><h2>我的订阅</h2><button class="ui-menu-item" id="subscriptions-all" aria-pressed="true">全部账号</button><div id="subscriptions-accounts"></div></section>
 <section class="subscriptions-feed" aria-label="订阅动态"><div class="subscriptions-feed-heading"><h2 id="subscriptions-feed-title">全部动态</h2><label><input id="subscriptions-unread" type="checkbox"> 只看未读</label></div><p id="subscriptions-account-status"></p><div id="subscriptions-posts"></div><p class="ui-card" id="subscriptions-empty">还没有订阅，添加一个 X 账号开始阅读。</p></section></div>
+</section>
+<section id="subscriptions-panel-manage" role="tabpanel" aria-labelledby="subscriptions-tab-manage" tabindex="0" hidden>
+<section class="ui-card subscriptions-management"><h2>添加订阅</h2><form id="subscriptions-form"><label for="subscriptions-input">X 用户名或链接</label><div class="subscriptions-add"><input id="subscriptions-input" placeholder="@用户名、主页或帖子链接" maxlength="500" required autocomplete="off" spellcheck="false"><button class="primary" id="subscriptions-add" type="submit">添加</button></div></form>
+<p class="subscriptions-hint">每账号保留最近 100 条已获取动态。点击动态右上角“中文翻译”将该条公开正文发送至 Google 翻译，译文保存后可离线阅读；“取消翻译”仅收起译文。仅显示公开页面可读内容。</p></section>
+<section class="ui-card subscriptions-management"><h2>我的订阅</h2><div id="subscriptions-managed-accounts"></div><p id="subscriptions-manage-empty" class="subscriptions-hint">还没有订阅，可在上方添加账号，或到“推荐关注”看看。</p></section>
+<section class="ui-card"><div class="subscriptions-toolbar"><h2>本地缓存</h2><button class="outline" id="subscriptions-clear">清除缓存</button></div><p class="subscriptions-hint">同时清除原文和译文，保留订阅和阅读进度。</p></section>
+</section>
+<section id="subscriptions-panel-recommend" role="tabpanel" aria-labelledby="subscriptions-tab-recommend" tabindex="0" hidden>
+<section class="ui-card subscriptions-recommendations" aria-labelledby="subscriptions-recommendations-title"><h2 id="subscriptions-recommendations-title">推荐关注</h2><div class="subscriptions-recommendation"><div><strong>Tibo</strong><p>@thsottiaux</p></div><button class="outline" id="subscriptions-recommend-tibo" type="button" data-recommended-username="thsottiaux" aria-label="订阅 Tibo（@thsottiaux）">添加订阅</button></div></section>
+</section>
 </section>
 <section id="shortcuts-view" hidden aria-labelledby="shortcuts-heading">
 <header><div><div class="eyebrow">YOUR LITTLE SHORTCUTS</div><h1 id="shortcuts-heading">快捷操作</h1><p class="subtitle">给桌宠的连击，安排一个顺手的动作。</p></div><span class="pill" id="shortcuts-status" role="status">已启用</span></header>

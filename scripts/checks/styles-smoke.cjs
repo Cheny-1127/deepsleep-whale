@@ -35,7 +35,7 @@ const capture=async(page,name)=>{if(screenshots)await page.screenshot({path:path
   }
   const cardKeys=['padding','borderRadius','borderColor','backgroundColor'];
   const expectedCard=await appearance(panel,'.care',cardKeys);
-  for(const selector of ['#quota-view .ui-card','#mail-view .ui-card','.hook-event-panel','#shortcuts-view .ui-card','#subscriptions-view .ui-card'])assert.deepEqual(await appearance(panel,selector,cardKeys),expectedCard);
+  for(const selector of ['#quota-view .ui-card','#mail-view .ui-card','.hook-event-panel','#shortcuts-view .ui-card','#subscriptions-panel-manage .ui-card'])assert.deepEqual(await appearance(panel,selector,cardKeys),expectedCard);
   const alertKeys=['padding','borderRadius','backgroundColor','color','fontSize'];
   const expectedAlert=await appearance(panel,'#mail-error',alertKeys);
   for(const selector of ['#wechat-error','#archery-error','#quota-error','#quota-pet-error','#shortcuts-error','#subscriptions-error'])assert.deepEqual(await appearance(panel,selector,alertKeys),expectedAlert);
