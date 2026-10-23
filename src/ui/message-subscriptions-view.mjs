@@ -153,12 +153,23 @@ export function createMessageSubscriptionsView() {
       const body = node('p',post.text,'subscriptions-post-body');
       const bodyExpanded = expandedBodies.has(key);body.classList.toggle('is-collapsed',!bodyExpanded);
       body.id = `subscription-body-${post.username}-${post.id}`;
-      const expandBody = button(bodyExpanded ? '收起全文' : '展开全文',()=>{
-        if (expandedBodies.has(key)) expandedBodies.delete(key);else expandedBodies.add(key);
-        lastContent = '';render();
-      },'text-button subscriptions-expand');
-      expandBody.setAttribute('aria-expanded',String(bodyExpanded));expandBody.setAttribute('aria-controls',body.id);
-      card.append(header,body,expandBody);
+      // 仅正文触发阅读：超出两行时展开，短文不改变排版；标题和翻译沿用各自操作。
+      body.setAttribute('role','button');body.tabIndex = 0;body.setAttribute('aria-disabled',String(pending || Boolean(data.storeError)));
+      const readBody = ()=>{
+        if (pending || data.storeError) return;
+        // 选中文本用于复制时不触发展开或已读。
+        if (window.getSelection()?.type === 'Range') return;
+        if (body.classList.contains('is-collapsed') && body.scrollHeight > body.clientHeight + 1) {
+          expandedBodies.add(key);lastContent = '';render();
+        }
+        if (post.unread) void call('mark-read',value);
+      };
+      body.addEventListener('click',readBody);
+      body.addEventListener('keydown',event=>{
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();readBody();
+      });
+      card.append(header,body);
       if (post.truncated) card.append(node('p','内容已截取，完整内容请查看原文。','subscriptions-truncated'));
       if (post.translation) {
         const translated = node('div','','subscriptions-translation');translated.lang = 'zh-CN';
@@ -167,8 +178,7 @@ export function createMessageSubscriptionsView() {
       }
       if (post.translationError) card.append(node('p',post.translationError,'ui-alert'));
       $('subscriptions-posts').append(card);
-      // 仅对超过两行的正文展示展开入口，保留完整纯文本用于复制和后续翻译。
-      expandBody.hidden = !bodyExpanded && body.scrollHeight <= body.clientHeight + 1;
+      updateBodyState(body);
     }
     $('subscriptions-empty').hidden = posts.length > 0;
     $('subscriptions-empty').textContent = !data.accounts.length ? '还没有订阅，添加一个 X 账号开始阅读。' : $('subscriptions-unread').checked ? '暂时没有未读动态。' : data.busy ? '正在读取公开动态，首次检查最多需要半分钟…' : '暂无缓存。可点击“立即检查”；新获取的动态默认未读。';
@@ -178,11 +188,15 @@ export function createMessageSubscriptionsView() {
     try {const result = await window.whale.subscriptions('snapshot');if (requestedAt !== revision) return;if (result.error) throw Error(result.error);data = result.value;render();}
     catch (err) {error(err.message || '无法读取订阅。');}finally {loading = false;}
   }
-  // 窗口变窄可能让原本两行内的短文溢出，随阅读区尺寸更新展开入口。
+  function updateBodyState(body) {
+    const expanded = !body.classList.contains('is-collapsed');
+    if (expanded || body.scrollHeight > body.clientHeight + 1) body.setAttribute('aria-expanded',String(expanded));
+    else body.removeAttribute('aria-expanded');
+    body.title = expanded ? '点击设为已读' : body.hasAttribute('aria-expanded') ? '点击展开并设为已读' : '点击设为已读';
+  }
+  // 阅读区变宽或变窄后重新判断是否超过两行，不额外显示展开按钮。
   new ResizeObserver(()=>{
-    for (const body of view.querySelectorAll('.subscriptions-post-body')) {
-      body.nextElementSibling.hidden = body.classList.contains('is-collapsed') && body.scrollHeight <= body.clientHeight + 1;
-    }
+    for (const body of view.querySelectorAll('.subscriptions-post-body')) updateBodyState(body);
   }).observe(view.querySelector('.subscriptions-feed'));
   $('subscriptions-form').addEventListener('submit',async event=>{
     event.preventDefault();const input = $('subscriptions-input');
