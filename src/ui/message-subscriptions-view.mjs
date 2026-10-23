@@ -13,7 +13,8 @@ export function createMessageSubscriptionsView() {
       item.setAttribute('aria-selected',String(selected));item.tabIndex = selected ? 0 : -1;
       $(item.getAttribute('aria-controls')).hidden = !selected;
     }
-    if (tab.id !== 'subscriptions-tab-feed') {expandedTranslations.clear();lastContent = '';render();}
+    if (tab.id !== 'subscriptions-tab-feed') expandedTranslations.clear();
+    lastContent = '';render();
     if (focus) tab.focus();
   }
   for (const tab of tabs) {
@@ -27,6 +28,7 @@ export function createMessageSubscriptionsView() {
   }
   const translationRequests = new Set();
   const expandedTranslations = new Set();
+  const expandedBodies = new Set();
   let data, filter = '', pending = false, loading = false, lastContent = '', revision = 0;
   function renderSummary(summary) {
     const count = summary?.unread || 0;
@@ -63,13 +65,14 @@ export function createMessageSubscriptionsView() {
     finally {translationRequests.delete(key);revision++;lastContent = '';render();void load();}
   }
   function toggleTranslation(post) {
+    // 翻译和阅读状态独立：点击即记为已读，翻译失败也不回滚阅读记录。
     const key = `${post.username}/${post.id}`;
     // 收起仅改变当前页面的展开状态，不删除已保存译文；再次展开直接读取缓存。
     if (post.translation) {
       if (expandedTranslations.has(key)) expandedTranslations.delete(key);else expandedTranslations.add(key);
-      lastContent = '';render();return;
-    }
-    expandedTranslations.add(key);void translate(post);
+      lastContent = '';render();
+    } else {expandedTranslations.add(key);void translate(post);}
+    if (post.unread) void call('mark-read',{username:post.username,id:post.id});
   }
   function select(username) {filter = username;lastContent = '';render();}
   function render() {
@@ -92,7 +95,7 @@ export function createMessageSubscriptionsView() {
     if (data.storeError) error(data.storeError);
     if (filter && !data.accounts.some(a => a.username === filter)) filter = '';
     const cachedKeys = new Set(data.posts.map(post => `${post.username}/${post.id}`));
-    for (const key of expandedTranslations) if (!cachedKeys.has(key)) expandedTranslations.delete(key);
+    for (const set of [expandedTranslations,expandedBodies]) for (const key of set) if (!cachedKeys.has(key)) set.delete(key);
     // 定时只读快照不重建未变化的列表，避免打断键盘焦点和正在阅读的位置。
     const content = JSON.stringify([data.accounts,data.posts,filter,$('subscriptions-unread').checked,pending]);
     if (content === lastContent) return;lastContent = content;
@@ -131,24 +134,31 @@ export function createMessageSubscriptionsView() {
       const key = `${post.username}/${post.id}`, value = {username:post.username,id:post.id};
       const expanded = Boolean(post.translation) && expandedTranslations.has(key);
       const header = node('div','','subscriptions-post-header');
-      // 未读标题本身就是点击入口，原生按钮同时支持 Enter/空格；不绑定正文或翻译按钮。
-      const heading = post.unread ? button('',()=>call('mark-read',value),'subscriptions-post-heading') : node('div','','subscriptions-post-heading');
-      if (post.unread) {heading.disabled = pending || Boolean(data.storeError);heading.setAttribute('aria-label',`未读，点击设为已读：@${post.username} ${time(post.publishedAt)}`);heading.title = '点击设为已读';}
-      heading.append(node('strong',`@${post.username}`),node('span',time(post.publishedAt)));
+      // 标题统一打开原文，已读和未读都可操作；沿用主进程打开后标为已读的流程。
+      const heading = button('',()=>call('open-post',value),'subscriptions-post-heading');
+      heading.disabled = pending;heading.setAttribute('aria-label',`查看原文：@${post.username} ${time(post.publishedAt)}`);heading.title = '查看原文';
+      heading.append(node('strong',`@${post.username}`),node('span',time(post.publishedAt)),node('span','↗'));
       if (post.unread) {
         const dot = node('span','','subscriptions-unread-dot');
         dot.setAttribute('role','img');dot.setAttribute('aria-label','未读');heading.prepend(dot);
       }
       const actions = node('div','','subscriptions-post-actions');
-      const originalButton = button('查看原文 ↗',()=>call('open-post',value));originalButton.disabled = pending;
       const translating = post.translating || translationRequests.has(key);
       const translateButton = button(translating ? '翻译中…' : expanded ? '取消翻译' : '中文翻译',()=>toggleTranslation(post));
       translateButton.disabled = pending || translating || (!post.translation && Boolean(data.storeError));
       translateButton.setAttribute('aria-expanded',String(expanded));
       if (post.translation) translateButton.setAttribute('aria-controls',`subscription-translation-${post.username}-${post.id}`);
-      actions.append(originalButton,translateButton);header.append(heading,actions);
+      actions.append(translateButton);header.append(heading,actions);
       // 动态正文始终通过 textContent 写入，不插入远程 HTML、图片或可执行链接。
-      card.append(header,node('p',post.text));
+      const body = node('p',post.text,'subscriptions-post-body');
+      const bodyExpanded = expandedBodies.has(key);body.classList.toggle('is-collapsed',!bodyExpanded);
+      body.id = `subscription-body-${post.username}-${post.id}`;
+      const expandBody = button(bodyExpanded ? '收起全文' : '展开全文',()=>{
+        if (expandedBodies.has(key)) expandedBodies.delete(key);else expandedBodies.add(key);
+        lastContent = '';render();
+      },'text-button subscriptions-expand');
+      expandBody.setAttribute('aria-expanded',String(bodyExpanded));expandBody.setAttribute('aria-controls',body.id);
+      card.append(header,body,expandBody);
       if (post.truncated) card.append(node('p','内容已截取，完整内容请查看原文。','subscriptions-truncated'));
       if (post.translation) {
         const translated = node('div','','subscriptions-translation');translated.lang = 'zh-CN';
@@ -157,6 +167,8 @@ export function createMessageSubscriptionsView() {
       }
       if (post.translationError) card.append(node('p',post.translationError,'ui-alert'));
       $('subscriptions-posts').append(card);
+      // 仅对超过两行的正文展示展开入口，保留完整纯文本用于复制和后续翻译。
+      expandBody.hidden = !bodyExpanded && body.scrollHeight <= body.clientHeight + 1;
     }
     $('subscriptions-empty').hidden = posts.length > 0;
     $('subscriptions-empty').textContent = !data.accounts.length ? '还没有订阅，添加一个 X 账号开始阅读。' : $('subscriptions-unread').checked ? '暂时没有未读动态。' : data.busy ? '正在读取公开动态，首次检查最多需要半分钟…' : '暂无缓存。可点击“立即检查”；新获取的动态默认未读。';
@@ -166,6 +178,12 @@ export function createMessageSubscriptionsView() {
     try {const result = await window.whale.subscriptions('snapshot');if (requestedAt !== revision) return;if (result.error) throw Error(result.error);data = result.value;render();}
     catch (err) {error(err.message || '无法读取订阅。');}finally {loading = false;}
   }
+  // 窗口变窄可能让原本两行内的短文溢出，随阅读区尺寸更新展开入口。
+  new ResizeObserver(()=>{
+    for (const body of view.querySelectorAll('.subscriptions-post-body')) {
+      body.nextElementSibling.hidden = body.classList.contains('is-collapsed') && body.scrollHeight <= body.clientHeight + 1;
+    }
+  }).observe(view.querySelector('.subscriptions-feed'));
   $('subscriptions-form').addEventListener('submit',async event=>{
     event.preventDefault();const input = $('subscriptions-input');
     if (await call('add',input.value,'已添加订阅，新获取的动态将标为未读。')) input.value = '';
@@ -179,7 +197,7 @@ export function createMessageSubscriptionsView() {
   // 只缓存译文，不记住展开状态；再次进入或重启后均需主动点击才显示。
   // 离开时也清空，防止尚未完成的翻译在返回页面后自动展开。
   new MutationObserver(()=>{
-    expandedTranslations.clear();lastContent = '';
+    expandedTranslations.clear();expandedBodies.clear();lastContent = '';
     if (!view.hidden) {selectTab(tabs[0]);render();void load();}
   }).observe(view,{attributes:true,attributeFilter:['hidden']});
   void load();return {renderSummary};

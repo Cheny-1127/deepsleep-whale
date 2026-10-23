@@ -10,7 +10,7 @@ archery.createArcheryPending=options=>createArchery({...options,readConfig:()=>{
 require(${JSON.stringify(path.join(root,'src/app/x-subscription-reader.cjs'))}).createXSubscriptionReader=()=>async(username,{signal})=>{
  const f=global.subscriptionsFixture;f.calls.push(username);if(f.hold)await new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(Error('aborted')),{once:true}));
  if(f.fail)throw Object.assign(Error('secret diagnostics'),{code:'X_PUBLIC_UNAVAILABLE'});
- return Array.from({length:f.step},(_,i)=>({username,id:String(BigInt(f.base)+BigInt(i+1)),text:'动态 '+(i+1)+' <img src=x onerror=alert(1)>'}));
+ return Array.from({length:f.step},(_,i)=>({username,id:String(BigInt(f.base)+BigInt(i+1)),text:'动态 '+(i+1)+' <img src=x onerror=alert(1)>\\n第二行内容\\n第三行完整正文\\n第四行完整正文'}));
 };
 require(${JSON.stringify(path.join(root,'src/channels/subscription-translation.cjs'))}).createSubscriptionTranslator=()=>async(text,{signal})=>{
  const f=global.subscriptionsFixture;f.translationCalls.push(text);
@@ -57,6 +57,15 @@ async function launch() {
   assert.equal(await panel.locator('.subscriptions-post img').count(),0);
   assert.ok(!(JSON.stringify(await panel.evaluate(()=>window.whale.snapshot()))).includes('onerror=alert'));
   assert.equal(await app.evaluate(()=>global.subscriptionsFixture.translationCalls.length),0,'fetch never auto-translates');
+  const body=panel.locator('.subscriptions-post-body').first();
+  assert.equal(await body.evaluate(el=>getComputedStyle(el).fontSize),'16px');
+  assert.equal(await body.evaluate(el=>getComputedStyle(el).webkitLineClamp),'2');
+  assert.ok(await body.evaluate(el=>el.scrollHeight>el.clientHeight));
+  await panel.getByRole('button',{name:'展开全文',exact:true}).first().click();
+  assert.equal(await body.evaluate(el=>el.classList.contains('is-collapsed')),false);
+  await panel.getByRole('button',{name:'收起全文',exact:true}).first().click();
+  assert.equal(await body.evaluate(el=>el.classList.contains('is-collapsed')),true);
+
   await panel.getByRole('button',{name:'中文翻译',exact:true}).click();
   await panel.waitForFunction(()=>document.querySelector('.subscriptions-translation')?.textContent.includes('额度即将重置'));
   assert.equal(await panel.locator('.subscriptions-translation img').count(),0);
@@ -108,6 +117,7 @@ async function launch() {
   await panel.getByRole('button',{name:'中文翻译',exact:true}).first().click();
   await panel.waitForFunction(()=>document.querySelector('.subscriptions-post .ui-alert'));
   assert.ok(!(await panel.locator('#subscriptions-posts').textContent()).includes('secret translation'));
+  assert.equal(await panel.locator('.subscriptions-unread-dot').count(),1,'点击中文翻译即设为已读，翻译失败仍保留已读');
   await app.evaluate(()=>{const f=global.subscriptionsFixture;f.translationFail=false;f.translationHold=true;});
   await panel.getByRole('button',{name:'中文翻译',exact:true}).first().click();
   await panel.waitForFunction(()=>[...document.querySelectorAll('.subscriptions-post button')].some(el=>el.textContent==='翻译中…'));
@@ -119,15 +129,14 @@ async function launch() {
   await panel.locator('#nav-subscriptions').click();
   await panel.waitForFunction(()=>document.querySelectorAll('.subscriptions-translation').length===2);
   assert.equal(await panel.locator('.subscriptions-translation:visible').count(),0,'再次进入所有译文收起');
-  await panel.locator('#subscriptions-unread').check();assert.equal(await panel.locator('.subscriptions-post').count(),2);
+  await panel.locator('#subscriptions-unread').check();assert.equal(await panel.locator('.subscriptions-post').count(),1);
   assert.equal(await panel.getByRole('button',{name:'标为已读',exact:true}).count(),0,'移除卡片底部的已读按钮');
-  await panel.locator('button.subscriptions-post-heading').first().focus();await panel.keyboard.press('Enter');assert.equal(await panel.locator('.subscriptions-post').count(),1);
-  assert.equal(await panel.locator('.subscriptions-unread-dot').count(),1,'标为已读仅移除对应绿点');
+  await panel.locator('button.subscriptions-post-heading').first().focus();await panel.keyboard.press('Enter');assert.equal(await panel.locator('.subscriptions-post').count(),0);
+  assert.equal(await panel.locator('.subscriptions-unread-dot').count(),0,'标题打开原文并设为已读');
   await panel.locator('#subscriptions-unread').uncheck();
-  await panel.locator('.subscriptions-unread-dot').click();
   await panel.waitForFunction(()=>document.querySelectorAll('.subscriptions-unread-dot').length===0);
   assert.equal(await panel.locator('.subscriptions-unread-dot').count(),0,'查看原文后取消最后一条未读绿点');
-  await panel.getByRole('button',{name:'查看原文 ↗',exact:true}).first().click();
+  await panel.locator('button.subscriptions-post-heading').first().click();
   const opened=await app.evaluate(()=>global.subscriptionsFixture.opened);assert.match(opened[0],/^https:\/\/x\.com\/thsottiaux\/status\/\d+$/);
   assert.ok(await panel.locator('#subscriptions-read-all').isDisabled(),'全部已读后禁用重复操作');
   await panel.waitForFunction(()=>document.querySelector('#subscriptions-badge').hidden);

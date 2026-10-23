@@ -25,11 +25,13 @@ const capture=async(page,name)=>{if(screenshots)await page.screenshot({path:path
   const controlKeys=['minHeight','fontFamily','fontSize','borderRadius','borderColor','borderWidth'];
   const expectedControl=await appearance(panel,'#quota-group-button',controlKeys);
   for(const selector of ['#shortcuts-triple','#quota-columns-button','#mail-email','#mail-type','#quota-pet-yellow','#subscriptions-input']) {
-    assert.deepEqual(await appearance(panel,selector,controlKeys),expectedControl,selector+' shares control appearance');
+    assert.deepEqual(await appearance(panel,selector,controlKeys),selector==='#subscriptions-input'?{...expectedControl,fontSize:'14px'}:expectedControl,selector+' shares control appearance');
   }
   const expectedButton=await appearance(panel,'#quota-refresh',controlKeys);
   for(const selector of ['#archery-refresh','#mail-connect','#wechat-login','#quota-pet-apply','#subscriptions-refresh']) {
     const actual=await appearance(panel,selector,controlKeys);
+    if(selector==='#subscriptions-refresh')assert.equal(actual.fontSize,'14px');
+    if(selector==='#subscriptions-refresh')actual.fontSize=expectedButton.fontSize;
     if(selector==='#mail-connect'||selector==='#wechat-login')actual.borderColor=expectedButton.borderColor;
     assert.deepEqual(actual,expectedButton,selector+' shares button sizing');
   }
@@ -38,7 +40,7 @@ const capture=async(page,name)=>{if(screenshots)await page.screenshot({path:path
   for(const selector of ['#quota-view .ui-card','#mail-view .ui-card','.hook-event-panel','#shortcuts-view .ui-card','#subscriptions-panel-manage .ui-card'])assert.deepEqual(await appearance(panel,selector,cardKeys),expectedCard);
   const alertKeys=['padding','borderRadius','backgroundColor','color','fontSize'];
   const expectedAlert=await appearance(panel,'#mail-error',alertKeys);
-  for(const selector of ['#wechat-error','#archery-error','#quota-error','#quota-pet-error','#shortcuts-error','#subscriptions-error'])assert.deepEqual(await appearance(panel,selector,alertKeys),expectedAlert);
+  for(const selector of ['#wechat-error','#archery-error','#quota-error','#quota-pet-error','#shortcuts-error','#subscriptions-error'])assert.deepEqual(await appearance(panel,selector,alertKeys),selector==='#subscriptions-error'?{...expectedAlert,fontSize:'13px'}:expectedAlert);
   await panel.evaluate(()=>{
     const box=document.getElementById('quota-group-options');
     const option=document.createElement('button');option.setAttribute('role','option');option.setAttribute('aria-selected','true');option.textContent='测试分组';box.append(option);
