@@ -248,3 +248,14 @@ test('invalid cached translations are discarded without losing source posts and 
   const restarted = f.create();assert.equal(restarted.snapshot().posts[0].translation,undefined);
   assert.equal(restarted.snapshot().posts[0].text,'modified on disk');assert.equal(restarted.snapshot().storeError,'');assert.equal(restarted.summary().unread,0);
 });
+test('avatars are cached once per account, survive restart and missing images without changing translation or read state',async t=>{
+  const f=fixture(t),s=f.service,avatar='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jf1sAAAAASUVORK5CYII=';
+  s.add('thsottiaux');f.setResponse(async()=>[{...f.post(1),avatar},{...f.post(2),avatar}]);await s.refresh();
+  await s.translate({username:'thsottiaux',id:f.post(1).id});s.markRead(null);
+  const file=path.join(f.dir,'message-subscriptions.json'),saved=JSON.parse(fs.readFileSync(file,'utf8'));
+  assert.equal(saved.accounts[0].avatar,avatar);assert.ok(saved.accounts[0].posts.every(p=>!p.avatar));
+  f.setResponse(async()=>[{...f.post(1),avatar:'data:image/svg+xml;base64,PHN2Zz4='}]);await s.refresh();s.close();
+  const restarted=f.create();assert.equal(restarted.snapshot().accounts[0].avatar,avatar);assert.ok(restarted.snapshot().posts.every(p=>!p.avatar));assert.equal(restarted.summary().unread,0);assert.ok(restarted.snapshot().posts.find(p=>p.id===f.post(1).id).translation);
+  restarted.close();saved.accounts[0].avatar='https://evil.test/image.png';fs.writeFileSync(file,JSON.stringify(saved));
+  const invalid=f.create();assert.equal(invalid.snapshot().accounts[0].avatar,'');assert.equal(invalid.snapshot().storeError,'');
+});

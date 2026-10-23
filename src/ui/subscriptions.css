@@ -27,8 +27,7 @@
 .subscriptions-post p { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.9; margin: 14px 0; }
 .subscriptions-post .subscriptions-truncated { color: var(--ui-text-muted); font-size: var(--ui-font-small); }
 .subscriptions-translation { border-top: 1px solid var(--ui-divider); padding-top: 14px; }
-.subscriptions-translation > strong { color: var(--ui-accent); font-size: var(--ui-font-small); }
-.subscriptions-post-actions { justify-content: flex-end; flex-wrap: nowrap; }
+.subscriptions-post-actions { align-self: stretch; justify-content: flex-end; flex-wrap: nowrap; }
 .subscriptions-post-actions button { white-space: nowrap; }
 .subscriptions-badge { padding: 2px 5px; background: var(--ui-accent); color: var(--ui-on-accent); border-radius: var(--ui-radius-control); font-size: var(--ui-font-caption); }
 .subscriptions-unread-dot { width: 6px; height: 6px; flex-shrink: 0; border-radius: 50%; background: var(--ui-accent); }
@@ -55,3 +54,7 @@ button.subscriptions-post-heading:hover:not(:disabled) { background: var(--ui-ho
 #subscriptions-search { width: 210px; max-width: 100%; }
 
 .subscriptions-delete { min-height: var(--ui-control-height); width: var(--ui-control-height); }
+
+/* 固定头像尺寸，图片加载和回退均不改变标题高度或阅读位置。 */
+.subscriptions-avatar { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; flex: 0 0 32px; overflow: hidden; border-radius: 50%; background: var(--ui-selected); color: var(--ui-accent); font-weight: 600; font-size: 16px; }
+.subscriptions-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }

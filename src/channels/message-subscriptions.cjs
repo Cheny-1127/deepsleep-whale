@@ -2,6 +2,7 @@
 const fs = require('node:fs'), path = require('node:path');
 const {createHash} = require('node:crypto');
 const {displayName, xUsername, validPostId, compareIds, projectPost} = require('./x-posts.cjs');
+const {avatarData} = require('./subscription-avatar.cjs');
 const {TEXT_LIMIT} = require('./subscription-translation.cjs');
 const INTERVAL = 60 * 60 * 1000, LIMIT = 100, ACCOUNT_LIMIT = 20;
 const stamp = value => value === null || Number.isSafeInteger(value) && value >= 0;
@@ -37,7 +38,7 @@ function createMessageSubscriptions({dataDir, readPosts, translateText, onChange
           (a.deletedIds !== undefined && (!Array.isArray(a.deletedIds) || !a.deletedIds.every(validPostId)))) throw Error();
         names.add(username);
         // v1 无法区分默认已读和实际阅读，按本次约定一次性恢复现有缓存为未读。
-        return {username, deletedIds:[...new Set(a.deletedIds || [])], displayName:displayName(a.displayName), enabled:a.enabled, initialized:a.initialized, latestId:a.latestId, unreadIds:[...new Set([...a.unreadIds,...(saved.version === 1 ? a.posts.map(p=>p.id) : [])])].sort((a,b)=>compareIds(b,a)).slice(0,LIMIT),
+        return {username, deletedIds:[...new Set(a.deletedIds || [])], displayName:displayName(a.displayName), avatar:avatarData(a.avatar), enabled:a.enabled, initialized:a.initialized, latestId:a.latestId, unreadIds:[...new Set([...a.unreadIds,...(saved.version === 1 ? a.posts.map(p=>p.id) : [])])].sort((a,b)=>compareIds(b,a)).slice(0,LIMIT),
           attemptedAt:a.attemptedAt, checkedAt:a.checkedAt, error:typeof a.error === 'string' ? a.error.slice(0, 160) : '',
           posts:a.posts.map(item => cachedPost(item, username, clock.now()))};
       });
@@ -48,7 +49,7 @@ function createMessageSubscriptions({dataDir, readPosts, translateText, onChange
     return {unread:state.accounts.reduce((sum,a) => sum + a.posts.filter(p => a.unreadIds.includes(p.id)).length, 0), busy:Boolean(flight), revision};
   }
   function snapshot() {
-    const accounts = state.accounts.map(a => ({username:a.username, displayName:a.displayName || a.posts.find(p=>p.displayName)?.displayName || '', enabled:a.enabled, checkedAt:a.checkedAt, attemptedAt:a.attemptedAt,
+    const accounts = state.accounts.map(a => ({username:a.username, displayName:a.displayName || a.posts.find(p=>p.displayName)?.displayName || '', avatar:a.avatar || '', enabled:a.enabled, checkedAt:a.checkedAt, attemptedAt:a.attemptedAt,
       error:a.error, count:a.posts.length, unread:a.posts.filter(p => a.unreadIds.includes(p.id)).length,
       nextCheckAt:a.enabled ? nextAt(a) : null}));
     const posts = state.accounts.flatMap(a => a.posts.map(p => ({...p, unread:a.unreadIds.includes(p.id),
@@ -110,6 +111,8 @@ function createMessageSubscriptions({dataDir, readPosts, translateText, onChange
           // 删除记录只保留去重 ID；按最新状态过滤，避免在途检查把已经删除的正文写回。
           const deleted = new Set(a.deletedIds);
           const incoming = result.map(item => projectPost(item, username, clock.now())).filter(post=>!deleted.has(post.id));
+          // 头像按账号只存一份；抓取失败保留已有图片，避免每条动态重复占用缓存。
+          a.avatar = result.map(item=>avatarData(item.avatar)).find(Boolean) || a.avatar || '';
           // 昵称属于账号资料，独立于正文缓存保存；偶尔读取不到时保留已有昵称。
           a.displayName = incoming.find(p=>p.displayName)?.displayName || a.displayName || '';
           const unread = new Set(a.unreadIds);

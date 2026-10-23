@@ -110,6 +110,7 @@ export function createMessageSubscriptionsView() {
     for (const set of [expandedTranslations,expandedBodies]) for (const key of set) if (!cachedKeys.has(key)) set.delete(key);
     // 定时只读快照不重建未变化的列表，避免打断键盘焦点和正在阅读的位置。
     const query = $('subscriptions-search').value.normalize('NFKC').trim().toLocaleLowerCase();
+    const avatars = new Map(data.accounts.map(a=>[a.username,a.avatar]));
     const names = new Map(data.accounts.map(a=>[a.username,a.displayName || data.posts.find(p=>p.username===a.username && p.displayName)?.displayName || `@${a.username}`]));
     const matches = new Set(data.accounts.filter(a=>[names.get(a.username),`@${a.username}`].some(text=>text.normalize('NFKC').toLocaleLowerCase().includes(query))).map(a=>a.username));
     const content = JSON.stringify([data.accounts,data.posts,filter,query,$('subscriptions-unread').checked,pending]);
@@ -157,7 +158,13 @@ export function createMessageSubscriptionsView() {
       const heading = button('',()=>call('open-post',value),'subscriptions-post-heading');
       heading.disabled = pending;heading.setAttribute('aria-label',`查看原文：@${post.username} ${time(post.publishedAt)}`);heading.title = `查看原文 · @${post.username}`;
       const author = node('strong',names.get(post.username) || post.displayName || `@${post.username}`);author.title = `@${post.username}`;
-      heading.append(author,node('span',time(post.publishedAt)),node('span','↗'));
+      const avatar = node('span',Array.from(author.textContent.replace(/^@/,''))[0] || '?','subscriptions-avatar');
+      avatar.setAttribute('aria-hidden','true');
+      if (avatars.get(post.username)) {
+        const image = document.createElement('img');image.alt = '';image.src = avatars.get(post.username);
+        image.addEventListener('error',()=>image.remove(),{once:true});avatar.append(image);
+      }
+      heading.append(avatar,author,node('span',time(post.publishedAt)),node('span','↗'));
       if (post.unread) {
         const dot = node('span','','subscriptions-unread-dot');
         dot.setAttribute('role','img');dot.setAttribute('aria-label','未读');heading.prepend(dot);
@@ -202,7 +209,7 @@ export function createMessageSubscriptionsView() {
       if (post.translation) {
         const translated = node('div','','subscriptions-translation');translated.lang = 'zh-CN';
         translated.id = `subscription-translation-${post.username}-${post.id}`;translated.hidden = !expanded;
-        translated.append(node('strong','中文译文'),node('p',post.translation.text));card.append(translated);
+        translated.append(node('p',post.translation.text));card.append(translated);
       }
       if (post.translationError) card.append(node('p',post.translationError,'ui-alert'));
       fragment.append(card);
