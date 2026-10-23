@@ -89,3 +89,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--ui-accent); }
 .ui-duration > .quota-group-picker > summary { border-radius: 0 var(--ui-radius-control) var(--ui-radius-control) 0; }
 .ui-duration .quota-group-menu { width: 100%; min-width: 90px; }
 .ui-duration .quota-picker-options { padding-top: 0; }
+
+/* 通用页内 Tab：业务页面只负责切换内容，视觉统一使用公共颜色和控件尺寸。 */
+.ui-tabs { display: flex; gap: 6px; margin: 0 0 20px; padding-bottom: 10px; border-bottom: 1px solid var(--ui-divider); }
+.ui-tabs > [role="tab"] { min-height: var(--ui-control-height); padding: var(--ui-control-padding); border-radius: var(--ui-radius-control); color: var(--ui-text-muted); font-size: var(--ui-font-control); }
+.ui-tabs > [role="tab"]:hover { background: var(--ui-hover); }
+.ui-tabs > [role="tab"][aria-selected="true"] { background: var(--ui-selected); color: var(--ui-accent); }

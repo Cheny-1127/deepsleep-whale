@@ -5,6 +5,26 @@ const node = (tag, text, className) => {const el = document.createElement(tag);e
 export function createMessageSubscriptionsView() {
   const view = $('subscriptions-view');if (!view) return;
   const recommendations = [...view.querySelectorAll('[data-recommended-username]')];
+  const tabs = [...$('subscriptions-tabs').querySelectorAll('[role="tab"]')];
+  // Tab 仅切换页面分区，共用订阅快照与筛选状态，不重复发起采集。
+  function selectTab(tab, focus = false) {
+    for (const item of tabs) {
+      const selected = item === tab;
+      item.setAttribute('aria-selected',String(selected));item.tabIndex = selected ? 0 : -1;
+      $(item.getAttribute('aria-controls')).hidden = !selected;
+    }
+    if (tab.id !== 'subscriptions-tab-feed') {expandedTranslations.clear();lastContent = '';render();}
+    if (focus) tab.focus();
+  }
+  for (const tab of tabs) {
+    tab.addEventListener('click',()=>selectTab(tab));
+    tab.addEventListener('keydown',event=>{
+      const index = tabs.indexOf(tab);
+      const next = {ArrowRight:(index+1)%tabs.length,ArrowLeft:(index+tabs.length-1)%tabs.length,Home:0,End:tabs.length-1}[event.key];
+      if (next === undefined) return;
+      event.preventDefault();selectTab(tabs[next],true);
+    });
+  }
   const translationRequests = new Set();
   const expandedTranslations = new Set();
   let data, filter = '', pending = false, loading = false, lastContent = '', revision = 0;
@@ -78,17 +98,22 @@ export function createMessageSubscriptionsView() {
     if (content === lastContent) return;lastContent = content;
     $('subscriptions-all').setAttribute('aria-pressed',String(!filter));
     $('subscriptions-accounts').replaceChildren();
+    $('subscriptions-managed-accounts').replaceChildren();
+    $('subscriptions-manage-empty').hidden = data.accounts.length > 0;
     for (const account of data.accounts) {
       const row = node('div','','subscriptions-account');row.dataset.username = account.username;
       const choose = button(`@${account.username}`,()=>select(account.username),'ui-menu-item');choose.setAttribute('aria-pressed',String(filter === account.username));
       const meta = node('small',`${account.unread} 未读 · ${account.count} 缓存${account.error ? ' · 检查失败' : ''}`);
+      row.append(choose,meta);$('subscriptions-accounts').append(row);
+      const managed = node('div','','subscriptions-managed-account');
+      managed.append(node('strong',`@${account.username}`),node('small',`${account.enabled ? '每小时检查' : '已暂停'} · ${account.count} 缓存`));
       const tools = node('div','','subscriptions-account-tools');
       const toggle = button(account.enabled ? '暂停' : '启用',()=>call('set-enabled',{username:account.username,enabled:!account.enabled}));
       toggle.setAttribute('aria-label',`${account.enabled ? '暂停' : '启用'} @${account.username}`);
       const remove = button('删除',()=>call('remove',account.username,'已删除订阅和该账号的缓存。'));
       remove.setAttribute('aria-label',`删除 @${account.username}`);
       for (const el of [toggle,remove]) {el.disabled = pending || Boolean(data.storeError);el.className = 'text-button';}
-      tools.append(toggle,remove);row.append(choose,meta,tools);$('subscriptions-accounts').append(row);
+      tools.append(toggle,remove);managed.append(tools);$('subscriptions-managed-accounts').append(managed);
     }
     $('subscriptions-feed-title').textContent = filter ? `@${filter}` : '全部动态';
     const accounts = data.accounts.filter(a => !filter || a.username === filter);
@@ -156,7 +181,7 @@ export function createMessageSubscriptionsView() {
   // 离开时也清空，防止尚未完成的翻译在返回页面后自动展开。
   new MutationObserver(()=>{
     expandedTranslations.clear();lastContent = '';
-    if (!view.hidden) {render();void load();}
+    if (!view.hidden) {selectTab(tabs[0]);render();void load();}
   }).observe(view,{attributes:true,attributeFilter:['hidden']});
   void load();return {renderSummary};
 }
