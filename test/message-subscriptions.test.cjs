@@ -25,6 +25,18 @@ test('X handles and supplied post links normalize, while foreign URLs and reserv
   for (const value of ['@ThSottiaux','thsottiaux','https://x.com/thsottiaux','https://x.com/thsottiaux/status/2113162277688070445?s=20','twitter.com/thsottiaux']) assert.equal(xUsername(value),'thsottiaux');
   for (const value of ['https://evil.test/thsottiaux','https://x.com.evil.test/thsottiaux','https://user:pass@x.com/thsottiaux','https://x.com:444/thsottiaux','http://x.com/thsottiaux','https://x.com/home','https://x.com/thsottiaux/anything','a'.repeat(16),null,'../x']) assert.throws(() => xUsername(value));
 });
+test('display names survive refresh, cache clear and restart without affecting reading or translation',async t=>{
+  const f=fixture(t),s=f.service;s.add('thsottiaux');
+  f.setResponse(async()=>[{...f.post(1),displayName:'  Tibo\n  示例  '}]);await s.refresh();
+  assert.equal(s.snapshot().accounts[0].displayName,'Tibo 示例');assert.equal(s.snapshot().posts[0].displayName,'Tibo 示例');
+  await s.translate({username:'thsottiaux',id:f.post(1).id});s.markRead(null);
+  f.setResponse(async()=>[f.post(1)]);await s.refresh();
+  assert.equal(s.snapshot().accounts[0].displayName,'Tibo 示例');assert.ok(s.snapshot().posts[0].translation);assert.equal(s.summary().unread,0);
+  f.setResponse(async()=>[{...f.post(1),displayName:'新昵称'}]);await s.refresh();
+  assert.equal(s.snapshot().accounts[0].displayName,'新昵称');assert.ok(s.snapshot().posts[0].translation);
+  s.clearCache();s.close();const restarted=f.create();
+  assert.equal(restarted.snapshot().accounts[0].displayName,'新昵称');assert.equal(restarted.snapshot().posts.length,0);
+});
 test('first sync is unread, persisted cache is safe and restart retains read progress', async t => {
   const f = fixture(t), s = f.service;s.add('thsottiaux');await s.refresh();
   assert.equal(s.snapshot().posts.length,1);assert.equal(s.summary().unread,1);s.markRead(null);

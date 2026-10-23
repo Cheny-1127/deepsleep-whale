@@ -15,12 +15,13 @@ function xUsername(value) {
 }
 function validPostId(id) {return typeof id === 'string' && /^\d{8,22}$/.test(id);}
 const compareIds = (a,b) => BigInt(a) > BigInt(b) ? 1 : BigInt(a) < BigInt(b) ? -1 : 0;
+const displayName = value => typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f]/g,' ').replace(/\s+/g,' ').trim().slice(0,100) : '';
 function projectPost(item, username, now = Date.now()) {
   if (!item || !validPostId(item.id) || xUsername(item.username) !== username || typeof item.text !== 'string') throw Error('动态格式无法识别。');
   const at = Number((BigInt(item.id) >> 22n) + 1288834974657n);
   if (!Number.isSafeInteger(at) || at < 1288834974657 || at > now + 86400000) throw Error('动态时间无法识别。');
   // 时间由帖子 ID 计算，链接由固定域名重建；不信任网页传来的地址或相对时间文案。
-  return {id:item.id, username, text:item.text.slice(0, 10000), publishedAt:at, truncated:item.truncated === true || item.text.length > 10000,
+  return {id:item.id, username, displayName:displayName(item.displayName), text:item.text.slice(0, 10000), publishedAt:at, truncated:item.truncated === true || item.text.length > 10000,
     url:`https://x.com/${username}/status/${item.id}`};
 }
 
@@ -41,7 +42,14 @@ function readXDocument() {
     const raw = body?.innerText || body?.textContent || '（图片或视频动态，请查看原文）';
     // 控件文案不属于正文，不能把“显示更多”送去翻译或当作全文保存。
     const text = more.some(el=>body?.contains(el)) ? raw.replace(/\s*(显示更多|Show more)\s*$/i,'') : raw;
-    items.push({id:match[2], username:match[1].toLowerCase(), text:text.slice(0, 10000),
+    // 只从本条动态的作者主页链接读取昵称，排除正文提及和嵌套引用的作者。
+    const author = Array.from(article.querySelectorAll('a[href]')).find(a=>{
+      const profile = new URL(a.href,location.href);
+      return a.closest('article') === article && !body?.contains(a) && profile.origin === url.origin &&
+        profile.pathname.toLowerCase() === '/'+match[1].toLowerCase() && a.textContent.trim() && !a.textContent.trim().startsWith('@');
+    });
+    const name = (author?.innerText || author?.textContent || '').split('\n').map(part=>part.trim()).find(part=>part && !part.startsWith('@')) || '';
+    items.push({id:match[2], username:match[1].toLowerCase(), displayName:name, text:text.slice(0, 10000),
       truncated:text.length > 10000 || more.length > 0});
   }
   const text = document.body?.innerText || '';
@@ -64,4 +72,4 @@ function expandXDocument(username) {
   }
   return count;
 }
-module.exports = {xUsername, validPostId, compareIds, projectPost, readXDocument, expandXDocument};
+module.exports = {displayName, xUsername, validPostId, compareIds, projectPost, readXDocument, expandXDocument};

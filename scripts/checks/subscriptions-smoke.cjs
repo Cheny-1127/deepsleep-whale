@@ -10,7 +10,7 @@ archery.createArcheryPending=options=>createArchery({...options,readConfig:()=>{
 require(${JSON.stringify(path.join(root,'src/app/x-subscription-reader.cjs'))}).createXSubscriptionReader=()=>async(username,{signal})=>{
  const f=global.subscriptionsFixture;f.calls.push(username);if(f.hold)await new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(Error('aborted')),{once:true}));
  if(f.fail)throw Object.assign(Error('secret diagnostics'),{code:'X_PUBLIC_UNAVAILABLE'});
- return Array.from({length:f.step},(_,i)=>({username,id:String(BigInt(f.base)+BigInt(i+1)),text:i===1?'短动态': '动态 '+(i+1)+' <img src=x onerror=alert(1)>\\n第二行内容\\n第三行完整正文\\n第四行完整正文'}));
+ return Array.from({length:f.step},(_,i)=>({username,displayName:username==='thsottiaux'?'Tibo':'OpenAI',id:String(BigInt(f.base)+BigInt(i+1)),text:i===1?'短动态': '动态 '+(i+1)+' <img src=x onerror=alert(1)>\\n第二行内容\\n第三行完整正文\\n第四行完整正文'}));
 };
 require(${JSON.stringify(path.join(root,'src/channels/subscription-translation.cjs'))}).createSubscriptionTranslator=()=>async(text,{signal})=>{
  const f=global.subscriptionsFixture;f.translationCalls.push(text);
@@ -51,6 +51,16 @@ async function launch() {
   await panel.waitForFunction(()=>document.querySelectorAll('.subscriptions-post').length===1);
   assert.ok(await panel.locator('#subscriptions-badge').isVisible());
   assert.equal(await panel.locator('.subscriptions-unread-dot').count(),1,'首次获取也显示未读绿点');
+  assert.equal(await panel.locator('.subscriptions-post-heading strong').first().textContent(),'Tibo');
+  assert.equal(await panel.locator('.subscriptions-post-heading strong').first().getAttribute('title'),'@thsottiaux');
+  assert.ok((await panel.locator('button[data-username="thsottiaux"]').textContent()).startsWith('Tibo'));
+  assert.equal(await panel.locator('button[data-username="thsottiaux"]').getAttribute('title'),'@thsottiaux');
+  await panel.locator('#subscriptions-search').fill('tIbO');assert.equal(await panel.locator('.subscriptions-post').count(),1);
+  await panel.locator('#subscriptions-search').fill('@thsottiaux');assert.equal(await panel.locator('.subscriptions-post').count(),1);
+  await panel.locator('#subscriptions-search').fill('没有这个昵称');assert.equal(await panel.locator('.subscriptions-post').count(),0);
+  assert.ok(await panel.locator('#subscriptions-empty').isVisible());
+  await panel.locator('#subscriptions-search').fill('');
+
   assert.equal(await panel.locator('#subscriptions-recommend-tibo').textContent(),'已订阅');assert.ok(await panel.locator('#subscriptions-recommend-tibo').isDisabled());
   assert.equal(await panel.locator('.subscriptions-post img').count(),0);
   assert.ok(!(JSON.stringify(await panel.evaluate(()=>window.whale.snapshot()))).includes('onerror=alert'));
@@ -179,6 +189,12 @@ async function launch() {
   await panel.locator('#subscriptions-tab-feed').click();
   await panel.waitForFunction(()=>document.querySelectorAll('.subscriptions-post').length===1);
   assert.equal(await panel.locator('.subscriptions-account').count(),2);
+  await panel.locator('button[data-username="thsottiaux"]').click();
+  await panel.locator('#subscriptions-search').fill('tibo');assert.equal(await panel.locator('.subscriptions-post').count(),0);
+  await panel.locator('#subscriptions-search').fill('openai');assert.equal(await panel.locator('.subscriptions-post').count(),1);
+  assert.ok(await panel.locator('button[data-username="thsottiaux"]').isHidden());
+  await panel.locator('#subscriptions-search').fill('');
+
   await panel.locator('button[data-username="thsottiaux"]').click();assert.equal(await panel.locator('.subscriptions-post').count(),0);
   await panel.locator('button[data-username="openai"]').click();assert.equal(await panel.locator('.subscriptions-post').count(),1);
   await panel.locator('#subscriptions-all').click();assert.equal(await panel.locator('.subscriptions-post').count(),1);

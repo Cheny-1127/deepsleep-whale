@@ -51,3 +51,5 @@ button.subscriptions-post-heading:hover:not(:disabled) { background: var(--ui-ho
 .subscriptions-post-body[role="button"] { cursor: pointer; border-radius: var(--ui-radius-control); }
 .subscriptions-post-body[role="button"]:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 4px; }
 .subscriptions-post-body[aria-disabled="true"] { cursor: default; }
+
+#subscriptions-search { width: 210px; max-width: 100%; }

@@ -1,7 +1,7 @@
 'use strict';
 const fs = require('node:fs'), path = require('node:path');
 const {createHash} = require('node:crypto');
-const {xUsername, validPostId, compareIds, projectPost} = require('./x-posts.cjs');
+const {displayName, xUsername, validPostId, compareIds, projectPost} = require('./x-posts.cjs');
 const {TEXT_LIMIT} = require('./subscription-translation.cjs');
 const INTERVAL = 60 * 60 * 1000, LIMIT = 100, ACCOUNT_LIMIT = 20;
 const stamp = value => value === null || Number.isSafeInteger(value) && value >= 0;
@@ -36,7 +36,7 @@ function createMessageSubscriptions({dataDir, readPosts, translateText, onChange
           !Array.isArray(a.posts) || a.posts.length > LIMIT) throw Error();
         names.add(username);
         // v1 无法区分默认已读和实际阅读，按本次约定一次性恢复现有缓存为未读。
-        return {username, enabled:a.enabled, initialized:a.initialized, latestId:a.latestId, unreadIds:[...new Set([...a.unreadIds,...(saved.version === 1 ? a.posts.map(p=>p.id) : [])])].sort((a,b)=>compareIds(b,a)).slice(0,LIMIT),
+        return {username, displayName:displayName(a.displayName), enabled:a.enabled, initialized:a.initialized, latestId:a.latestId, unreadIds:[...new Set([...a.unreadIds,...(saved.version === 1 ? a.posts.map(p=>p.id) : [])])].sort((a,b)=>compareIds(b,a)).slice(0,LIMIT),
           attemptedAt:a.attemptedAt, checkedAt:a.checkedAt, error:typeof a.error === 'string' ? a.error.slice(0, 160) : '',
           posts:a.posts.map(item => cachedPost(item, username, clock.now()))};
       });
@@ -47,7 +47,7 @@ function createMessageSubscriptions({dataDir, readPosts, translateText, onChange
     return {unread:state.accounts.reduce((sum,a) => sum + a.posts.filter(p => a.unreadIds.includes(p.id)).length, 0), busy:Boolean(flight), revision};
   }
   function snapshot() {
-    const accounts = state.accounts.map(a => ({username:a.username, enabled:a.enabled, checkedAt:a.checkedAt, attemptedAt:a.attemptedAt,
+    const accounts = state.accounts.map(a => ({username:a.username, displayName:a.displayName || a.posts.find(p=>p.displayName)?.displayName || '', enabled:a.enabled, checkedAt:a.checkedAt, attemptedAt:a.attemptedAt,
       error:a.error, count:a.posts.length, unread:a.posts.filter(p => a.unreadIds.includes(p.id)).length,
       nextCheckAt:a.enabled ? nextAt(a) : null}));
     const posts = state.accounts.flatMap(a => a.posts.map(p => ({...p, unread:a.unreadIds.includes(p.id),
@@ -107,6 +107,8 @@ function createMessageSubscriptions({dataDir, readPosts, translateText, onChange
           if (!Array.isArray(result) || result.length > LIMIT) throw Error('invalid response');
           const incoming = result.map(item => projectPost(item, username, clock.now()));
           const next = structuredClone(state);a = next.accounts.find(item => item.username === username);
+          // 昵称属于账号资料，独立于正文缓存保存；偶尔读取不到时保留已有昵称。
+          a.displayName = incoming.find(p=>p.displayName)?.displayName || a.displayName || '';
           const unread = new Set(a.unreadIds);
           // 首次抓取也应显示未读；已读后仍用递增 ID 游标去重，清缓存不重置阅读进度。
           for (const post of incoming) if (a.latestId === null || compareIds(post.id,a.latestId) > 0) unread.add(post.id);
@@ -115,6 +117,7 @@ function createMessageSubscriptions({dataDir, readPosts, translateText, onChange
           const merged = new Map(a.posts.map(p => [p.id,p]));
           for (const post of incoming) {
             const previous = merged.get(post.id);
+            post.displayName ||= previous?.displayName || a.displayName;
             // 已有全文不被偶尔抓到的主页摘要降级，避免丢失正文及其译文。
             if (previous && !previous.truncated && post.truncated) continue;
             // 同一条原文未变时保留本地译文；采集结果不能自行提供或覆盖译文。
