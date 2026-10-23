@@ -1,4 +1,5 @@
 'use strict';
+import { createSidebarView } from './sidebar-view.mjs';
 import { createHookSettingsView, showView } from './hooks-view.mjs';
 import { createReminderView } from './reminders-view.mjs';
 import { createWechatView } from './wechat-view.mjs';
@@ -36,6 +37,7 @@ for (const file of new Set(Object.values(rice))) { const image=new Image(); imag
 let current='idle',visualKey='',speechUntil=0,phrase=0,lastData;
 const floating=document.body.classList.contains('floating');
 createPetHitTest();
+createSidebarView();
 const hooksView=createHookSettingsView({render});
 const remindersView=createReminderView({render,action,floating});
 const wechatView=createWechatView();

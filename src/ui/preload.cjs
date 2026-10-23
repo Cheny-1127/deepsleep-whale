@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('whale', {
   quota: (name, value) => ipcRenderer.invoke('quota', name, value),
   quotaGroup: (name, value) => ipcRenderer.invoke('quota-group', name, value),
   petQuota: (name, value) => ipcRenderer.invoke('pet-quota', name, value),
+  sidebar: value => ipcRenderer.invoke('sidebar-settings', value),
   shortcuts: value => ipcRenderer.invoke('shortcut-settings', value),
   drag: (phase, point) => ipcRenderer.send('pet-drag', phase, point),
   petInteractive: value => ipcRenderer.send('pet-interactive', value),
