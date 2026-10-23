@@ -1,0 +1,28 @@
+.quota-key-card { margin-top: 20px; }
+/* 标题的折叠热区覆盖整行，工具区需置于其上，保证刷新按钮仍可独立点击。 */
+.quota-key-tools { position: relative; z-index: 1; display: flex; align-items: center; gap: 12px; margin-left: auto; }
+.quota-key-tools p { margin: 0; font-size: 10px; }
+#quota-key-collapsed-summary { margin: 0 0 0 auto; font-size: 10px; }
+.quota-key-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; font-size: 11px; color: var(--ui-text-muted); }
+.quota-key-controls .wechat-hint { margin: 0 0 0 auto; }
+.quota-key-picker { width: min(310px, 100%); }
+.quota-key-picker .quota-group-menu { width: 100%; }
+#quota-key-search-status { padding: 8px; font-size: 10px; }
+.quota-key-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; font-variant-numeric: tabular-nums; }
+.quota-key-table th, .quota-key-table td { padding: 12px 10px; border-bottom: 1px solid var(--ui-divider); }
+.quota-key-table thead th { color: var(--ui-text-muted); font-size: 10px; font-weight: 500; }
+.quota-key-table tbody th { max-width: 360px; overflow-wrap: anywhere; font-weight: 500; }
+.quota-key-table small { margin-left: 6px; font-size: 10px; font-weight: 400; color: var(--ui-text-subtle); }
+.quota-key-table td:nth-child(2) { color: var(--ui-text-subtle); font-size: 10px; white-space: nowrap; }
+.quota-key-table tr > :last-child { text-align: right; color: #16843c; white-space: nowrap; }
+.quota-key-table .quota-key-group > * { background: var(--ui-canvas); font-size: 11px; }
+.quota-key-group-toggle { display: flex; align-items: center; gap: 8px; width: 100%; padding: 0; color: var(--ui-text); font: inherit; font-weight: 600; text-align: left; cursor: pointer; }
+.quota-key-group-arrow { flex-shrink: 0; transition: transform 150ms; }
+.quota-key-group-toggle[aria-expanded="false"] .quota-key-group-arrow { transform: rotate(-90deg); }
+.quota-key-table .quota-key-item > th { padding-left: 32px; }
+#quota-key-note { margin: 14px 0 0; font-size: 10px; }
+#quota-group-tools { align-items: center; flex-wrap: wrap; }
+@media (max-width: 950px) {
+  .quota-key-card > .section-heading, .quota-group-card > .section-heading { flex-wrap: wrap; }
+  .quota-key-tools, #quota-group-tools { flex-wrap: wrap; }
+}
