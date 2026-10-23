@@ -62,7 +62,7 @@ function createXSubscriptionReader() {
               const detail = await win.webContents.executeJavaScript(`(${readXDocument.toString()})()`);
               if (settled) return;
               const full = detail.items.find(item=>item.username===username && item.id===post.id && !item.truncated);
-              if (full) {collected[index]=projectPost(full,username);break;}
+              if (full) {collected[index]={...projectPost(full,username),displayName:full.displayName || post.displayName};break;}
               if (detail.empty) break;
             } catch {break;}
             await new Promise(resolve=>setTimeout(resolve,200));

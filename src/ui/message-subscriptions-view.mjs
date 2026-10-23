@@ -97,7 +97,10 @@ export function createMessageSubscriptionsView() {
     const cachedKeys = new Set(data.posts.map(post => `${post.username}/${post.id}`));
     for (const set of [expandedTranslations,expandedBodies]) for (const key of set) if (!cachedKeys.has(key)) set.delete(key);
     // 定时只读快照不重建未变化的列表，避免打断键盘焦点和正在阅读的位置。
-    const content = JSON.stringify([data.accounts,data.posts,filter,$('subscriptions-unread').checked,pending]);
+    const query = $('subscriptions-search').value.normalize('NFKC').trim().toLocaleLowerCase();
+    const names = new Map(data.accounts.map(a=>[a.username,a.displayName || data.posts.find(p=>p.username===a.username && p.displayName)?.displayName || `@${a.username}`]));
+    const matches = new Set(data.accounts.filter(a=>[names.get(a.username),`@${a.username}`].some(text=>text.normalize('NFKC').toLocaleLowerCase().includes(query))).map(a=>a.username));
+    const content = JSON.stringify([data.accounts,data.posts,filter,query,$('subscriptions-unread').checked,pending]);
     if (content === lastContent) return;lastContent = content;
     $('subscriptions-all').setAttribute('aria-pressed',String(!filter));
     $('subscriptions-accounts').replaceChildren();
@@ -105,12 +108,14 @@ export function createMessageSubscriptionsView() {
     $('subscriptions-manage-empty').hidden = data.accounts.length > 0;
     for (const account of data.accounts) {
       const choose = button('',()=>select(account.username),'outline subscriptions-account');
+      choose.hidden = !matches.has(account.username);choose.title = `@${account.username}`;
       choose.dataset.username = account.username;choose.setAttribute('aria-pressed',String(filter === account.username));
-      choose.append(node('span',`@${account.username}`));
+      choose.append(node('span',names.get(account.username)));
       if (account.unread) choose.append(node('small',`${account.unread} 未读`));
       $('subscriptions-accounts').append(choose);
       const managed = node('div','','subscriptions-managed-account');
-      managed.append(node('strong',`@${account.username}`),node('small',`${account.enabled ? '每小时检查' : '已暂停'} · ${account.count} 缓存`));
+      const name = node('strong',names.get(account.username));name.title = `@${account.username}`;
+      managed.append(name,node('small',`${account.enabled ? '每小时检查' : '已暂停'} · ${account.count} 缓存`));
       const tools = node('div','','subscriptions-account-tools');
       const toggle = button(account.enabled ? '暂停' : '启用',()=>call('set-enabled',{username:account.username,enabled:!account.enabled}));
       toggle.setAttribute('aria-label',`${account.enabled ? '暂停' : '启用'} @${account.username}`);
@@ -119,15 +124,17 @@ export function createMessageSubscriptionsView() {
       for (const el of [toggle,remove]) {el.disabled = pending || Boolean(data.storeError);el.className = 'text-button';}
       tools.append(toggle,remove);managed.append(tools);$('subscriptions-managed-accounts').append(managed);
     }
-    $('subscriptions-feed-title').textContent = filter ? `@${filter}` : '全部动态';
-    const accounts = data.accounts.filter(a => !filter || a.username === filter);
+    $('subscriptions-feed-title').textContent = filter ? names.get(filter) : query ? '筛选结果' : '全部动态';
+    $('subscriptions-feed-title').title = filter ? `@${filter}` : '';
+    const accounts = data.accounts.filter(a => matches.has(a.username) && (!filter || a.username === filter));
     $('subscriptions-account-status').replaceChildren();
     for (const account of accounts) {
-      const status = node('div',`@${account.username} · ${account.enabled ? '每小时检查' : '已暂停'} · ${time(account.checkedAt)}${account.error ? ` · ${account.error}` : ''}`);
+      const status = node('div',`${names.get(account.username)} · ${account.enabled ? '每小时检查' : '已暂停'} · ${time(account.checkedAt)}${account.error ? ` · ${account.error}` : ''}`);
+      status.title = `@${account.username}`;
       if (account.error) status.append(' ',button('打开主页',()=>call('open-profile',account.username),'text-button'));
       $('subscriptions-account-status').append(status);
     }
-    const posts = data.posts.filter(p => (!filter || p.username === filter) && (!$('subscriptions-unread').checked || p.unread));
+    const posts = data.posts.filter(p => matches.has(p.username) && (!filter || p.username === filter) && (!$('subscriptions-unread').checked || p.unread));
     $('subscriptions-posts').replaceChildren();
     for (const post of posts) {
       const card = node('article','','ui-card subscriptions-post');card.dataset.postId = post.id;
@@ -136,8 +143,9 @@ export function createMessageSubscriptionsView() {
       const header = node('div','','subscriptions-post-header');
       // 标题统一打开原文，已读和未读都可操作；沿用主进程打开后标为已读的流程。
       const heading = button('',()=>call('open-post',value),'subscriptions-post-heading');
-      heading.disabled = pending;heading.setAttribute('aria-label',`查看原文：@${post.username} ${time(post.publishedAt)}`);heading.title = '查看原文';
-      heading.append(node('strong',`@${post.username}`),node('span',time(post.publishedAt)),node('span','↗'));
+      heading.disabled = pending;heading.setAttribute('aria-label',`查看原文：@${post.username} ${time(post.publishedAt)}`);heading.title = `查看原文 · @${post.username}`;
+      const author = node('strong',names.get(post.username) || post.displayName || `@${post.username}`);author.title = `@${post.username}`;
+      heading.append(author,node('span',time(post.publishedAt)),node('span','↗'));
       if (post.unread) {
         const dot = node('span','','subscriptions-unread-dot');
         dot.setAttribute('role','img');dot.setAttribute('aria-label','未读');heading.prepend(dot);
@@ -181,7 +189,7 @@ export function createMessageSubscriptionsView() {
       updateBodyState(body);
     }
     $('subscriptions-empty').hidden = posts.length > 0;
-    $('subscriptions-empty').textContent = !data.accounts.length ? '还没有订阅，添加一个 X 账号开始阅读。' : $('subscriptions-unread').checked ? '暂时没有未读动态。' : data.busy ? '正在读取公开动态，首次检查最多需要半分钟…' : '暂无缓存。可点击“立即检查”；新获取的动态默认未读。';
+    $('subscriptions-empty').textContent = !data.accounts.length ? '还没有订阅，添加一个 X 账号开始阅读。' : query ? '没有匹配的动态，请调整昵称或账号筛选。' : $('subscriptions-unread').checked ? '暂时没有未读动态。' : data.busy ? '正在读取公开动态，首次检查最多需要半分钟…' : '暂无缓存。可点击“立即检查”；新获取的动态默认未读。';
   }
   async function load() {
     if (view.hidden || loading || pending) return;loading = true;const requestedAt = revision;
@@ -204,6 +212,8 @@ export function createMessageSubscriptionsView() {
   });
   $('subscriptions-all').addEventListener('click',()=>select(''));
   for (const recommended of recommendations) recommended.addEventListener('click',()=>call('add',recommended.dataset.recommendedUsername,'已添加订阅，新获取的动态将标为未读。'));
+  // 输入搜索时回到全部账号，避免之前选中的账号挡住其他昵称的匹配结果。
+  $('subscriptions-search').addEventListener('input',()=>{filter = '';lastContent = '';render();});
   $('subscriptions-unread').addEventListener('change',render);
   $('subscriptions-refresh').addEventListener('click',()=>call('refresh'));
   $('subscriptions-read-all').addEventListener('click',()=>call('mark-read',null,'已全部标为已读。'));

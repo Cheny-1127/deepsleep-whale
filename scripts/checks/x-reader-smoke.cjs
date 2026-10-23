@@ -10,7 +10,7 @@ global.readerWindows=()=>require('electron').BrowserWindow.getAllWindows().lengt
 app.on('browser-window-created',(_event,win)=>{global.readerPrefs.push(win.webContents.getLastWebPreferences());});
 app.whenReady().then(()=>session.fromPartition('message-subscriptions-x').protocol.handle('https',request=>{
  global.readerRequests.push(request.url);const fixture=global.readerMode==='detail'?(new URL(request.url).pathname.includes('/status/')?'<article><a href="/thsottiaux/status/2113162277688070445">post</a><div data-testid="tweetText">完整详情正文</div></article>':'<article><a href="/thsottiaux/status/2113162277688070445">post</a><div data-testid="tweetText">摘要<button>显示更多</button></div></article>'):global.readerMode==='empty'?"<p>@thsottiaux hasn't posted</p>":global.readerMode==='login'?'<p>Log in to X</p>':
- '<img src="https://x.com/fixture-image.png"><article><a href="/thsottiaux/status/2113162277688070445">7h</a><div dir="auto" class="whitespace-pre-wrap">正文 &lt;img onerror=alert(1)&gt;</div><button onclick="this.previousElementSibling.textContent+=String.fromCharCode(32,102,117,108,108,32,116,101,120,116);this.remove()">Show more</button><article><a href="/stranger/status/2113029655095836957">quote</a><div data-testid="tweetText">引用正文</div></article></article><article><a href="/thsottiaux/status/2113029655095836957">8h</a><div data-testid="tweetText">classic text</div></article><article><a href="/stranger/status/2112712984644784534">other author</a><div data-testid="tweetText">not own post</div></article>';
+ '<img src="https://x.com/fixture-image.png"><article><div data-testid="User-Name"><a href="/thsottiaux"><span>Tibo</span></a><a href="/thsottiaux">@thsottiaux</a></div><a href="/thsottiaux/status/2113162277688070445">7h</a><div dir="auto" class="whitespace-pre-wrap">正文 &lt;img onerror=alert(1)&gt;</div><button onclick="this.previousElementSibling.textContent+=String.fromCharCode(32,102,117,108,108,32,116,101,120,116);this.remove()">Show more</button><article><a href="/stranger">Quoted name</a><a href="/stranger/status/2113029655095836957">quote</a><div data-testid="tweetText">引用正文</div></article></article><article><a href="/thsottiaux/status/2113029655095836957">8h</a><div data-testid="tweetText">classic text</div></article><article><a href="/stranger/status/2112712984644784534">other author</a><div data-testid="tweetText">not own post</div></article>';
  return new Response('<!doctype html><html><body>'+fixture+'</body></html>',{headers:{'content-type':'text/html; charset=utf-8'}});
 }));`);
 let app;
@@ -22,6 +22,7 @@ let app;
   });
   assert.deepEqual(result.posts.map(p=>p.id),['2113162277688070445','2113029655095836957']);
   assert.equal(result.posts[0].text,'正文 <img onerror=alert(1)> full text');assert.equal(result.posts[0].truncated,false);
+  assert.equal(result.posts[0].displayName,'Tibo');assert.equal(result.posts[1].displayName,'','不误用引用作者昵称');
   assert.equal(result.posts[0].url,'https://x.com/thsottiaux/status/2113162277688070445');
   for(const [key,value] of Object.entries({sandbox:true,contextIsolation:true,nodeIntegration:false,webviewTag:false}))assert.equal(result.prefs[key],value,key);
   assert.ok(!result.prefs.preload);assert.equal(result.windows,0);assert.ok(!result.requests.some(url=>url.includes('fixture-image.png')),'images do not load');
