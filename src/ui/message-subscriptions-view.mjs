@@ -110,6 +110,7 @@ export function createMessageSubscriptionsView() {
     for (const set of [expandedTranslations,expandedBodies]) for (const key of set) if (!cachedKeys.has(key)) set.delete(key);
     // 定时只读快照不重建未变化的列表，避免打断键盘焦点和正在阅读的位置。
     const query = $('subscriptions-search').value.normalize('NFKC').trim().toLocaleLowerCase();
+    // 头像随账号资料传输一次，各条消息复用，避免大量动态在 IPC 中重复传输图片。
     const avatars = new Map(data.accounts.map(a=>[a.username,a.avatar]));
     const names = new Map(data.accounts.map(a=>[a.username,a.displayName || data.posts.find(p=>p.username===a.username && p.displayName)?.displayName || `@${a.username}`]));
     const matches = new Set(data.accounts.filter(a=>[names.get(a.username),`@${a.username}`].some(text=>text.normalize('NFKC').toLocaleLowerCase().includes(query))).map(a=>a.username));
@@ -158,6 +159,7 @@ export function createMessageSubscriptionsView() {
       const heading = button('',()=>call('open-post',value),'subscriptions-post-heading');
       heading.disabled = pending;heading.setAttribute('aria-label',`查看原文：@${post.username} ${time(post.publishedAt)}`);heading.title = `查看原文 · @${post.username}`;
       const author = node('strong',names.get(post.username) || post.displayName || `@${post.username}`);author.title = `@${post.username}`;
+      // 首字占位始终保留在图片下方；图片缺失或加载失败时直接回退，不改变标题尺寸。
       const avatar = node('span',Array.from(author.textContent.replace(/^@/,''))[0] || '?','subscriptions-avatar');
       avatar.setAttribute('aria-hidden','true');
       if (avatars.get(post.username)) {
@@ -207,6 +209,7 @@ export function createMessageSubscriptionsView() {
       card.append(header,body);
       if (post.truncated) card.append(node('p','内容已截取，完整内容请查看原文。','subscriptions-truncated'));
       if (post.translation) {
+        // 已缓存的译文仍由本次页面的展开状态控制；只显示正文，不再添加“中文译文”标题。
         const translated = node('div','','subscriptions-translation');translated.lang = 'zh-CN';
         translated.id = `subscription-translation-${post.username}-${post.id}`;translated.hidden = !expanded;
         translated.append(node('p',post.translation.text));card.append(translated);
