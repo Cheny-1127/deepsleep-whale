@@ -156,12 +156,42 @@ test('short refresh periods wait for request completion, merge overlaps, retry f
   const scheduled=f.panel.snapshot().nextRefreshAt;await f.panel.refreshAccount(5);assert.equal(f.panel.snapshot().nextRefreshAt,scheduled);
   let done;f.setRequest(()=>new Promise(resolve=>{done=resolve;}));await f.fire(5000);
   const task=f.panel.refresh();assert.equal(f.calls.length,3);assert.equal(f.jobs.size,1);assert.equal([...f.jobs][0].ms,60000);
-  assert.throws(()=>f.panel.setRefreshInterval({value:1,unit:'hours'}),/正在刷新/);
-  f.setNow(20000);done({ok:true,json:async()=>({id:5,codex_5h_used_percent:30})});await task;
+  assert.equal(f.panel.setRefreshInterval({value:5,unit:'seconds'}).busy,true);
+  f.setNow(20000);done({ok:true,json:async()=>({items:[{id:5,codex_5h_used_percent:30}],pages:1})});await task;
   assert.equal(f.panel.snapshot().nextRefreshAt,25000);assert.equal([...f.jobs][0].ms,5000);
   f.setRequest(async()=>{throw Error('private failure');});await f.fire(5000);
   assert.equal(f.panel.snapshot().checkedAt,20000);assert.equal(f.panel.snapshot().nextRefreshAt,30000);
   assert.match(f.panel.snapshot().error,/失败/);assert.doesNotMatch(f.panel.snapshot().error,/5 分钟|private/);
+});
+
+test('interval changes during full or individual refresh persist immediately and schedule after completion',async t=>{
+  for(const individual of [false,true]) for(const failed of [false,true]) {
+    const f=pollingFixture(t);await f.panel.refresh();
+    let done;f.setRequest(()=>new Promise((resolve,reject)=>{done=()=>failed?reject(Error('offline')):resolve({ok:true,json:async()=>individual?{id:5,codex_5h_used_percent:30}:{items:[{id:5,codex_5h_used_percent:30}],pages:1}});}));
+    const task=individual?f.panel.refreshAccount(5):f.panel.refresh();await new Promise(setImmediate);
+    for(const value of [10,30]) {
+      const state=f.panel.setRefreshInterval({value,unit:'seconds'});
+      assert.equal(state.busy,true);assert.equal(state.nextRefreshAt,null);
+      assert.equal(JSON.parse(fs.readFileSync(path.join(f.dir,'quota-refresh.json'),'utf8')).refreshInterval.value,value);
+      assert.equal(f.jobs.size,1);assert.equal([...f.jobs][0].ms,60000);
+      assert.equal(f.calls.length,2);assert.equal(f.calls[1].signal.aborted,false);
+    }
+    f.setNow(20000);done();await task;
+    assert.equal(f.panel.snapshot().busy,false);assert.equal(f.panel.snapshot().nextRefreshAt,50000);
+    assert.equal(f.jobs.size,1);assert.equal([...f.jobs][0].ms,30000);
+  }
+});
+
+test('failed interval write during individual refresh keeps the original polling schedule',async t=>{
+  const f=pollingFixture(t);await f.panel.refresh();const scheduled=f.panel.snapshot().nextRefreshAt;
+  let done;f.setRequest(()=>new Promise(resolve=>{done=resolve;}));
+  const task=f.panel.refreshAccount(5);await new Promise(setImmediate);
+  fs.mkdirSync(path.join(f.dir,'quota-refresh.json.tmp'));
+  assert.throws(()=>f.panel.setRefreshInterval({value:30,unit:'seconds'}),/保存失败/);
+  assert.equal(f.panel.snapshot().refreshIntervalMs,300000);assert.equal(f.panel.snapshot().nextRefreshAt,scheduled);
+  assert.equal(f.jobs.size,2);
+  f.setNow(20000);done({ok:true,json:async()=>({id:5,codex_5h_used_percent:30})});await task;
+  assert.equal(f.panel.snapshot().nextRefreshAt,scheduled);assert.equal(f.jobs.size,1);
 });
 
 test('manual refresh resets the schedule and overlaps share one request',async t=>{
@@ -169,7 +199,7 @@ test('manual refresh resets the schedule and overlaps share one request',async t
   let done;f.setRequest(()=>new Promise(resolve=>done=resolve));
   const first=f.panel.refresh(),second=f.panel.refresh();await new Promise(setImmediate);
   assert.equal(f.calls.length,2);assert.equal([...f.jobs].filter(job=>job.ms===300000).length,0);
-  f.setNow(123000);done({ok:true,json:async()=>({items:[],pages:1})});await Promise.all([first,second]);
+  f.setNow(123000);done({ok:true,json:async()=>({items:[{id:5,codex_5h_used_percent:30}],pages:1})});await Promise.all([first,second]);
   assert.equal(f.panel.snapshot().nextRefreshAt,423000);
   assert.equal([...f.jobs].filter(job=>job.ms===300000).length,1);
 });
@@ -214,7 +244,7 @@ test('failure timestamp and message survive a retry and only successful sync cle
   assert.equal(f.panel.snapshot().failedAt, failed.failedAt);
   assert.equal(f.panel.snapshot().error, failed.error);
   f.setNow(3000);
-  done({ok: true, json: async () => ({id: 5, codex_5h_used_percent: 10})});
+  done({ok: true, json: async () => ({items:[{id: 5, codex_5h_used_percent: 10}],pages:1})});
   await task;
   assert.equal(f.panel.snapshot().failedAt, null);
   assert.equal(f.panel.snapshot().error, '');
@@ -244,29 +274,29 @@ function selectedAccountsFixture(t) {
   const tokenFile = path.join(dir, 'token');
   fs.writeFileSync(tokenFile, 'fixture-token');
   const calls = [];
-  let failId = null, invalidId = null;
+  let failId = null, invalidId = null, omittedIds = [];
   const fetchImpl = async url => {
     const endpoint = new URL(url).pathname;
     calls.push(endpoint);
     const id = Number(endpoint.split('/').at(-1));
     if (id === failId) throw Error('private diagnostics');
     const item = id => ({id, name: `账号 ${id}`, codex_5h_used_percent: calls.length, extra: {codex_7d_used_percent: 20}});
-    return {ok: true, json: async () => ({data: Number.isSafeInteger(id) && id > 0 ? item(id === invalidId ? 999 : id) : {items: [item(5), item(6)], pages: 1}})};
+    return {ok: true, json: async () => ({data: Number.isSafeInteger(id) && id > 0 ? item(id === invalidId ? 999 : id) : {items: [5,6].filter(id => !omittedIds.includes(id)).map(item), pages: 1}})};
   };
   const create = () => createQuotaPanel({tokenFile, dataDir: dir, fetchImpl});
   const panel = create();
   t.after(() => {panel.close(); fs.rmSync(dir, {recursive: true, force: true});});
-  return {panel, calls, dir, create, fail: id => {failId = id;}, invalid: id => {invalidId = id;}};
+  return {panel, calls, dir, create, fail: id => {failId = id;}, invalid: id => {invalidId = id;}, omit: ids => {omittedIds = ids;}};
 }
 
-test('refresh choices persist and subsequent refreshes only request enabled account details', async t => {
+test('refresh choices persist and list refreshes update only enabled accounts', async t => {
   const f = selectedAccountsFixture(t);
   await f.panel.refresh();
   assert.deepEqual(f.calls, ['/api/v1/admin/accounts']);
   const original = f.panel.snapshot().accounts[0];
   f.panel.setRefreshEnabled({id: 5, enabled: false});
   await f.panel.refresh();
-  assert.deepEqual(f.calls, ['/api/v1/admin/accounts', '/api/v1/admin/accounts/6']);
+  assert.deepEqual(f.calls, ['/api/v1/admin/accounts', '/api/v1/admin/accounts']);
   assert.deepEqual(f.panel.snapshot().accounts[0], {...original, refreshEnabled: false});
   const saved = JSON.parse(fs.readFileSync(path.join(f.dir, 'quota-refresh.json'), 'utf8'));
   assert.deepEqual(saved, {disabledAccountIds:[5],refreshInterval:{value:5,unit:'minutes'}});
@@ -274,10 +304,10 @@ test('refresh choices persist and subsequent refreshes only request enabled acco
   await restarted.refresh();
   assert.equal(restarted.snapshot().accounts[0].refreshEnabled, false);
   await restarted.refresh();
-  assert.equal(f.calls.at(-1), '/api/v1/admin/accounts/6');
+  assert.equal(f.calls.at(-1), '/api/v1/admin/accounts');
   restarted.setRefreshEnabled({id: 5, enabled: true});
   await restarted.refresh();
-  assert.deepEqual(f.calls.slice(-2), ['/api/v1/admin/accounts/5', '/api/v1/admin/accounts/6']);
+  assert.equal(f.calls.at(-1), '/api/v1/admin/accounts');
 });
 
 test('all paused accounts issue no requests and keep the last successful timestamp', async t => {
@@ -291,9 +321,60 @@ test('all paused accounts issue no requests and keep the last successful timesta
   assert.ok(f.panel.snapshot().nextRefreshAt != null);
 });
 
+test('list refresh merges enabled accounts, supplements only missing ones and timestamps each success',async t=>{
+  const f=pollingFixture(t),paths=[];
+  const item=(id,used)=>({id,name:`account ${id}`,codex_5h_used_percent:used});
+  f.setRequest(async()=>({ok:true,json:async()=>({items:[1,2,3,4,6].map(id=>item(id,10)),pages:1})}));
+  await f.panel.refresh();f.panel.setRefreshEnabled({id:3,enabled:false});f.panel.setRefreshEnabled({id:6,enabled:false});
+  const initial=f.panel.snapshot();f.setNow(2000);
+  f.setRequest(async url=>{
+    const endpoint=new URL(url);paths.push(endpoint.pathname);
+    if(endpoint.pathname.endsWith('/4')) {f.setNow(3000);return {ok:true,json:async()=>item(4,30)};}
+    return {ok:true,json:async()=>({items:[1,2,3,5].map(id=>item(id,20)),pages:1})};
+  });
+  await f.panel.refresh();const merged=f.panel.snapshot();
+  assert.deepEqual(paths,['/api/v1/admin/accounts','/api/v1/admin/accounts/4']);
+  assert.deepEqual(merged.accounts.map(a=>a.id),[1,2,3,4,6,5],'保留已有账号顺序并追加新账号');
+  for(const id of [1,2,5]) {const a=merged.accounts.find(a=>a.id===id);assert.equal(a.lastSyncedAt,2000);assert.equal(a.fiveHourRemaining,80);}
+  assert.equal(merged.accounts.find(a=>a.id===4).lastSyncedAt,3000);
+  for(const id of [3,6]) assert.deepEqual(merged.accounts.find(a=>a.id===id),initial.accounts.find(a=>a.id===id),'暂停账号无论是否在列表中均保留旧值');
+  f.setNow(4000);f.setRequest(async()=>({ok:true,json:async()=>item(2,40)}));await f.panel.refreshAccount(2);
+  const single=f.panel.snapshot();assert.equal(single.accounts.find(a=>a.id===2).lastSyncedAt,4000);
+  assert.equal(single.checkedAt,merged.checkedAt);
+  for(const a of merged.accounts.filter(a=>a.id!==2)) assert.deepEqual(single.accounts.find(b=>b.id===a.id),a);
+});
+
+test('a failed missing-account supplement preserves its timestamp while list successes advance',async t=>{
+  const f=pollingFixture(t);await f.panel.refresh();f.setNow(2000);
+  f.setRequest(async url=>({ok:true,json:async()=>new URL(url).pathname.endsWith('/5')?{id:5,codex_5h_used_percent:30}:{items:[{id:6,codex_5h_used_percent:40}],pages:1}}));
+  await f.panel.refresh();const before=f.panel.snapshot();f.setNow(3000);
+  f.setRequest(async url=>{if(new URL(url).pathname.endsWith('/5'))throw Error('private failure');return {ok:true,json:async()=>({items:[{id:6,codex_5h_used_percent:50}],pages:1})};});
+  await f.panel.refresh();const after=f.panel.snapshot();
+  assert.deepEqual(after.accounts[0],before.accounts[0]);assert.equal(after.accounts[1].lastSyncedAt,3000);
+  assert.equal(after.checkedAt,before.checkedAt);assert.ok(after.accountRefreshErrors[5]);assert.equal(after.accountRefreshErrors[6],'');
+});
+
+test('all list pages are read before fallback and incomplete lists never trigger account requests or mutate timestamps',async t=>{
+  const f=pollingFixture(t);await f.panel.refresh();f.setNow(2000);const paths=[];
+  f.setRequest(async url=>{const endpoint=new URL(url);paths.push(endpoint);return {ok:true,json:async()=>({items:endpoint.searchParams.get('page')==='2'?[{id:5,codex_5h_used_percent:30}]:[],pages:2})};});
+  await f.panel.refresh();assert.equal(paths.length,2);assert.ok(paths.every(url=>url.pathname.endsWith('/accounts')));
+  assert.equal(f.panel.snapshot().accounts[0].lastSyncedAt,2000);const before=f.panel.snapshot();f.setNow(3000);
+  for(const mode of ['failure','limit']) {
+    paths.length=0;
+    f.setRequest(async url=>{
+      const endpoint=new URL(url);paths.push(endpoint);
+      if(mode==='failure'&&endpoint.searchParams.get('page')==='2')throw Error('offline');
+      return {ok:true,json:async()=>({items:[{id:5,codex_5h_used_percent:90}],pages:mode==='limit'?11:2})};
+    });
+    await f.panel.refresh();assert.equal(paths.length,mode==='limit'?10:2);
+    assert.ok(paths.every(url=>url.pathname.endsWith('/accounts')));assert.deepEqual(f.panel.snapshot().accounts,before.accounts);
+    assert.equal(f.panel.snapshot().checkedAt,before.checkedAt);assert.ok(f.panel.snapshot().error);
+  }
+});
+
 test('partial failure retains the failed account and still refreshes other enabled accounts', async t => {
   const f = selectedAccountsFixture(t);await f.panel.refresh();
-  const before = f.panel.snapshot();f.fail(5);
+  const before = f.panel.snapshot();f.omit([5]);f.fail(5);
   await f.panel.refresh();const failed = f.panel.snapshot();
   assert.deepEqual(failed.accounts[0], before.accounts[0]);
   assert.notDeepEqual(failed.accounts[1], before.accounts[1]);
@@ -335,7 +416,7 @@ test('single account errors stay with that account and recovery clears only its 
   await f.panel.refreshAccount(6);
   let after = f.panel.snapshot();
   assert.deepEqual(after.accounts,before.accounts);assert.equal(after.error,before.error);
-  assert.ok(after.accountRefreshErrors[6]);assert.equal(after.accountRefreshErrors[5],undefined);
+  assert.ok(after.accountRefreshErrors[6]);assert.equal(after.accountRefreshErrors[5],before.accountRefreshErrors[5]);
   assert.ok(!after.accountRefreshErrors[6].includes('private'));
   f.fail(null);await f.panel.refreshAccount(6);
   assert.equal(f.panel.snapshot().accountRefreshErrors[6],'');
@@ -349,7 +430,7 @@ test('single account refresh merges duplicates, queues other scopes, and exposes
   const all=f.panel.refresh();
   done({ok:true,json:async()=>({id:5,codex_5h_used_percent:10})});await Promise.all([a,b]);
   await new Promise(setImmediate);assert.equal(f.calls.length,3);
-  done({ok:true,json:async()=>({id:5,codex_5h_used_percent:15})});await all;
+  done({ok:true,json:async()=>({items:[{id:5,codex_5h_used_percent:15}],pages:1})});await all;
   assert.deepEqual(f.panel.snapshot().refreshingAccountIds,[]);
 });
 

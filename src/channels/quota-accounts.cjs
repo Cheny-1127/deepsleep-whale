@@ -10,7 +10,7 @@ function normalizeInterval(value) {
   return {value:value.value,unit:value.unit};
 }
 const REQUEST_TIMEOUT_MS = 60 * 1000;
-const DEFAULT_LIST_SETTINGS = {showName: true, showPlatform: true, showRemaining: true, showCredits: true, showRefresh: true, showFiveHour: true};
+const DEFAULT_LIST_SETTINGS = {showName: true, showPlatform: true, showRemaining: true, showCredits: true, showSyncedAt: true, showRefresh: true, showFiveHour: true};
 
 function remainingPercent(used) {
   if (typeof used !== 'number' || !Number.isFinite(used)) return null;
@@ -42,7 +42,7 @@ function projectAccount(item) {
   const balance = item.extra?.codex_credits_snapshot?.credits?.balance;
   const numericBalance = typeof balance === 'string' && /^\d+(?:\.\d+)?$/.test(balance.trim()) ? Number(balance) : balance;
   const creditsBalance = typeof numericBalance === 'number' && Number.isFinite(numericBalance) && numericBalance >= 0 ? numericBalance : null;
-  // 只有点数、没有百分比窗口的账号也要保留，供独立点数列展示。
+  // 只有点数、没有百分比窗口的账号也要保留，供账号下方点数展示。
   if (fiveHourUsed == null && sevenDayUsed == null && creditsBalance == null) return null;
   // 剩余额度由网关已保存的已用百分比折算，不携带凭据，也不据此请求上游。
   // 只读取可用张数，不向页面传递完整重置卡快照。
@@ -99,9 +99,10 @@ async function listAccountQuotas(options = {}) {
       if (account) accounts.push(account);
     }
     const pages = Number.isInteger(data?.pages) ? data.pages : 1;
-    if (page >= pages) break;
+    if (page >= pages) return accounts;
   }
-  return accounts;
+  // 不把被截断的列表当成完整结果，避免为剩余账号逐个补发请求。
+  throw new Error('账号列表超过读取上限，未完成同步');
 }
 
 // 首次请求后启动轮询；由主进程持有，切换或关闭小屋不影响后续刷新。
@@ -109,9 +110,10 @@ function createQuotaPanel({tokenFile, dataDir, baseUrl, fetchImpl, clock = {now:
   let state = {accounts: [], error: '', checkedAt: null, attemptedAt: null, failedAt: null, busy: false};
   let closed = false, flight = null, flightAccountId = null, timer, deadline, controller, nextRefreshAt = null;
   const accountRefreshErrors = new Map();
-  let initialized = false, disabledAccountIds = new Set();
+  let disabledAccountIds = new Set();
   let resumeCache = false, cacheError = '';
   let refreshInterval = {...DEFAULT_REFRESH_INTERVAL}, cachedIntervalMs = 300000;
+  let rescheduleAfterFlight = false;
   const intervalMs = () => refreshInterval.value * INTERVAL_UNITS[refreshInterval.unit];
   const cache = createQuotaCache({dataDir, tokenFile, baseUrl});
   try {
@@ -135,7 +137,7 @@ function createQuotaPanel({tokenFile, dataDir, baseUrl, fetchImpl, clock = {now:
   try {
     const saved = JSON.parse(fs.readFileSync(listSettingsFile, 'utf8'));
     for (const key of Object.keys(DEFAULT_LIST_SETTINGS)) if (typeof saved?.[key] === 'boolean') listSettings[key] = saved[key];
-    if (!['showName', 'showPlatform', 'showRemaining', 'showCredits', 'showRefresh'].some(key => listSettings[key])) listSettings = {...DEFAULT_LIST_SETTINGS};
+    if (!['showName', 'showPlatform', 'showRemaining', 'showSyncedAt', 'showRefresh'].some(key => listSettings[key])) listSettings = {...DEFAULT_LIST_SETTINGS};
   } catch {} // 列配置独立于额度缓存，切换账号或刷新失败也保留显示偏好。
   const allPaused = () => state.accounts.length > 0 && state.accounts.every(account => disabledAccountIds.has(account.id));
   function snapshot() {
@@ -181,6 +183,8 @@ function createQuotaPanel({tokenFile, dataDir, baseUrl, fetchImpl, clock = {now:
     state = {...state, busy: true, ...(accountId === null ? {attemptedAt: clock.now()} : {})};
     controller = new AbortController();
     const signal = controller.signal;
+    // 成功合并或补取后移出集合；最后留下的账号才记录本轮失败，避免误标已更新账号。
+    const pendingIds = new Set(state.accounts.filter(account => !disabledAccountIds.has(account.id)).map(account => account.id));
     flight = Promise.resolve().then(async () => {
       if (closed) return;
       deadline = clock.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -192,50 +196,62 @@ function createQuotaPanel({tokenFile, dataDir, baseUrl, fetchImpl, clock = {now:
           const account = projectAccount(await readAccountData(options, `/${accountId}`));
           if (!account || account.id !== accountId) throw new Error('读取账号额度失败');
           if (closed) return;
-          state = {...state, accounts: state.accounts.map(item => item.id === accountId ? account : item)};
+          state = {...state, accounts: state.accounts.map(item => item.id === accountId ? {...account, lastSyncedAt: clock.now()} : item)};
           accountRefreshErrors.set(accountId, '');
           return;
         }
-        // 首次发现账号；后续只读取开启的账号详情，关闭的账号保留旧值。
-        if (!initialized || !state.accounts.length) {
-          const accounts = await listAccountQuotas(options);
-          if (closed) return;
-          const previous = new Map(state.accounts.map(account => [account.id, account]));
-          state = {...state, accounts: accounts.map(account => disabledAccountIds.has(account.id) ? previous.get(account.id) || account : account)};
-          initialized = true;
-        } else {
-          let failed = false;
-          for (const previous of state.accounts) {
-            if (disabledAccountIds.has(previous.id)) continue;
-            try {
-              const account = projectAccount(await readAccountData(options, `/${previous.id}`));
-              if (!account || account.id !== previous.id) throw new Error('读取账号额度失败');
-              if (closed) return;
-              state = {...state, accounts: state.accounts.map(item => item.id === account.id ? account : item)};
-            } catch {
-              if (closed) return;
-              signal.throwIfAborted();
-              failed = true; // 单笔失败不阻止其他账号更新，失败账号继续显示原值。
-            }
+        // 每轮先完整读取列表，再按本地开关合并；暂停账号保留数据和最后成功同步时间。
+        const accounts = await listAccountQuotas(options);
+        if (closed) return;
+        const listed = new Map(accounts.map(account => [account.id, account]));
+        const previousIds = new Set(state.accounts.map(account => account.id));
+        // 记录本机取得网关快照的时间，不把它当作网关向上游查询额度的时间。
+        const listedAt = clock.now();
+        const synced = account => {
+          pendingIds.delete(account.id);accountRefreshErrors.set(account.id, '');
+          return {...account, lastSyncedAt: listedAt};
+        };
+        state = {...state, accounts: [
+          ...state.accounts.map(account => disabledAccountIds.has(account.id) || !listed.has(account.id) ? account : synced(listed.get(account.id))),
+          ...[...listed.values()].filter(account => !previousIds.has(account.id)).map(account => disabledAccountIds.has(account.id) ? {...account, lastSyncedAt: null} : synced(account))
+        ]};
+        let failed = false;
+        // 只有完整列表缺失且开启刷新的已知账号才补取详情；列表失败不会退化成逐账号请求。
+        for (const id of pendingIds) {
+          try {
+            const account = projectAccount(await readAccountData(options, `/${id}`));
+            if (!account || account.id !== id) throw new Error('读取账号额度失败');
+            if (closed) return;
+            state = {...state, accounts: state.accounts.map(item => item.id === id ? {...account, lastSyncedAt: clock.now()} : item)};
+            pendingIds.delete(id);accountRefreshErrors.set(id, '');
+          } catch {
+            if (closed) return;
+            signal.throwIfAborted();
+            failed = true; // 补取失败保留该账号旧值，继续处理其他缺失账号。
           }
-          if (failed) throw new Error('读取账号额度失败');
         }
-        if (!closed) {state = {...state, error: '', failedAt: null, checkedAt: clock.now()};accountRefreshErrors.clear();}
+        if (failed) throw new Error('读取账号额度失败');
+        if (!closed) state = {...state, error: '', failedAt: null, checkedAt: clock.now()};
       } catch (error) {
         if (closed) return;
         // 失败保留上次成功数据；不向页面透传网络库可能包含凭据的原始错误。
-        const known = ['尚未配置 token 文件', 'token 文件是空的', 'token 无效，无法读取账号额度', '读取账号额度失败'];
+        const known = ['尚未配置 token 文件', 'token 文件是空的', 'token 无效，无法读取账号额度', '读取账号额度失败', '账号列表超过读取上限，未完成同步'];
         // 记录本轮连续失败的起点；后续重试失败不推进此时间。
         const message = signal.aborted ? '读取账号额度超时，将按刷新间隔自动重试。' :
           known.includes(error.message) ? error.message : '读取账号额度失败，将按刷新间隔自动重试。';
         // 单账号失败只影响对应额度条，不把错误扩散到其他账号。
         if (accountId !== null) accountRefreshErrors.set(accountId, message);
-        else {state = {...state, failedAt: state.failedAt ?? clock.now(), error: message};accountRefreshErrors.clear();}
+        else {
+          state = {...state, failedAt: state.failedAt ?? clock.now(), error: message};
+          for (const id of pendingIds) accountRefreshErrors.set(id, message);
+        }
       }
     }).finally(() => {
       clock.clearTimeout(deadline); deadline = null; controller = null;
       state = {...state, busy: false}; flight = null; flightAccountId = null;
-      if (accountId === null) schedule();
+      // 刷新期间修改周期不打断请求；单账号刷新也在结束后应用新的全量轮询计划。
+      if (accountId === null || rescheduleAfterFlight) schedule();
+      rescheduleAfterFlight = false;
       if (!closed) saveCache();
     }).then(() => snapshot());
     return flight;
@@ -271,11 +287,11 @@ function createQuotaPanel({tokenFile, dataDir, baseUrl, fetchImpl, clock = {now:
   }
   function setRefreshInterval(value) {
     if (closed) throw Error('额度页面已关闭');
-    if (flight) throw Error('正在刷新，请稍后修改设置');
     const next = normalizeInterval(value);
     saveRefreshSettings(disabledAccountIds,next);refreshInterval = next;resumeCache = false;
-    // 修改周期从保存时重新计时；全部暂停时只保存配置，重新启用后再恢复轮询。
-    if (timer || state.attemptedAt !== null || state.checkedAt !== null || state.accounts.length) schedule();
+    // 先保存配置。空闲时立即重排；有请求时清除旧计划，完成后按最后保存的周期计时。
+    if (flight) {clearTimer();rescheduleAfterFlight = true;}
+    else if (timer || state.attemptedAt !== null || state.checkedAt !== null || state.accounts.length) schedule();
     saveCache();
     return snapshot();
   }
@@ -284,7 +300,8 @@ function createQuotaPanel({tokenFile, dataDir, baseUrl, fetchImpl, clock = {now:
     if (!value || typeof value !== 'object' || !Object.keys(value).length ||
       Object.entries(value).some(([key, enabled]) => !Object.hasOwn(DEFAULT_LIST_SETTINGS, key) || typeof enabled !== 'boolean')) throw new Error('无效的列表配置');
     const next = {...listSettings, ...value};
-    if (!['showName', 'showPlatform', 'showRemaining', 'showCredits', 'showRefresh'].some(key => next[key])) throw new Error('请至少保留一列');
+    // 点数属于账号名称内的附加信息，不再算独立列；至少保留一个实际可见的表格列。
+    if (!['showName', 'showPlatform', 'showRemaining', 'showSyncedAt', 'showRefresh'].some(key => next[key])) throw new Error('请至少保留一列');
     // 显示列只改变本地界面，不触发远程刷新或重置下次刷新时间。
     try {
       if (!listSettingsFile) throw new Error();

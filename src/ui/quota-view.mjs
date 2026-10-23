@@ -1,7 +1,8 @@
 const $ = id => document.getElementById('quota-' + id);
 const columns = [['showName', 'show-name', 'name-heading'], ['showPlatform', 'show-platform', 'platform-heading'],
-  ['showRemaining', 'show-remaining', 'remaining-heading'], ['showCredits', 'show-credits', 'credits-heading'], ['showRefresh', 'show-refresh', 'refresh-heading']];
-const settings = [...columns, ['showFiveHour', 'show-five-hour']];
+  ['showRemaining', 'show-remaining', 'remaining-heading'], ['showSyncedAt', 'show-synced-at', 'synced-at-heading'], ['showRefresh', 'show-refresh', 'refresh-heading']];
+// 前五项对应实际表格列；点数和 5 小时额度只控制单元格内部内容。
+const settings = [...columns, ['showCredits', 'show-credits'], ['showFiveHour', 'show-five-hour']];
 
 function resetCountdown(at) {
   const minutes = Math.ceil((Date.parse(at) - Date.now()) / 60000);
@@ -69,23 +70,27 @@ export function createQuotaView() {
   if (!$('view')) return;
   let latest = null, busy = false, syncing = false, saving = false, listKey = '', sequence = 0, refreshButtons = [], resetLabels = [];
   let intervalDirty = false;
-  const intervalUnits = {seconds:'秒',minutes:'分钟',hours:'小时'};
+  // 兼容已保存的分钟/小时配置；界面统一显示秒，不在读取时改写旧设置。
+  function savedSeconds() {
+    const saved=latest?.refreshInterval||{value:5,unit:'minutes'};
+    return saved.value*({seconds:1,minutes:60,hours:3600}[saved.unit]);
+  }
+  function durationLabel(seconds) {
+    const hours=Math.floor(seconds/3600),minutes=Math.floor(seconds%3600/60),rest=seconds%60;
+    return [hours?`${hours}时`:'',minutes?`${minutes}分`:'',rest?`${rest}秒`:''].filter(Boolean).join('')||'0秒';
+  }
   function intervalControls() {
-    const saved = latest?.refreshInterval || {value:5,unit:'minutes'};
-    if (!intervalDirty) {$('interval-value').value = String(saved.value);$('interval-unit').value = saved.unit;}
-    const factor = {seconds:1000,minutes:60000,hours:3600000}[$('interval-unit').value];
-    $('interval-value').min = String(Math.ceil(5000 / factor));$('interval-value').max = String(86400000 / factor);
-    const disabled = busy || saving || latest?.busy || !latest;
-    $('interval-value').disabled = disabled;$('interval-unit').disabled = disabled;
-    $('interval-apply').disabled = disabled || !intervalDirty;
-    $('interval-apply').hidden = !intervalDirty;
-    $('interval-selected').textContent = intervalUnits[$('interval-unit').value];
-    $('interval-button').setAttribute('aria-disabled',String(Boolean(disabled)));
-    if (disabled) $('interval-picker').open = false;
-    for (const unit of Object.keys(intervalUnits)) {
-      $('interval-'+unit).disabled = disabled;
-      $('interval-'+unit).setAttribute('aria-selected',String($('interval-unit').value === unit));
-    }
+    if (!intervalDirty) $('interval-value').value=String(savedSeconds());
+    const raw=$('interval-value').value,seconds=Number(raw);
+    // 外层预留固定位置，边框随数字与换算伸缩；长换算省略时悬停可读完整内容。
+    const showPreview=Number.isSafeInteger(seconds)&&seconds>=60;
+    $('interval-preview').hidden=!showPreview;
+    $('interval-preview').textContent=showPreview?durationLabel(seconds):'';
+    $('interval-preview').title=showPreview?durationLabel(seconds):'';
+    // 网络刷新不锁住本地频率设置，只有设置写入期间短暂禁用。
+    const disabled=saving||!latest;
+    $('interval-value').disabled=disabled;$('interval-retry').disabled=disabled;
+    $('interval-control').setAttribute('aria-busy',String(saving));
   }
   function render(data) {
     if (!data) return;
@@ -102,7 +107,6 @@ export function createQuotaView() {
     $('error').hidden = !data.error;
     $('cache-error').textContent = data.cacheError || '';
     $('cache-error').hidden = !data.cacheError;
-    $('checked').textContent = `刷新时间：${data.checkedAt != null ? new Date(data.checkedAt).toLocaleString('zh-CN') : '尚未刷新'}`;
     $('count').textContent = `${accounts.length} 个账号`;
     $('table').hidden = !accounts.length;
     $('empty').hidden = Boolean(accounts.length);
@@ -151,6 +155,15 @@ export function createQuotaView() {
       toggle.disabled = refreshing || saving;
       toggle.addEventListener('click', () => void setRefreshEnabled(account.id, !enabled));
       refreshButtons.push(toggle);
+      // 单账号成功时间独立于整轮刷新；旧缓存未知时不借用整轮时间。
+      const syncedAt = document.createElement('td');
+      syncedAt.className = 'quota-account-synced';
+      const syncedDate = account.lastSyncedAt != null ? new Date(account.lastSyncedAt) : null;
+      const syncedKnown = syncedDate && Number.isFinite(syncedDate.getTime());
+      const dateLabel = syncedKnown ? [syncedDate.getFullYear(), syncedDate.getMonth() + 1, syncedDate.getDate()].map(value => String(value).padStart(2, '0')).join('-') : '';
+      syncedAt.textContent = syncedKnown ? `${dateLabel}\n${syncedDate.toLocaleTimeString('zh-CN', {hour12: false})}` : '尚无同步时间';
+      syncedAt.title = syncedKnown ? `最后成功同步：${syncedDate.toLocaleString('zh-CN')}（本机同步网关数据）` : '下次成功同步后记录时间';
+      syncedAt.setAttribute('aria-label', syncedAt.title);
       refreshCell.append(toggle);
       const windows = document.createElement('td');
       windows.className = 'quota-windows';
@@ -196,13 +209,16 @@ export function createQuotaView() {
         empty.textContent = '暂无适用额度';
         windows.append(empty);
       }
-      const credits = document.createElement('td');
+      const credits = document.createElement('div');
       credits.className = 'quota-credits';
-      // 点数为 0 是有效余额；未知显示破折号，独立列与表头共用显示设置。
+      // 点数跟随账号名称展示；沿用旧点数偏好，新增刷新时间列使用独立偏好。
       const knownBalance = typeof account.creditsBalance === 'number' && Number.isFinite(account.creditsBalance) && account.creditsBalance >= 0;
       credits.textContent = knownBalance ? account.creditsBalance.toLocaleString('en-US', {maximumFractionDigits: 10}) : '—';
       credits.title = knownBalance ? `点数余额：${account.creditsBalance}` : '暂无点数数据';
-      row.append(title, quotaPlatform(account), windows, credits, refreshCell);
+      credits.hidden = data.listSettings?.showCredits === false;
+      credits.setAttribute('aria-label', credits.title);
+      title.append(credits);
+      row.append(title, quotaPlatform(account), windows, syncedAt, refreshCell);
       columns.forEach(([key], index) => { row.children[index].hidden = data.listSettings?.[key] === false; });
       return row;
     }));
@@ -266,45 +282,41 @@ export function createQuotaView() {
   }
   $('refresh').addEventListener('click', () => void refresh());
   function intervalChanged() {
-    const saved = latest?.refreshInterval || {value:5,unit:'minutes'};
-    intervalDirty = Number($('interval-value').value) !== saved.value || $('interval-unit').value !== saved.unit;
-    $('interval-feedback').textContent = '';intervalControls();
+    intervalDirty = $('interval-value').value.trim()===''||Number($('interval-value').value)!==savedSeconds();
+    $('interval-feedback').textContent = '';$('interval-retry').hidden = true;intervalControls();
   }
   $('interval-value').addEventListener('input',intervalChanged);
-  // 单位复用公共选择器外观与交互，隐藏值只用于保存，不显示系统原生菜单。
-  $('interval-button').addEventListener('click',event=>{if ($('interval-value').disabled) event.preventDefault();});
-  for (const unit of Object.keys(intervalUnits)) $('interval-'+unit).addEventListener('click',()=>{
-    if ($('interval-value').disabled) return;
-    $('interval-unit').value = unit;$('interval-picker').open = false;
-    intervalChanged();$('interval-button').focus();
-  });
-  $('interval-picker').addEventListener('toggle',()=>{
-    if ($('interval-picker').open) {
-      $('list-settings').open = false;
-      $('interval-'+$('interval-unit').value).focus();
-    }
-  });
-  $('interval-picker').addEventListener('keydown',event=>{
-    if ($('interval-value').disabled || !['ArrowDown','ArrowUp','Home','End'].includes(event.key)) return;
-    event.preventDefault();
-    const units = Object.keys(intervalUnits), index = units.findIndex(unit=>$('interval-'+unit) === document.activeElement);
-    $('interval-picker').open = true;
-    const next = event.key === 'Home' ? 0 : event.key === 'End' ? units.length-1 :
-      index < 0 ? (event.key === 'ArrowUp' ? units.length-1 : 0) : (index+(event.key === 'ArrowDown'?1:-1)+units.length)%units.length;
-    $('interval-'+units[next]).focus();
-  });
-  $('interval-form').addEventListener('submit',async event => {
-    event.preventDefault();
-    if (busy || saving || latest?.busy || !latest || !intervalDirty) return;
-    const value = {value:Number($('interval-value').value),unit:$('interval-unit').value};
-    sequence++;saving = true;$('settings-error').hidden = true;$('interval-feedback').textContent = '';render(latest);
+  async function saveInterval() {
+    if (saving || !latest || !intervalDirty) return;
+    const raw=$('interval-value').value.trim();
+    // 清空只是临时编辑状态，完成编辑时恢复原值，不额外重置轮询时间。
+    if(raw==='') {intervalDirty=false;$('interval-feedback').textContent='';$('interval-retry').hidden=true;intervalControls();return;}
+    const input=Number(raw);
+    if(!Number.isFinite(input)) {$('interval-feedback').textContent='未保存：请输入整数秒数。';return;}
+    // 只在提交时收敛上下限，输入过程中保持原文并实时换算，避免光标跳动。
+    const seconds=Math.min(86400,Math.max(5,input));
+    if(!Number.isInteger(seconds)) {$('interval-feedback').textContent='未保存：请输入整数秒数。';return;}
+    $('interval-value').value=String(seconds);intervalControls();
+    if(seconds===savedSeconds()) {intervalDirty=false;$('interval-feedback').textContent='';$('interval-retry').hidden=true;return;}
+    const value={value:seconds,unit:'seconds'};
+    // 本地保存成功保持安静；通过禁用状态表示处理中，仅失败时显示说明与重试。
+    sequence++;saving = true;$('interval-retry').hidden=true;$('interval-feedback').textContent = '';render(latest);
     try {
       const data = await invoke('set-interval',value);
-      intervalDirty = false;render(data);$('interval-feedback').textContent = `已保存：每 ${data.refreshIntervalLabel}刷新`;
+      intervalDirty = false;render(data);$('interval-feedback').textContent = '';
     } catch (error) {
-      $('settings-error').textContent = error.message === '刷新间隔须为正整数，范围为 5 秒至 24 小时。' ? error.message : '刷新间隔保存失败，请重试。';
-      $('settings-error').hidden = false;
+      $('interval-feedback').textContent = '未保存，原刷新频率仍有效。';$('interval-retry').hidden=false;
     } finally {saving = false;render(latest);}
+  }
+  $('interval-form').addEventListener('submit',event=>{event.preventDefault();return saveInterval();});
+  $('interval-retry').addEventListener('click',()=>void saveInterval());
+  // 失焦和回车共用提交逻辑；保存导致的禁用失焦不重复提交。
+  $('interval-control').addEventListener('focusout',()=>{
+    if(saving)return;
+    setTimeout(()=>{if (!$('interval-control').contains(document.activeElement)) void saveInterval();},0);
+  });
+  $('interval-value').addEventListener('keydown',event=>{
+    if(event.key==='Enter'&&!event.isComposing){event.preventDefault();void saveInterval();}
   });
   for (const [key, control] of settings) $(control).addEventListener('change', async () => {
     if (busy || saving || latest?.busy || !latest || $(control).disabled) { if (latest) render(latest);return; }
@@ -324,13 +336,9 @@ export function createQuotaView() {
   });
   // 勾选时保持菜单展开，点击外部或按 Esc 收起，键盘焦点回到入口。
   document.addEventListener('pointerdown', event => {
-    if ($('interval-picker').open && !$('interval-picker').contains(event.target)) $('interval-picker').open = false;
     if ($('list-settings').open && !$('list-settings').contains(event.target)) $('list-settings').open = false;
   });
   document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && $('interval-picker').open) {
-      $('interval-picker').open = false;$('interval-button').focus();
-    }
     if (event.key === 'Escape' && $('list-settings').open) {
       $('list-settings').open = false;
       $('columns-button').focus();

@@ -59,7 +59,8 @@ function createPetQuota({settings, quota, groups, clock = {now:() => Date.now(),
     function tracking(accountId, thresholds) {
       const selected = accounts.accounts.find(account => account.id === accountId);
       const remaining = selected && selected.sevenDayWindowMinutes !== 0 && typeof selected.sevenDayRemaining === 'number' ? selected.sevenDayRemaining : null;
-      return {accountId, name:selected?.name || '', remaining, resetAt:selected?.sevenDayResetAt || null, checkedAt:accounts.checkedAt,
+      // 每条额度条使用对应账号的成功时间，其他账号更新不能推进当前账号的时间。
+      return {accountId, name:selected?.name || '', remaining, resetAt:selected?.sevenDayResetAt || null, checkedAt:selected?.lastSyncedAt ?? null,
         paused:selected?.refreshEnabled === false,
         busy:accounts.refreshingAccountIds ? accounts.refreshingAccountIds.includes(accountId) : accounts.busy === true,
         error:accounts.accountRefreshErrors?.[accountId] ?? accounts.error ?? '',

@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {createQuotaPanel} = require('../src/channels/quota-accounts.cjs');
-const defaults = {showName: true, showPlatform: true, showRemaining: true, showCredits: true, showRefresh: true, showFiveHour: true};
+const defaults = {showName: true, showPlatform: true, showRemaining: true, showCredits: true, showSyncedAt: true, showRefresh: true, showFiveHour: true};
 
 function fixture(t) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-quota-list-'));
@@ -60,8 +60,9 @@ test('column choices merge with legacy settings and prevent hiding the final vis
   panel.setListSettings({showRemaining: false});
   panel.setListSettings({showRefresh: false});
   panel.setListSettings({showCredits: false});
+  panel.setListSettings({showSyncedAt: false});
   assert.throws(() => panel.setListSettings({showName: false}), /至少保留一列/);
-  assert.deepEqual(f.open().snapshot().listSettings, {...defaults, showFiveHour: false, showPlatform: false, showRemaining: false, showCredits: false, showRefresh: false});
+  assert.deepEqual(f.open().snapshot().listSettings, {...defaults, showFiveHour: false, showPlatform: false, showRemaining: false, showCredits: false, showSyncedAt: false, showRefresh: false});
 });
 
 test('damaged or mistyped preferences use the default without overwriting the original file', t => {
