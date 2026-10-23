@@ -38,8 +38,19 @@ export function createMessageSubscriptionsView() {
     // 复用小屋的轻量状态广播；版本或检查状态变化时才取正文，避免定时传输整份缓存。
     if (summary && (!data || summary.revision !== data.revision || summary.busy !== data.busy)) void load();
   }
-  function error(message = '') {$('subscriptions-error').textContent = message;$('subscriptions-error').hidden = !message;}
-  function feedback(message) {$('subscriptions-feedback').textContent = message;$('subscriptions-feedback').hidden = !message;}
+  function readingPosition() {
+    if (view.hidden || $('subscriptions-panel-feed').hidden || !window.scrollY) return ()=>{};
+    const x = window.scrollX, y = window.scrollY;
+    const anchors = [...$('subscriptions-posts').children].map(card=>({key:card.dataset.postKey,rect:card.getBoundingClientRect()})).filter(item=>item.rect.bottom>0);
+    // 保存当前可见消息的位置；删除它时优先锚定下一条，而不是跳回列表起点。
+    return ()=>{
+      const cards = new Map([...$('subscriptions-posts').children].map(card=>[card.dataset.postKey,card]));
+      const anchor = anchors.find(item=>cards.has(item.key));
+      window.scrollTo(x,anchor ? window.scrollY + cards.get(anchor.key).getBoundingClientRect().top - anchor.rect.top : y);
+    };
+  }
+  function error(message = '') {const restore = readingPosition();$('subscriptions-error').textContent = message;$('subscriptions-error').hidden = !message;restore();}
+  function feedback(message) {const restore = readingPosition();$('subscriptions-feedback').textContent = message;$('subscriptions-feedback').hidden = !message;restore();}
   const button = (text, action, className = 'outline') => {
     const el = node('button', text, className);el.type = 'button';el.addEventListener('click', action);return el;
   };
@@ -76,6 +87,7 @@ export function createMessageSubscriptionsView() {
   }
   function select(username) {filter = username;lastContent = '';render();}
   function render() {
+    const restore = readingPosition();
     for (const id of ['subscriptions-add','subscriptions-refresh','subscriptions-read-all']) $(id).disabled = pending || Boolean(data?.storeError);
     // 清理可中止正在进行的自动采集；手动操作仍串行，避免响应乱序覆盖页面。
     $('subscriptions-clear').disabled = pending || Boolean(data?.storeError) || !data?.posts.length;
@@ -135,10 +147,10 @@ export function createMessageSubscriptionsView() {
       $('subscriptions-account-status').append(status);
     }
     const posts = data.posts.filter(p => matches.has(p.username) && (!filter || p.username === filter) && (!$('subscriptions-unread').checked || p.unread));
-    $('subscriptions-posts').replaceChildren();
+    const fragment = document.createDocumentFragment();
     for (const post of posts) {
       const card = node('article','','ui-card subscriptions-post');card.dataset.postId = post.id;
-      const key = `${post.username}/${post.id}`, value = {username:post.username,id:post.id};
+      const key = `${post.username}/${post.id}`, value = {username:post.username,id:post.id};card.dataset.postKey = key;
       const expanded = Boolean(post.translation) && expandedTranslations.has(key);
       const header = node('div','','subscriptions-post-header');
       // 标题统一打开原文，已读和未读都可操作；沿用主进程打开后标为已读的流程。
@@ -193,11 +205,14 @@ export function createMessageSubscriptionsView() {
         translated.append(node('strong','中文译文'),node('p',post.translation.text));card.append(translated);
       }
       if (post.translationError) card.append(node('p',post.translationError,'ui-alert'));
-      $('subscriptions-posts').append(card);
-      updateBodyState(body);
+      fragment.append(card);
     }
+    // 在离屏片段中构建完成后一次替换，避免清空列表触发页面高度塌缩。
+    $('subscriptions-posts').replaceChildren(fragment);
+    for (const body of $('subscriptions-posts').querySelectorAll('.subscriptions-post-body')) updateBodyState(body);
     $('subscriptions-empty').hidden = posts.length > 0;
     $('subscriptions-empty').textContent = !data.accounts.length ? '还没有订阅，添加一个 X 账号开始阅读。' : query ? '没有匹配的动态，请调整昵称或账号筛选。' : $('subscriptions-unread').checked ? '暂时没有未读动态。' : data.busy ? '正在读取公开动态，首次检查最多需要半分钟…' : '暂无缓存。可点击“立即检查”；新获取的动态默认未读。';
+    restore();
   }
   async function load() {
     if (view.hidden || loading || pending) return;loading = true;const requestedAt = revision;

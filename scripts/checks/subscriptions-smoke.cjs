@@ -215,6 +215,36 @@ async function launch() {
   const deletedCache=JSON.parse(fs.readFileSync(path.join(dir,'message-subscriptions.json'),'utf8')).accounts[0];
   assert.equal(deletedCache.posts.length,0);assert.ok(deletedCache.deletedIds.includes(deletedId));
   await panel.locator('#subscriptions-refresh').click();assert.equal(await panel.locator('.subscriptions-post').count(),0,'刷新不恢复被删除的正文');
+  // 在长列表中操作，避免短列表掩盖整表重建导致的滚动跳动。
+  await app.evaluate(()=>{global.subscriptionsFixture.step=24;});
+  await panel.locator('#subscriptions-refresh').click();await panel.waitForFunction(()=>document.querySelectorAll('.subscriptions-post').length===23);
+  const middleId=await panel.locator('.subscriptions-post').nth(10).getAttribute('data-post-id');
+  const middle=panel.locator(`[data-post-id="${middleId}"]`);
+  await middle.locator('.subscriptions-post-body').scrollIntoViewIfNeeded();
+  const beforeRead=await middle.evaluate(el=>({top:el.getBoundingClientRect().top,y:scrollY}));assert.ok(beforeRead.y>500);
+  await middle.locator('.subscriptions-post-body').click();
+  await panel.waitForFunction(id=>!document.querySelector(`[data-post-id="${id}"] .subscriptions-unread-dot`),middleId);
+  const settleScroll=()=>panel.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  await settleScroll();
+  const afterRead=await middle.evaluate(el=>({top:el.getBoundingClientRect().top,y:scrollY}));
+  assert.ok(Math.abs(afterRead.top-beforeRead.top)<=2 && afterRead.y>500,`点击正文应保持阅读位置：${JSON.stringify({beforeRead,afterRead})}`);
+  const beforeTranslate=await middle.evaluate(el=>el.getBoundingClientRect().top);
+  await middle.getByRole('button',{name:'中文翻译',exact:true}).click();
+  await panel.waitForFunction(id=>document.querySelector(`[data-post-id="${id}"] .subscriptions-translation`) && !document.querySelector(`[data-post-id="${id}"] .subscriptions-translation`).hidden,middleId);
+  await settleScroll();assert.ok(Math.abs(await middle.evaluate(el=>el.getBoundingClientRect().top)-beforeTranslate)<=2,'翻译完成保持当前消息位置');
+  await middle.evaluate(el=>window.scrollTo(0,scrollY+el.getBoundingClientRect().top));await settleScroll();
+  const nextId=await middle.evaluate(el=>el.nextElementSibling.dataset.postId),next=panel.locator(`[data-post-id="${nextId}"]`);
+  const beforeDelete=await next.evaluate(el=>el.getBoundingClientRect().top);
+  await middle.getByRole('button',{name:'删除消息',exact:true}).click();await settleScroll();
+  assert.ok(Math.abs(await next.evaluate(el=>el.getBoundingClientRect().top)-beforeDelete)<=2,'删除当前消息后保持下一条的可见位置');
+  const beforeRefresh=await next.evaluate(el=>({top:el.getBoundingClientRect().top,y:scrollY}));
+  await app.evaluate(()=>{global.subscriptionsFixture.step=26;});
+  await panel.evaluate(()=>document.getElementById('subscriptions-refresh').click());
+  await panel.waitForFunction(()=>document.querySelectorAll('.subscriptions-post').length===24);await settleScroll();
+  const afterRefresh=await next.evaluate(el=>({top:el.getBoundingClientRect().top,y:scrollY}));
+  assert.ok(Math.abs(afterRefresh.top-beforeRefresh.top)<=2 && afterRefresh.y>500,'顶部新增动态不会打断当前阅读位置');
+
+
   await panel.locator('#subscriptions-tab-manage').click();
   await panel.getByRole('button',{name:'删除 @thsottiaux',exact:true}).click();assert.ok(await panel.locator('#subscriptions-recommend-tibo').isEnabled());
   assert.deepEqual(errors,[]);console.log('Subscriptions UI OK: top-right actions, translation expand/collapse/cache/restart/retry/cancel, link input, unread/read, filtering, safe links/text, clear/restart, IPC and 860/1060px layout');
