@@ -40,7 +40,7 @@
 .subscriptions-managed-account > small { color: var(--ui-text-muted); font-size: var(--ui-font-small); }
 .subscriptions-managed-account .subscriptions-account-tools { margin-left: auto; }
 
-.subscriptions-post-heading { padding: 0; text-align: left; line-height: 1.7; }
+.subscriptions-post-heading { min-height: var(--ui-control-height); padding: var(--ui-control-padding); align-self: stretch; text-align: left; line-height: 20px; }
 button.subscriptions-post-heading { border-radius: var(--ui-radius-control); }
 button.subscriptions-post-heading:hover:not(:disabled) { background: var(--ui-hover); }
 
