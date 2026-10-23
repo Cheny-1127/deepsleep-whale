@@ -24,6 +24,7 @@ const {createArcheryPending}=require('../channels/archery-pending.cjs');
 const {createQuotaPanel}=require('../channels/quota-accounts.cjs');
 const {createGroupUsage}=require('../channels/quota-group-usage.cjs');
 const {createShortcutSettings}=require('./shortcut-settings.cjs');
+const {createSidebarSettings}=require('./sidebar-settings.cjs');
 const {createPetQuotaSettings}=require('./pet-quota-settings.cjs');
 const {createPetQuota}=require('../channels/pet-quota.cjs');
 const {createMessageSubscriptions}=require('../channels/message-subscriptions.cjs');
@@ -45,6 +46,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   const behavior = new Behavior();
   const hooks=createHookSettings({dataDir,cwd:path.resolve(__dirname,'../../..'),onChange:broadcast});
   const shortcuts=createShortcutSettings({dataDir});
+  const sidebarSettings=createSidebarSettings({dataDir});
   const petQuotaSettings=createPetQuotaSettings({dataDir});
   const sourceStatus=Object.fromEntries(SOURCES.map(id=>[id,{lastReceivedAt:null,lastAcceptedAt:null,ignored:0}]));
   const titles=createTitleReader();
@@ -215,6 +217,11 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     return snapshot();
   }
   ipcMain.handle('action', (_event, action, value) => performAction(action, value));
+  // 菜单布局仅允许小屋主框架读写，悬浮桌宠与子框架不能修改。
+  ipcMain.handle('sidebar-settings',(event,value)=>{
+    if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋整理菜单');
+    return value===undefined?sidebarSettings.snapshot():sidebarSettings.update(value);
+  });
   ipcMain.handle('shortcut-settings',(event,value)=>{
     if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋配置快捷操作');
     shortcuts.update(value);broadcast();return snapshot();

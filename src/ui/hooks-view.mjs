@@ -9,6 +9,8 @@ export function showView(view) {
     button.classList.toggle('selected',selected);
     if(selected)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');
   }
+  // 同步更多入口的选中提示，包括从其他功能主动切换页面的场景。
+  document.dispatchEvent(new CustomEvent('whale-view-changed'));
 }
 document.querySelectorAll('[data-view]').forEach(button=>button.addEventListener('click',()=>showView(button.dataset.view)));
 

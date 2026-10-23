@@ -44,7 +44,7 @@ async function launch() {
   await panel.keyboard.press('End');assert.ok(await panel.locator('#subscriptions-recommend-tibo').isVisible());
   await panel.keyboard.press('Home');assert.ok(await panel.locator('#subscriptions-panel-feed').isVisible());
 
-  assert.equal(await panel.locator('#nav-home').evaluate(el=>el.nextElementSibling.id),'nav-subscriptions');
+  assert.equal(await panel.locator('#nav-home').evaluate(el=>el.closest('.sidebar-row').nextElementSibling.dataset.menu),'subscriptions');
   assert.equal(await app.evaluate(()=>global.subscriptionsFixture.calls.length),0,'recommendations do not auto-subscribe or fetch');
   await panel.locator('#subscriptions-tab-recommend').click();
   assert.ok(await panel.locator('#subscriptions-recommend-tibo').isEnabled());

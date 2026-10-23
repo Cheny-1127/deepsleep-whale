@@ -1,0 +1,40 @@
+/* 侧栏独立滚动，展开更多时底部入口不会覆盖菜单。 */
+.studio .sidebar{width:220px;display:flex;flex-direction:column;position:sticky;top:0;height:100vh;box-sizing:border-box;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#b5c7ba transparent;overscroll-behavior:contain}
+.studio .sidebar .side-bottom{position:static;margin-top:auto;padding-top:20px;flex-shrink:0}
+.sidebar .brand,.sidebar .nav-label,.sidebar nav,.sidebar .sidebar-copy{flex-shrink:0}
+.sidebar .nav-label{display:flex;align-items:center;justify-content:space-between;gap:6px}
+.sidebar-organize{padding:3px 5px;background:transparent;color:#627f70;font-size:10px;border-radius:5px}
+.sidebar-list{position:relative;display:flow-root}
+.sidebar-row{position:relative;margin:5px 0;border-radius:10px;user-select:none}
+.sidebar .sidebar-row .nav-item{margin:0;line-height:20px;touch-action:pan-y}
+.sidebar-editing .sidebar-row{outline:1px dashed #b5c8bc;outline-offset:-1px}
+.sidebar-editing .sidebar-row .nav-item{cursor:grab;touch-action:none}
+.sidebar .sidebar-row .nav-item:active{transform:none}
+/* 保留 24px 点击区域，圆底和图标缩小并收进边框内。 */
+.sidebar .sidebar-transfer{position:absolute;right:3px;top:3px;z-index:2;display:grid;place-items:center;width:24px;height:24px;padding:0;border-radius:50%;background:transparent;border:0;color:#648574;box-shadow:none}
+.sidebar-transfer::before{content:'';position:absolute;inset:4px;border-radius:50%;background:#dbe5dd;transition:background .15s}
+.sidebar-transfer:hover::before,.sidebar-transfer:focus-visible::before{background:#c6d9cc}
+.sidebar-transfer svg{position:relative;width:10px;height:10px;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linecap:round}
+.sidebar-transfer:not([data-restore]) .sidebar-plus-stroke{display:none}
+.sidebar-more-list .nav-item,.sidebar-editing .sidebar-row .nav-item{padding-right:28px}
+/* 菜单使用同一套字号；层级只通过箭头、28px 缩进与细引导线表达。 */
+/* 窄窗口也保留足够宽度，收纳项不靠缩小字体或换行来让位。 */
+@media(max-width:950px){.studio .sidebar{width:210px}}
+.sidebar .sidebar-more-toggle{font-size:13px;font-weight:500;line-height:20px}
+.sidebar-more-group{margin-top:8px}
+.sidebar-more-list{margin:0 0 5px 20px;padding-left:7px;border-left:1px solid #c5d5ca}
+.sidebar-more-toggle{display:flex;align-items:center;gap:8px;width:100%;padding:13px 14px;border-radius:10px;background:transparent;color:#718779;text-align:left}
+.sidebar-more-toggle:hover{background:#e1e9e2;color:#28675e}
+.sidebar-more-toggle.contains-selected{color:#28675e}
+.sidebar-more-toggle>svg{width:13px;height:13px;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;transition:transform .18s ease}
+.sidebar-more-toggle[aria-expanded="true"]>svg{transform:rotate(90deg)}
+.sidebar-more-label{white-space:nowrap}
+.sidebar-more-count{margin-left:auto;min-width:17px;padding:1px 4px;border-radius:5px;background:#d4e1d8;text-align:center;font-size:10px;line-height:15px}
+.sidebar-more-toggle.contains-selected .sidebar-more-count{color:#28675e;background:#c7dcce}
+@media(prefers-reduced-motion:reduce){.sidebar-more-toggle>svg{transition:none}}
+.sidebar-empty,.sidebar-feedback{font-size:10px;line-height:1.6;color:#718779;margin:7px 5px}
+.sidebar-feedback:empty{display:none}
+.sidebar-editing .sidebar-drag-placeholder{outline:1px dashed #659582;background:#d4e2d9}
+.sidebar-drag-placeholder>*{visibility:hidden}
+.sidebar .sidebar-drag-ghost{position:fixed;z-index:1000;margin:0;pointer-events:none;box-shadow:0 7px 20px #294b3d30;background:#eef5ef;transform:scale(1.03);opacity:.96}
+.sidebar button:focus-visible{outline:2px solid #4d8e79;outline-offset:-2px}
