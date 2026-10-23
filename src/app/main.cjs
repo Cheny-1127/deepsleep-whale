@@ -301,10 +301,10 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   });
   ipcMain.handle('quota-group',async(event,name,value)=>{
     if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋查看分组用量');
-    if(['keys-snapshot','keys-open','keys-search','keys-select','keys-refresh'].includes(name)) {
+    if(['keys-snapshot','keys-open','keys-search','keys-select','keys-refresh','keys-set-expanded'].includes(name)) {
       // Key 消费与用户排行共用受限 IPC 入口，但账号选择、缓存及刷新流程互相独立。
       if(!keyUsage)return {error:'Key 用量正在初始化'};
-      try{return {value:name==='keys-search'?await keyUsage.search(value):name==='keys-select'?await keyUsage.select(value):name==='keys-refresh'?await keyUsage.refresh():name==='keys-open'?await keyUsage.open():keyUsage.snapshot()};}
+      try{return {value:name==='keys-set-expanded'?keyUsage.setExpanded(value):name==='keys-search'?await keyUsage.search(value):name==='keys-select'?await keyUsage.select(value):name==='keys-refresh'?await keyUsage.refresh():name==='keys-open'?await keyUsage.open():keyUsage.snapshot()};}
       catch{return {error:'无法读取 Key 用量，请稍后重试。'};}
     }
     if(!groupUsage)return {error:'分组用量正在初始化'};
