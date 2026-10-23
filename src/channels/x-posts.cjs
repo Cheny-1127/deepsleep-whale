@@ -43,12 +43,13 @@ function readXDocument() {
     const raw = body?.innerText || body?.textContent || '（图片或视频动态，请查看原文）';
     // 控件文案不属于正文，不能把“显示更多”送去翻译或当作全文保存。
     const text = more.some(el=>body?.contains(el)) ? raw.replace(/\s*(显示更多|Show more)\s*$/i,'') : raw;
-    // 只从本条动态的作者主页链接读取昵称，排除正文提及和嵌套引用的作者。
+    // 昵称和头像都限定在本条动态的作者主页链接内，排除正文提及及嵌套引用的作者。
     const profiles = Array.from(article.querySelectorAll('a[href]')).filter(a=>{
       const profile = new URL(a.href,location.href);
       return a.closest('article') === article && !body?.contains(a) && profile.origin === url.origin &&
         profile.pathname.toLowerCase() === '/'+match[1].toLowerCase();
     });
+    // 隔离页面禁用图片加载，这里只读取地址，随后由受限下载逻辑获取头像。
     const avatar = profiles.map(a=>a.querySelector('img')).find(Boolean);
     const author = profiles.find(a=>a.textContent.trim() && !a.textContent.trim().startsWith('@'));
     const name = (author?.innerText || author?.textContent || '').split('\n').map(part=>part.trim()).find(part=>part && !part.startsWith('@')) || '';
