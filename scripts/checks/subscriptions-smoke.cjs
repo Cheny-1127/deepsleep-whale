@@ -38,7 +38,8 @@ async function launch() {
   assert.ok(await panel.locator('#subscriptions-panel-manage').isHidden());
   assert.ok(await panel.locator('#subscriptions-panel-recommend').isHidden());
   await panel.locator('#subscriptions-tab-feed').focus();await panel.keyboard.press('ArrowRight');
-  assert.ok(await panel.locator('#subscriptions-input').isVisible());
+  assert.ok(await panel.locator('#subscriptions-input').isHidden());
+  assert.ok(await panel.locator('#subscriptions-open-add').isVisible());
   assert.equal(await panel.locator('#subscriptions-tab-manage').getAttribute('aria-selected'),'true');
   await panel.keyboard.press('End');assert.ok(await panel.locator('#subscriptions-recommend-tibo').isVisible());
   await panel.keyboard.press('Home');assert.ok(await panel.locator('#subscriptions-panel-feed').isVisible());
@@ -47,9 +48,54 @@ async function launch() {
   assert.equal(await app.evaluate(()=>global.subscriptionsFixture.calls.length),0,'recommendations do not auto-subscribe or fetch');
   await panel.locator('#subscriptions-tab-recommend').click();
   assert.ok(await panel.locator('#subscriptions-recommend-tibo').isEnabled());
+  assert.deepEqual(await panel.locator('.subscriptions-recommendation-table thead th').allTextContents(),['昵称','账号','推荐理由','是否关注']);
+  assert.equal(await panel.locator('#subscriptions-recommend-tibo').getAttribute('aria-pressed'),'false');
+  const reasonInput=()=>panel.getByRole('textbox',{name:'@thsottiaux 推荐理由',exact:true});
+  assert.equal(await reasonInput().inputValue(),'');
+  assert.equal(await reasonInput().evaluate(el=>getComputedStyle(el,'::placeholder').color),'rgb(156, 163, 175)');
+  await reasonInput().fill('关注产品更新 <img src=x>');await reasonInput().press('Enter');
+  await panel.waitForFunction(()=>document.getElementById('subscriptions-feedback').textContent==='推荐理由已保存。');
+  assert.equal((await panel.evaluate(()=>window.whale.subscriptions('snapshot'))).value.accounts.length,0,'编辑理由不会自动关注');
+  assert.equal(await app.evaluate(()=>global.subscriptionsFixture.calls.length),0,'编辑理由不读取远程动态');
+  assert.equal(await panel.locator('.subscriptions-recommendation-reason img').count(),0);
+
+  for(const width of [860,1060]) {
+    await app.evaluate(({BrowserWindow},width)=>BrowserWindow.getAllWindows().find(win=>win.webContents.getURL().endsWith('/index.html')).setSize(width,900),width);
+    await panel.waitForTimeout(100);assert.ok(await panel.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+    await panel.screenshot({path:'/tmp/whale-subscriptions-recommendations-'+width+'.png'});
+  }
   fs.mkdirSync(path.join(root,'out'),{recursive:true});await panel.screenshot({path:path.join(root,'out','subscriptions-recommendations.png'),fullPage:true});
   await panel.locator('#subscriptions-tab-manage').click();
+  await panel.locator('#subscriptions-open-add').click();
+  await panel.locator('#subscriptions-remark').fill('AI 动态');
   await panel.locator('#subscriptions-input').fill('https://x.com/thsottiaux/status/2113162277688070445');await panel.locator('#subscriptions-add').click();
+  await panel.waitForFunction(()=>!document.getElementById('subscriptions-add-dialog').open);
+  assert.deepEqual(await panel.locator('#subscriptions-table thead th').allTextContents(),['名称','账号','自定义备注','操作']);
+  assert.equal(await panel.locator('#subscriptions-panel-manage > section h2').first().textContent(),'我的订阅');
+  assert.equal(await panel.locator('#subscriptions-managed-accounts td').first().textContent(),'@thsottiaux');
+  const remarkInput=()=>panel.getByRole('textbox',{name:'@thsottiaux 自定义备注',exact:true});
+  assert.equal(await remarkInput().inputValue(),'AI 动态');
+  await remarkInput().fill('');
+  assert.deepEqual(await remarkInput().evaluate(el=>({empty:el.matches(':placeholder-shown'),placeholder:getComputedStyle(el,'::placeholder').color,text:getComputedStyle(el).color})),{empty:true,placeholder:'rgb(156, 163, 175)',text:'rgb(67, 86, 77)'});
+  await panel.screenshot({path:'/tmp/whale-subscriptions-empty-remark.png'});
+  await remarkInput().fill('<img src=x> 关注 AI');
+  assert.equal(await panel.locator('.subscriptions-remark-form button').count(),0);
+  await remarkInput().press('Enter');
+  await panel.waitForFunction(()=>document.getElementById('subscriptions-feedback').textContent==='备注已保存。');
+  assert.equal(await panel.locator('#subscriptions-managed-accounts img').count(),0);
+  for(const width of [860,1060]) {
+    await app.evaluate(({BrowserWindow},width)=>BrowserWindow.getAllWindows().find(win=>win.webContents.getURL().endsWith('/index.html')).setSize(width,900),width);
+    await panel.waitForTimeout(100);
+    assert.ok(await panel.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+    assert.ok(await panel.locator('#subscriptions-open-add').evaluate(el=>Math.abs(el.getBoundingClientRect().right-el.parentElement.getBoundingClientRect().right)<2),'添加订阅按钮贴齐标题栏右侧');
+    await panel.screenshot({path:'/tmp/whale-subscriptions-manage-'+width+'.png'});
+  }
+  await panel.locator('#subscriptions-open-add').click();await panel.keyboard.press('Escape');
+  assert.ok(await panel.locator('#subscriptions-add-dialog').isHidden());
+  assert.equal(await panel.locator('#subscriptions-open-add').evaluate(el=>document.activeElement===el),true);
+  await panel.locator('#subscriptions-open-add').click();
+  await panel.screenshot({path:'/tmp/whale-subscriptions-add-dialog.png'});await panel.locator('#subscriptions-cancel-add').click();
+
   await panel.locator('#subscriptions-tab-feed').click();
   await panel.waitForFunction(()=>document.querySelectorAll('.subscriptions-post').length===1);
   assert.ok(await panel.locator('#subscriptions-badge').isVisible());
@@ -64,7 +110,19 @@ async function launch() {
   assert.ok(await panel.locator('#subscriptions-empty').isVisible());
   await panel.locator('#subscriptions-search').fill('');
 
-  assert.equal(await panel.locator('#subscriptions-recommend-tibo').textContent(),'已订阅');assert.ok(await panel.locator('#subscriptions-recommend-tibo').isDisabled());
+  assert.equal(await panel.locator('#subscriptions-recommend-tibo').textContent(),'已关注');assert.ok(await panel.locator('#subscriptions-recommend-tibo').isEnabled());
+  await panel.locator('#subscriptions-tab-recommend').click();
+  assert.equal(await panel.locator('#subscriptions-recommend-tibo').getAttribute('aria-pressed'),'true');
+  await panel.locator('#subscriptions-recommend-tibo').click();
+  await panel.waitForFunction(()=>document.getElementById('subscriptions-recommend-tibo').textContent==='关注');
+  assert.equal(await panel.locator('#subscriptions-recommend-tibo').getAttribute('aria-pressed'),'false');
+  await panel.locator('#subscriptions-tab-manage').click();
+  assert.ok(await panel.getByRole('button',{name:'关注 @thsottiaux',exact:true}).isVisible());
+  await panel.locator('#subscriptions-tab-recommend').click();await panel.locator('#subscriptions-recommend-tibo').click();
+  await panel.waitForFunction(()=>document.getElementById('subscriptions-recommend-tibo').textContent==='已关注');
+  assert.equal((await panel.evaluate(()=>window.whale.subscriptions('snapshot'))).value.accounts.length,1,'恢复关注不重复添加账号');
+  await panel.locator('#subscriptions-tab-feed').click();
+
   assert.equal(await panel.locator('.subscriptions-post-body img').count(),0);
   assert.equal(await panel.locator('.subscriptions-avatar img').count(),1);
   await panel.waitForFunction(()=>document.querySelector('.subscriptions-avatar img')?.naturalWidth===1);
@@ -134,9 +192,15 @@ async function launch() {
   assert.ok(await savedCard.locator('.subscriptions-translation').isHidden(),'重启后默认收起已缓存译文');
   assert.equal(await savedCard.getByRole('button',{name:'中文翻译',exact:true}).getAttribute('aria-expanded'),'false');
   const bad=await panel.evaluate(()=>window.whale.subscriptions('open-profile','https://evil.test'));assert.ok(bad.error);
+  assert.equal((await panel.evaluate(()=>window.whale.subscriptions('snapshot'))).value.accounts[0].remark,'<img src=x> 关注 AI');
+  assert.equal((await panel.evaluate(()=>window.whale.subscriptions('snapshot'))).value.recommendationReasons.thsottiaux,'关注产品更新 <img src=x>');
+  await panel.locator('#subscriptions-tab-recommend').click();assert.equal(await reasonInput().inputValue(),'关注产品更新 <img src=x>');
   await panel.locator('#subscriptions-tab-manage').click();
+  await panel.locator('#subscriptions-open-add').click();
   await panel.locator('#subscriptions-input').fill('@THSOTTIAUX');await panel.locator('#subscriptions-add').click();
-  await panel.locator('#subscriptions-tab-feed').click();await panel.waitForFunction(()=>document.querySelector('#subscriptions-error').textContent.includes('已在订阅'));
+  await panel.waitForFunction(()=>document.querySelector('#subscriptions-add-error').textContent.includes('已在订阅'));
+  assert.ok(await panel.locator('#subscriptions-add-dialog').isVisible());await panel.locator('#subscriptions-cancel-add').click();
+  await panel.locator('#subscriptions-tab-feed').click();
   // 使用稳定的 ID 基点，避免两次测试请求因当前时间变化制造额外新帖。
   await app.evaluate(({},id)=>{const f=global.subscriptionsFixture;f.base=String(BigInt(id)-1n);f.step=3;},translatedValue.id);
   await panel.locator('#subscriptions-refresh').click();await panel.waitForFunction(()=>document.querySelectorAll('.subscriptions-post').length===3);
@@ -181,8 +245,8 @@ async function launch() {
   assert.ok(await panel.locator('#subscriptions-read-all').isDisabled(),'全部已读后禁用重复操作');
   await panel.waitForFunction(()=>document.querySelector('#subscriptions-badge').hidden);
   await panel.locator('#subscriptions-tab-manage').click();
-  await panel.getByRole('button',{name:'暂停 @thsottiaux',exact:true}).click();assert.ok(await panel.locator('#subscriptions-refresh').isDisabled());
-  await panel.getByRole('button',{name:'启用 @thsottiaux',exact:true}).click();
+  await panel.getByRole('button',{name:'取消关注 @thsottiaux',exact:true}).click();assert.ok(await panel.locator('#subscriptions-refresh').isDisabled());
+  await panel.getByRole('button',{name:'关注 @thsottiaux',exact:true}).click();
   await panel.locator('#subscriptions-tab-feed').click();
   await app.evaluate(()=>{global.subscriptionsFixture.fail=true;});await panel.locator('#subscriptions-refresh').click();
   await panel.waitForFunction(()=>document.querySelector('#subscriptions-account-status').textContent.includes('公开页面'));
@@ -212,6 +276,7 @@ async function launch() {
   await panel.waitForFunction(()=>document.querySelector('#subscriptions-status').textContent.includes('1 个订阅'));
   assert.equal(await panel.locator('.subscriptions-post').count(),0);assert.equal(await app.evaluate(()=>global.subscriptionsFixture.calls.length),0,'restart does not refetch before hourly deadline');
   await panel.locator('#subscriptions-tab-manage').click();
+  await panel.locator('#subscriptions-open-add').click();
   await panel.locator('#subscriptions-input').fill('@OpenAI');await panel.locator('#subscriptions-add').click();
   await panel.locator('#subscriptions-tab-feed').click();
   await panel.waitForFunction(()=>document.querySelectorAll('.subscriptions-post').length===1);
@@ -228,13 +293,13 @@ async function launch() {
   await panel.locator('button[data-username="openai"]').click();assert.equal(await panel.locator('.subscriptions-post').count(),1);
   await panel.locator('#subscriptions-all').click();assert.equal(await panel.locator('.subscriptions-post').count(),1);
   await panel.locator('#subscriptions-tab-manage').click();
-  await panel.getByRole('button',{name:'删除 @openai',exact:true}).click();
-  await panel.getByRole('button',{name:'删除 @thsottiaux',exact:true}).click();assert.equal(await panel.locator('.subscriptions-account').count(),0);
+  await panel.evaluate(username=>window.whale.subscriptions('remove',username),'openai');await panel.waitForFunction(username=>!document.querySelector('#subscriptions-managed-accounts tr[data-username="'+username+'"]'),'openai');
+  await panel.evaluate(username=>window.whale.subscriptions('remove',username),'thsottiaux');await panel.waitForFunction(username=>!document.querySelector('#subscriptions-managed-accounts tr[data-username="'+username+'"]'),'thsottiaux');assert.equal(await panel.locator('.subscriptions-account').count(),0);
   await panel.locator('#subscriptions-tab-recommend').click();
   assert.ok(await panel.locator('#subscriptions-recommend-tibo').isEnabled());
   await panel.locator('#subscriptions-recommend-tibo').click();
   await panel.waitForFunction(()=>document.querySelectorAll('.subscriptions-post').length===1);
-  assert.equal(await panel.locator('.subscriptions-account').count(),1);assert.ok(await panel.locator('#subscriptions-recommend-tibo').isDisabled());
+  assert.equal(await panel.locator('.subscriptions-account').count(),1);assert.ok(await panel.locator('#subscriptions-recommend-tibo').isEnabled());
   await panel.locator('#subscriptions-tab-manage').click();
   await panel.locator('#subscriptions-tab-feed').click();
   const deletedId=await panel.locator('.subscriptions-post').getAttribute('data-post-id');
@@ -280,6 +345,6 @@ async function launch() {
 
 
   await panel.locator('#subscriptions-tab-manage').click();
-  await panel.getByRole('button',{name:'删除 @thsottiaux',exact:true}).click();assert.ok(await panel.locator('#subscriptions-recommend-tibo').isEnabled());
+  await panel.evaluate(username=>window.whale.subscriptions('remove',username),'thsottiaux');await panel.waitForFunction(username=>!document.querySelector('#subscriptions-managed-accounts tr[data-username="'+username+'"]'),'thsottiaux');assert.ok(await panel.locator('#subscriptions-recommend-tibo').isEnabled());
   assert.deepEqual(errors,[]);console.log('Subscriptions UI OK: right-click copy original/translation, top-right actions, translation expand/collapse/cache/restart/retry/cancel, link input, unread/read, filtering, safe links/text, clear/restart, IPC and 860/1060px layout');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{if(app)await app.close();fs.rmSync(dir,{recursive:true,force:true});});

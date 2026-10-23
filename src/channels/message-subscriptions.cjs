@@ -8,6 +8,11 @@ const INTERVAL = 60 * 60 * 1000, LIMIT = 100, ACCOUNT_LIMIT = 20;
 const stamp = value => value === null || Number.isSafeInteger(value) && value >= 0;
 const sourceHash = post => createHash('sha256').update(JSON.stringify([post.text,post.truncated])).digest('hex');
 const postKey = post => `${post.username}/${post.id}`;
+// 备注和推荐理由只接受短单行文本，避免异常输入写入本地配置。
+function remarkText(value = '', label = '备注') {
+  if (typeof value !== 'string' || value.length > 200 || /[\u0000-\u001f\u007f]/.test(value)) throw Error(`${label}须为 200 字以内的单行文字。`);
+  return value.trim();
+}
 function cachedPost(item, username, now) {
   const post = projectPost(item,username,now), value = item.translation;
   // 旧缓存没有译文也能读取；不匹配当前正文的译文直接失效，不影响原文和阅读进度。
@@ -22,12 +27,16 @@ function cachedPost(item, username, now) {
 function createMessageSubscriptions({dataDir, readPosts, translateText, onChange = () => {}, clock = {now:() => Date.now(), setTimeout, clearTimeout}}) {
   const file = path.join(dataDir, 'message-subscriptions.json');
   const translations = new Map(), translationErrors = new Map();
-  let state = {version:2, accounts:[]}, storeError = '', retryAt = 0, blocked = false, timer, flight = null, controller, activeUsername = null, epoch = 0, closed = false, started = false, revision = 0;
+  let state = {version:2, accounts:[], recommendationReasons:{}}, storeError = '', retryAt = 0, blocked = false, timer, flight = null, controller, activeUsername = null, epoch = 0, closed = false, started = false, revision = 0;
   try {
     if (fs.existsSync(file)) {
       if (fs.statSync(file).size > 64000000) throw Error();
       const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
       if (![1,2].includes(saved.version) || !Array.isArray(saved.accounts) || saved.accounts.length > ACCOUNT_LIMIT) throw Error();
+      // 理由独立于关注账号保存；未关注、取消关注或清缓存时仍可编辑和保留。
+      const reasons = saved.recommendationReasons ?? {};
+      if (!reasons || typeof reasons !== 'object' || Array.isArray(reasons) || Object.keys(reasons).length > ACCOUNT_LIMIT) throw Error();
+      state.recommendationReasons = Object.fromEntries(Object.entries(reasons).map(([username,reason])=>[xUsername(username),remarkText(reason,'推荐理由')]));
       const names = new Set();
       state.accounts = saved.accounts.map(a => {
         const username = xUsername(a.username);
@@ -38,24 +47,24 @@ function createMessageSubscriptions({dataDir, readPosts, translateText, onChange
           (a.deletedIds !== undefined && (!Array.isArray(a.deletedIds) || !a.deletedIds.every(validPostId)))) throw Error();
         names.add(username);
         // v1 无法区分默认已读和实际阅读，按本次约定一次性恢复现有缓存为未读。
-        return {username, deletedIds:[...new Set(a.deletedIds || [])], displayName:displayName(a.displayName), avatar:avatarData(a.avatar), enabled:a.enabled, initialized:a.initialized, latestId:a.latestId, unreadIds:[...new Set([...a.unreadIds,...(saved.version === 1 ? a.posts.map(p=>p.id) : [])])].sort((a,b)=>compareIds(b,a)).slice(0,LIMIT),
+        return {username, remark:typeof a.remark === 'string' ? remarkText(a.remark) : '', deletedIds:[...new Set(a.deletedIds || [])], displayName:displayName(a.displayName), avatar:avatarData(a.avatar), enabled:a.enabled, initialized:a.initialized, latestId:a.latestId, unreadIds:[...new Set([...a.unreadIds,...(saved.version === 1 ? a.posts.map(p=>p.id) : [])])].sort((a,b)=>compareIds(b,a)).slice(0,LIMIT),
           attemptedAt:a.attemptedAt, checkedAt:a.checkedAt, error:typeof a.error === 'string' ? a.error.slice(0, 160) : '',
           posts:a.posts.map(item => cachedPost(item, username, clock.now()))};
       });
     }
-  } catch {state = {version:2, accounts:[]};blocked = true;storeError = '消息订阅文件无法读取，原文件已保留，请检查本地文件后重启。';}
+  } catch {state = {version:2, accounts:[], recommendationReasons:{}};blocked = true;storeError = '消息订阅文件无法读取，原文件已保留，请检查本地文件后重启。';}
   const nextAt = a => a.attemptedAt === null ? clock.now() : Math.min(a.attemptedAt, clock.now()) + INTERVAL;
   function summary() {
     return {unread:state.accounts.reduce((sum,a) => sum + a.posts.filter(p => a.unreadIds.includes(p.id)).length, 0), busy:Boolean(flight), revision};
   }
   function snapshot() {
-    const accounts = state.accounts.map(a => ({username:a.username, displayName:a.displayName || a.posts.find(p=>p.displayName)?.displayName || '', avatar:a.avatar || '', enabled:a.enabled, checkedAt:a.checkedAt, attemptedAt:a.attemptedAt,
+    const accounts = state.accounts.map(a => ({username:a.username, remark:a.remark || '', displayName:a.displayName || a.posts.find(p=>p.displayName)?.displayName || '', avatar:a.avatar || '', enabled:a.enabled, checkedAt:a.checkedAt, attemptedAt:a.attemptedAt,
       error:a.error, count:a.posts.length, unread:a.posts.filter(p => a.unreadIds.includes(p.id)).length,
       nextCheckAt:a.enabled ? nextAt(a) : null}));
     const posts = state.accounts.flatMap(a => a.posts.map(p => ({...p, unread:a.unreadIds.includes(p.id),
       translating:translations.has(postKey(p)), translationError:translationErrors.get(postKey(p))?.message || ''})))
       .sort((a,b) => compareIds(b.id,a.id));
-    return {accounts, posts, ...summary(), storeError, interval:INTERVAL, limit:LIMIT, accountLimit:ACCOUNT_LIMIT};
+    return {accounts, posts, recommendationReasons:{...state.recommendationReasons}, ...summary(), storeError, interval:INTERVAL, limit:LIMIT, accountLimit:ACCOUNT_LIMIT};
   }
   function commit(next) {
     if (blocked) throw Error(storeError);
@@ -147,12 +156,26 @@ function createMessageSubscriptions({dataDir, readPosts, translateText, onChange
     if (!found) throw Error('订阅账号不存在。');return found;
   }
   function add(value) {
-    const username = xUsername(value);
+    const username = xUsername(typeof value === 'string' ? value : value?.username);
+    const remark = remarkText(typeof value === 'string' ? '' : value?.remark);
     return mutate(next => {
       if (next.accounts.some(a => a.username === username)) throw Error('这个账号已在订阅列表中。');
       if (next.accounts.length >= ACCOUNT_LIMIT) throw Error(`最多订阅 ${ACCOUNT_LIMIT} 个账号。`);
-      next.accounts.push({username, enabled:true, initialized:false, latestId:null, unreadIds:[], deletedIds:[], posts:[], checkedAt:null, attemptedAt:null, error:''});
+      next.accounts.push({username, remark, enabled:true, initialized:false, latestId:null, unreadIds:[], deletedIds:[], posts:[], checkedAt:null, attemptedAt:null, error:''});
     });
+  }
+  function setRecommendationReason(value) {
+    const username = xUsername(value?.username), reason = remarkText(value?.reason,'推荐理由');
+    // 走同一原子写入流程，落盘失败时保留旧值；不添加账号、不触发采集。
+    return mutate(next => {
+      if (!Object.hasOwn(next.recommendationReasons,username) && Object.keys(next.recommendationReasons).length >= ACCOUNT_LIMIT) throw Error('推荐理由数量已达上限。');
+      next.recommendationReasons = {...next.recommendationReasons,[username]:reason};
+    });
+  }
+  // 用户备注属于本地配置，采集得到的昵称和正文不会覆盖它。
+  function setRemark(value) {
+    const remark = remarkText(value?.remark);
+    return mutate(next => {account(next,value?.username).remark = remark;});
   }
   function setEnabled(value) {
     if (typeof value?.enabled !== 'boolean') throw Error('无效的订阅开关。');
@@ -216,7 +239,7 @@ function createMessageSubscriptions({dataDir, readPosts, translateText, onChange
     }).then(snapshot);
     onChange();return task.promise;
   }
-  return {snapshot, summary, add, setEnabled, remove, clearCache, markRead, deletePost, refresh, postUrl, translate,
+  return {snapshot, summary, add, setRecommendationReason, setRemark, setEnabled, remove, clearCache, markRead, deletePost, refresh, postUrl, translate,
     start() {if (closed || started) return;started = true;void refresh(false);},
     checkDue:() => refresh(false),
     close() {closed = true;invalidate();for (const task of translations.values()) task.controller.abort();translations.clear();translationErrors.clear();}};

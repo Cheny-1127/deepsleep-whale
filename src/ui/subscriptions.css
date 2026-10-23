@@ -1,8 +1,9 @@
 /* 仅定义订阅页的排版；卡片、按钮、输入框和错误提示共用 components.css。 */
 .subscriptions-management { margin-bottom: 20px; }
+#subscriptions-open-add { margin-left: auto; }
 .subscriptions-recommendations { margin-bottom: 20px; }
-.subscriptions-recommendation { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; }
-.subscriptions-recommendation p { margin: 6px 0 0; font-size: var(--ui-font-small); color: var(--ui-text-muted); }
+.subscriptions-recommendation-reason { color: var(--ui-text-muted); line-height: 1.7; }
+.subscriptions-recommendation-table button { white-space: nowrap; }
 .subscriptions-toolbar, .subscriptions-add, .subscriptions-feed-heading, .subscriptions-post-heading, .subscriptions-post-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .subscriptions-toolbar > span, .subscriptions-hint, #subscriptions-feedback, #subscriptions-account-status { color: var(--ui-text-muted); font-size: var(--ui-font-small); line-height: 1.7; }
 #subscriptions-feedback { color: var(--ui-accent); }
@@ -34,10 +35,24 @@
 #subscriptions-empty { line-height: 1.8; color: var(--ui-text-muted); }
 
 #subscriptions-panel-feed > .subscriptions-toolbar { margin-bottom: 18px; }
-.subscriptions-managed-account { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 0; border-top: 1px solid var(--ui-divider); }
-.subscriptions-managed-account:first-child { margin-top: 14px; }
-.subscriptions-managed-account > small { color: var(--ui-text-muted); font-size: var(--ui-font-small); }
-.subscriptions-managed-account .subscriptions-account-tools { margin-left: auto; }
+.subscriptions-table-scroll { overflow-x: auto; margin-top: 16px; }
+.subscriptions-table { width: 100%; border-collapse: collapse; table-layout: fixed; text-align: left; }
+.subscriptions-table th, .subscriptions-table td { padding: 14px 10px; border-bottom: 1px solid var(--ui-divider); overflow-wrap: anywhere; vertical-align: middle; }
+.subscriptions-table thead th { color: var(--ui-text-muted); font-size: var(--ui-font-small); font-weight: 500; background: var(--ui-hover); }
+.subscriptions-table th:nth-child(1) { width: 18%; }
+.subscriptions-table th:nth-child(2) { width: 24%; }
+.subscriptions-table th:nth-child(4) { width: 18%; }
+.subscriptions-table tbody th { font-size: var(--ui-font-body); font-weight: 600; }
+.subscriptions-table tbody tr:last-child > * { border-bottom: 0; }
+.subscriptions-table .subscriptions-account-tools { display: table-cell; }
+.subscriptions-account-tools button { white-space: nowrap; }
+.subscriptions-remark-form, .subscriptions-reason-form { margin: 0; }
+.subscriptions-remark-form input, .subscriptions-reason-form input { width: 100%; min-width: 0; }
+.subscriptions-remark-form input::placeholder, .subscriptions-reason-form input::placeholder, #subscriptions-remark::placeholder { color: #9ca3af; opacity: 1; }
+.subscriptions-dialog { width: min(520px, calc(100vw - 48px)); box-sizing: border-box; max-height: calc(100vh - 48px); overflow-y: auto; padding: 24px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-card, 16px); color: var(--ui-text); background: var(--ui-surface); }
+.subscriptions-dialog::backdrop { background: rgb(20 40 32 / 30%); }
+#subscriptions-form > input { width: 100%; box-sizing: border-box; margin-bottom: 16px; }
+.subscriptions-dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
 
 .subscriptions-post-heading { min-height: var(--ui-control-height); padding: var(--ui-control-padding); align-self: stretch; text-align: left; line-height: 20px; }
 button.subscriptions-post-heading { border-radius: var(--ui-radius-control); }

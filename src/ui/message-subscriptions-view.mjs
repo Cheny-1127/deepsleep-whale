@@ -5,6 +5,9 @@ const node = (tag, text, className) => {const el = document.createElement(tag);e
 export function createMessageSubscriptionsView() {
   const view = $('subscriptions-view');if (!view) return;
   const recommendations = [...view.querySelectorAll('[data-recommended-username]')];
+  const reasonInputs = [...view.querySelectorAll('[data-recommendation-reason]')];
+  // 理由输入框不随快照重建；草稿独立保留，避免后台状态更新覆盖正在输入的内容。
+  const reasonDrafts = new Set();
   const tabs = [...$('subscriptions-tabs').querySelectorAll('[role="tab"]')];
   // Tab 仅切换页面分区，共用订阅快照与筛选状态，不重复发起采集。
   function selectTab(tab, focus = false) {
@@ -26,6 +29,7 @@ export function createMessageSubscriptionsView() {
       event.preventDefault();selectTab(tabs[next],true);
     });
   }
+  const remarkDrafts = new Map();
   const translationRequests = new Set();
   const expandedTranslations = new Set();
   const expandedBodies = new Set();
@@ -49,7 +53,7 @@ export function createMessageSubscriptionsView() {
       window.scrollTo(x,anchor ? window.scrollY + cards.get(anchor.key).getBoundingClientRect().top - anchor.rect.top : y);
     };
   }
-  function error(message = '') {const restore = readingPosition();$('subscriptions-error').textContent = message;$('subscriptions-error').hidden = !message;restore();}
+  function error(message = '') {const restore = readingPosition();$('subscriptions-error').textContent = message;$('subscriptions-error').hidden = !message;$('subscriptions-add-error').textContent = message;$('subscriptions-add-error').hidden = !message;restore();}
   function feedback(message) {const restore = readingPosition();$('subscriptions-feedback').textContent = message;$('subscriptions-feedback').hidden = !message;restore();}
   const button = (text, action, className = 'outline') => {
     const el = node('button', text, className);el.type = 'button';el.addEventListener('click', action);return el;
@@ -98,20 +102,30 @@ export function createMessageSubscriptionsView() {
   function select(username) {filter = username;lastContent = '';render();}
   function render() {
     const restore = readingPosition();
-    for (const id of ['subscriptions-add','subscriptions-refresh','subscriptions-read-all']) $(id).disabled = pending || Boolean(data?.storeError);
+    for (const id of ['subscriptions-add','subscriptions-open-add','subscriptions-refresh','subscriptions-read-all']) $(id).disabled = pending || Boolean(data?.storeError);
     // 清理可中止正在进行的自动采集；手动操作仍串行，避免响应乱序覆盖页面。
     $('subscriptions-clear').disabled = pending || Boolean(data?.storeError) || !data?.posts.length;
-    // 推荐仅提供添加入口；订阅结果沿用主进程快照，失败不会误显示为已订阅。
+    // 推荐与管理列表共用关注状态；已有账号恢复关注，不重复添加。
     for (const recommended of recommendations) {
-      const subscribed = data?.accounts.some(a => a.username === recommended.dataset.recommendedUsername);
-      recommended.textContent = subscribed ? '已订阅' : '添加订阅';
-      recommended.disabled = pending || !data || Boolean(data.storeError) || subscribed || data.accounts.length >= data.accountLimit;
+      const account = data?.accounts.find(a => a.username === recommended.dataset.recommendedUsername);
+      const followed = Boolean(account?.enabled);
+      recommended.textContent = followed ? '已关注' : '关注';
+      recommended.setAttribute('aria-pressed',String(followed));
+      recommended.setAttribute('aria-label',`${followed ? '取消关注' : '关注'} @${recommended.dataset.recommendedUsername}`);
+      recommended.title = followed ? '点击取消关注' : '点击关注';
+      recommended.disabled = pending || !data || Boolean(data.storeError) || (!account && data.accounts.length >= data.accountLimit);
     }
+    for (const input of reasonInputs) {
+      if (!reasonDrafts.has(input.dataset.recommendationReason)) input.value = data?.recommendationReasons?.[input.dataset.recommendationReason] ?? '';
+      input.disabled = pending || !data || Boolean(data.storeError);
+    }
+    for (const id of ['subscriptions-close-add','subscriptions-cancel-add','subscriptions-input','subscriptions-remark']) $(id).disabled = pending;
     if (!data) return;
     $('subscriptions-refresh').disabled ||= data.busy || !data.accounts.some(a => a.enabled);
     $('subscriptions-refresh').textContent = data.busy ? '正在检查…' : '立即检查';
     $('subscriptions-read-all').disabled ||= !data.unread;
     $('subscriptions-add').disabled ||= data.accounts.length >= data.accountLimit;
+    $('subscriptions-open-add').disabled = $('subscriptions-add').disabled;
     $('subscriptions-status').textContent = `${data.accounts.length} 个订阅 · ${data.posts.length} 条缓存 · ${data.unread} 条未读`;
     renderSummary(data);
     if (data.storeError) error(data.storeError);
@@ -130,6 +144,8 @@ export function createMessageSubscriptionsView() {
     $('subscriptions-accounts').replaceChildren();
     $('subscriptions-managed-accounts').replaceChildren();
     $('subscriptions-manage-empty').hidden = data.accounts.length > 0;
+    $('subscriptions-table').hidden = data.accounts.length === 0;
+    for (const username of remarkDrafts.keys()) if (!data.accounts.some(a=>a.username===username)) remarkDrafts.delete(username);
     for (const account of data.accounts) {
       const choose = button('',()=>select(account.username),'outline subscriptions-account');
       choose.hidden = !matches.has(account.username);choose.title = `@${account.username}`;
@@ -137,16 +153,30 @@ export function createMessageSubscriptionsView() {
       choose.append(node('span',names.get(account.username)));
       if (account.unread) choose.append(node('small',`${account.unread} 未读`));
       $('subscriptions-accounts').append(choose);
-      const managed = node('div','','subscriptions-managed-account');
-      const name = node('strong',names.get(account.username));name.title = `@${account.username}`;
-      managed.append(name,node('small',`${account.enabled ? '每小时检查' : '已暂停'} · ${account.count} 缓存`));
-      const tools = node('div','','subscriptions-account-tools');
-      const toggle = button(account.enabled ? '暂停' : '启用',()=>call('set-enabled',{username:account.username,enabled:!account.enabled}));
-      toggle.setAttribute('aria-label',`${account.enabled ? '暂停' : '启用'} @${account.username}`);
-      const remove = button('删除',()=>call('remove',account.username,'已删除订阅和该账号的缓存。'));
-      remove.setAttribute('aria-label',`删除 @${account.username}`);
-      for (const el of [toggle,remove]) {el.disabled = pending || Boolean(data.storeError);el.className = 'text-button';}
-      tools.append(toggle,remove);managed.append(tools);$('subscriptions-managed-accounts').append(managed);
+      const managed = node('tr','','subscriptions-managed-account');managed.dataset.username = account.username;
+      const name = node('th',names.get(account.username));name.scope = 'row';
+      const handle = node('td',`@${account.username}`);
+      const remarkCell = node('td','');const remarkForm = node('form','','subscriptions-remark-form');
+      const remark = document.createElement('input');remark.type = 'text';remark.maxLength = 200;
+      remark.value = remarkDrafts.get(account.username) ?? account.remark ?? '';remark.placeholder = '输入备注，回车保存';remark.title = '按回车保存备注';
+      remark.setAttribute('aria-label',`@${account.username} 自定义备注`);
+      remark.disabled = pending || Boolean(data.storeError);
+      remark.addEventListener('input',()=>remarkDrafts.set(account.username,remark.value));
+      // 中文输入法确认候选词时，不触发备注提交。
+      remark.addEventListener('keydown',event=>{if (event.key === 'Enter' && event.isComposing) event.preventDefault();});
+      remarkForm.addEventListener('submit',async event=>{
+        event.preventDefault();
+        if (pending || remark.disabled || remark.value === (account.remark || '')) return;
+        if (await call('set-remark',{username:account.username,remark:remark.value},'备注已保存。')) {
+          remarkDrafts.delete(account.username);lastContent = '';render();
+        }
+      });
+      remarkForm.append(remark);remarkCell.append(remarkForm);
+      const tools = node('td','','subscriptions-account-tools');
+      const toggle = button(account.enabled ? '取消关注' : '关注',()=>call('set-enabled',{username:account.username,enabled:!account.enabled}));
+      toggle.setAttribute('aria-label',`${account.enabled ? '取消关注' : '关注'} @${account.username}`);
+      toggle.disabled = pending || Boolean(data.storeError);tools.append(toggle);
+      managed.append(name,handle,remarkCell,tools);$('subscriptions-managed-accounts').append(managed);
     }
     $('subscriptions-feed-title').textContent = filter ? names.get(filter) : query ? '筛选结果' : '全部动态';
     $('subscriptions-feed-title').title = filter ? `@${filter}` : '';
@@ -251,12 +281,36 @@ export function createMessageSubscriptionsView() {
   new ResizeObserver(()=>{
     for (const body of view.querySelectorAll('.subscriptions-post-body')) updateBodyState(body);
   }).observe(view.querySelector('.subscriptions-feed'));
+  const addDialog = $('subscriptions-add-dialog');
+  $('subscriptions-open-add').addEventListener('click',()=>{error();addDialog.showModal();$('subscriptions-input').focus();});
+  for (const id of ['subscriptions-close-add','subscriptions-cancel-add']) $(id).addEventListener('click',()=>{if (!pending) addDialog.close();});
+  addDialog.addEventListener('cancel',event=>{if (pending) event.preventDefault();});
   $('subscriptions-form').addEventListener('submit',async event=>{
     event.preventDefault();const input = $('subscriptions-input');
-    if (await call('add',input.value,'已添加订阅，新获取的动态将标为未读。')) input.value = '';
+    if (await call('add',{username:input.value,remark:$('subscriptions-remark').value},'已添加订阅，新获取的动态将标为未读。')) {
+      input.value = '';$('subscriptions-remark').value = '';addDialog.close();
+    }
   });
   $('subscriptions-all').addEventListener('click',()=>select(''));
-  for (const recommended of recommendations) recommended.addEventListener('click',()=>call('add',recommended.dataset.recommendedUsername,'已添加订阅，新获取的动态将标为未读。'));
+  for (const input of reasonInputs) {
+    const username = input.dataset.recommendationReason;
+    input.addEventListener('input',()=>reasonDrafts.add(username));
+    // 回车保存，输入法确认候选词时不提交；失败保留草稿供用户重试。
+    input.addEventListener('keydown',event=>{if (event.key === 'Enter' && event.isComposing) event.preventDefault();});
+    input.form.addEventListener('submit',async event=>{
+      event.preventDefault();
+      if (pending || input.disabled || input.value === (data?.recommendationReasons?.[username] ?? '')) return;
+      if (await call('set-recommendation-reason',{username,reason:input.value},'推荐理由已保存。')) {
+        reasonDrafts.delete(username);render();
+      }
+    });
+  }
+  for (const recommended of recommendations) recommended.addEventListener('click',()=>{
+    const username = recommended.dataset.recommendedUsername;
+    const account = data?.accounts.find(a=>a.username===username);
+    if (account) void call('set-enabled',{username,enabled:!account.enabled});
+    else void call('add',username,'已添加订阅，新获取的动态将标为未读。');
+  });
   // 输入搜索时回到全部账号，避免之前选中的账号挡住其他昵称的匹配结果。
   $('subscriptions-search').addEventListener('input',()=>{filter = '';lastContent = '';render();});
   $('subscriptions-unread').addEventListener('change',render);
@@ -267,6 +321,7 @@ export function createMessageSubscriptionsView() {
   // 离开时也清空，防止尚未完成的翻译在返回页面后自动展开。
   new MutationObserver(()=>{
     expandedTranslations.clear();expandedBodies.clear();lastContent = '';
+    if (view.hidden && addDialog.open) addDialog.close();
     if (!view.hidden) {selectTab(tabs[0]);render();void load();}
   }).observe(view,{attributes:true,attributeFilter:['hidden']});
   void load();return {renderSummary};

@@ -26,7 +26,7 @@ q.createQuotaPanel=options=>createQuota({...options,fetchImpl:async url=>{
 const endpoint=new URL(url).pathname;global.quotaSmoke.calls.push(endpoint);
 if(global.quotaSmoke.holdRequest)await global.quotaSmoke.holdRequest;
 if(global.quotaSmoke.offline)throw Error('synthetic offline');
-const account=id=>({id,name:id===5?'test-codex-account':'another-account',platform:'openai',type:'oauth',credentials:{plan_type:id===5?'prolite':'pro',subscription_expires_at:'2026-11-19T15:07:00Z'},extra:{codex_5h_used_percent:4,codex_5h_window_minutes:global.quotaSmoke.allFiveHourUnavailable?0:id===5?300:0,codex_7d_window_minutes:10080,codex_5h_reset_at:new Date(Date.now()+3600000).toISOString(),codex_7d_reset_at:new Date(Date.now()+604800000).toISOString(),codex_7d_used_percent:id===6&&global.quotaSmoke.secondaryUsedPercent!=null?global.quotaSmoke.secondaryUsedPercent:30,codex_reset_credit_snapshot:{available_count:id===5?0:2}}});
+const account=id=>({id,name:id===5?'test-codex-account':'another-account',platform:'openai',type:'oauth',credentials:{plan_type:id===5?'prolite':'pro',subscription_expires_at:'2026-11-19T15:07:00Z'},extra:{codex_5h_used_percent:4,codex_5h_window_minutes:global.quotaSmoke.allFiveHourUnavailable?0:id===5?300:0,codex_7d_window_minutes:10080,codex_5h_reset_at:new Date(Date.now()+3600000).toISOString(),codex_7d_reset_at:new Date(Date.now()+604800000).toISOString(),codex_7d_used_percent:id===6&&global.quotaSmoke.secondaryUsedPercent!=null?global.quotaSmoke.secondaryUsedPercent:30,codex_reset_credit_snapshot:{available_count:id===5?0:2},codex_credits_snapshot:{credits:{balance:id===5?(global.quotaSmoke.creditBalance===undefined?'62500.0000000000':global.quotaSmoke.creditBalance):'0'}}}});
 return {ok:true,json:async()=>({data:endpoint.endsWith('/accounts')?{items:[account(5),account(6)],pages:1}:account(Number(endpoint.split('/').at(-1)))})};
 }});
 require(${JSON.stringify(path.join(root,'src/main.cjs'))});`);
@@ -55,6 +55,34 @@ let app;
     return {panel,pet,errors};
   }
   let {panel,pet,errors}=await launch();
+  assert.deepEqual(await panel.locator('.quota-credits').allTextContents(),['62,500','0']);
+  if(process.env.WHALE_QUOTA_CREDITS_ONLY==='1') {
+    assert.deepEqual(await panel.locator('#quota-table thead th').allTextContents(),['账号名称','订阅信息','剩余用量','点数','刷新']);
+    assert.equal(await panel.locator('#quota-list tr').first().locator('td.quota-credits').evaluate(el=>el.cellIndex),3);
+    async function refreshCredits(balance) {
+      await app.evaluate((_electron,balance)=>{global.quotaSmoke.creditBalance=balance;},balance);
+      await panel.locator('#quota-refresh').click();
+      await panel.waitForFunction(()=>!document.getElementById('quota-refresh').disabled);
+    }
+    await refreshCredits(null);
+    assert.equal(await panel.locator('.quota-credits').first().textContent(),'—');
+    await refreshCredits('62500.1250000000');
+    assert.equal(await panel.locator('.quota-credits').first().textContent(),'62,500.125');
+    for(const width of [860,1060]) {
+      await app.evaluate(({BrowserWindow},width)=>BrowserWindow.getAllWindows().find(win=>win.webContents.getURL().endsWith('/index.html')).setSize(width,900),width);
+      await panel.waitForTimeout(100);
+      assert.equal(await panel.locator('.quota-credits').evaluateAll(els=>els.every(el=>el.scrollWidth<=el.clientWidth)),true);
+      await panel.locator('.quota-card').first().screenshot({path:'/tmp/whale-quota-credits-'+width+'.png'});
+    }
+    assert.deepEqual(errors,[]);await app.close();app=null;
+    ({panel,pet,errors}=await launch());
+    assert.deepEqual(await panel.locator('.quota-credits').allTextContents(),['62,500.125','0']);
+    assert.deepEqual(await app.evaluate(()=>global.quotaSmoke.calls),[],'重启从缓存恢复点数，不额外读取接口');
+    assert.deepEqual(errors,[]);
+    console.log('Quota credits UI OK: decimal strings, zero, missing data, refresh, cached restart and 860/1060px layout');
+    return;
+  }
+
   if(process.env.WHALE_QUOTA_MULTI_ONLY!=='1') {
   // 使用较长间隔检查三种单位，避免真实计时器干扰后续手动刷新调用数断言。
   assert.equal(await panel.locator('#quota-next').count(),0,'不再展示下次刷新时间');
@@ -115,7 +143,7 @@ let app;
   assert.deepEqual(await panel.locator('.quota-expiry').allTextContents(),['到期 2026-11-19','到期 2026-11-19']);
   const first=()=>panel.getByRole('switch',{name:'test-codex-account · 刷新',exact:true});
   const second=()=>panel.getByRole('switch',{name:'another-account · 刷新',exact:true});
-  assert.deepEqual(await panel.locator('#quota-table thead th').allTextContents(),['账号名称','订阅信息','剩余用量','刷新']);
+  assert.deepEqual(await panel.locator('#quota-table thead th').allTextContents(),['账号名称','订阅信息','剩余用量','点数','刷新']);
   assert.deepEqual(await panel.locator('#quota-list tr').first().locator('.quota-period').allTextContents(),['5h','7d']);
   assert.match(await panel.locator('.quota-reset-time > span:first-child').first().textContent(),/^\d+h \d+m$/);
   assert.match(await panel.locator('.quota-window-7d .quota-reset-time > span:first-child').first().textContent(),/^\d+d \d+h$/);

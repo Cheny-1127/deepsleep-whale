@@ -124,7 +124,7 @@ test('column settings hide the header and account cell together without changing
   await view.get('show-platform').handlers.change();
   assert.equal(view.get('platform-heading').hidden, true);
   assert.equal(view.get('list').children[0].children[1].hidden, true);
-  assert.equal(view.get('list').children[0].children[3].hidden, false);
+  assert.equal(view.get('list').children[0].children[4].hidden, false);
   view.get('show-platform').checked = true;
   await view.get('show-platform').handlers.change();
   assert.equal(view.get('platform-heading').hidden, false);
@@ -148,7 +148,7 @@ test('account refresh switches show saved choices and send the account ID when c
   const view = fixture();
   view.set({accounts: [{id: 5, name: '账号一', refreshEnabled: true}, {id: 6, name: '账号二', refreshEnabled: false}], checkedAt: 1000});
   await view.open();
-  const toggle = row => row.children[3].children[0];
+  const toggle = row => row.children[4].children[0];
   assert.equal(toggle(view.get('list').children[0]).attributes['aria-checked'], 'true');
   assert.equal(toggle(view.get('list').children[1]).attributes['aria-checked'], 'false');
   toggle(view.get('list').children[0]).click();
@@ -164,7 +164,7 @@ test('saving choices disables controls and a rejected save restores the previous
   const view = fixture();
   view.set({accounts: [{id: 5, name: '账号', refreshEnabled: true}], checkedAt: 1000});await view.open();
   let reject;view.setSave(() => new Promise((_resolve, fail) => {reject = fail;}));
-  const button = view.get('list').children[0].children[3].children[0];button.click();
+  const button = view.get('list').children[0].children[4].children[0];button.click();
   assert.equal(button.disabled, true);assert.equal(view.get('refresh').disabled, true);
   await view.poll();assert.equal(button.attributes['aria-checked'], 'true');
   reject(Error('private error'));await new Promise(setImmediate);
@@ -182,7 +182,7 @@ test('quota page lists account remaining percents as text', async () => {
   assert.equal(row.tagName, 'tr');
   assert.equal(row.children[0].attributes.scope, 'row');
   const [fiveHour, sevenDay] = row.children[2].children;
-  assert.equal(row.children.length, 4);
+  assert.equal(row.children.length, 5);
   assert.equal(fiveHour.children[0].textContent, '5h');
   assert.equal(sevenDay.children[0].textContent, '7d');
   assert.equal(fiveHour.children[2].textContent, '100%');
@@ -265,6 +265,26 @@ test('missing quota stays distinct from zero and does not create an indeterminat
   assert.equal(sevenDay.children[2].title, '暂无数据');
   assert.equal(sevenDay.children[1].tagName, 'span');
 
+});
+
+test('credit balances display separately from percent windows, distinguish zero from missing and update with snapshots', async () => {
+  const view = fixture();
+  view.set({accounts: [62500, 0, 12.125, null, undefined, -1, Infinity, '<img src=x>'].map((creditsBalance, id) => ({id, creditsBalance})), checkedAt: 1000});
+  await view.open();
+  const balances = () => view.get('list').children.map(row => row.children[3]);
+  assert.deepEqual(balances().map(el => el.textContent), ['62,500', '0', '12.125', '—', '—', '—', '—', '—']);
+  assert.equal(balances()[0].title, '点数余额：62500');
+  assert.equal(balances()[3].title, '暂无点数数据');
+  assert.equal(balances()[0].tagName, 'td');
+  view.get('show-remaining').checked = false;await view.get('show-remaining').handlers.change();
+  assert.equal(view.get('list').children[0].children[2].hidden, true);assert.equal(balances()[0].hidden, false);
+  view.get('show-credits').checked = false;await view.get('show-credits').handlers.change();
+  assert.equal(view.get('credits-heading').hidden, true);assert.equal(balances()[0].hidden, true);
+  view.get('show-credits').checked = true;await view.get('show-credits').handlers.change();
+  assert.equal(view.get('credits-heading').hidden, false);assert.equal(balances()[0].hidden, false);
+  view.set({accounts: [{id: 0, creditsBalance: 62000}]});await view.poll();
+  assert.equal(balances()[0].textContent, '62,000');
+  assert.deepEqual(view.calls, ['snapshot', 'set-list', 'set-list', 'set-list', 'snapshot']);
 });
 
 test('empty accounts hide the column headers and keep refresh and update status available', async () => {
