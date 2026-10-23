@@ -3,8 +3,11 @@ const {_electron:electron}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
 const root=path.resolve(__dirname,'../..'),dir=fs.mkdtempSync('/tmp/whale-subscriptions-ui-'),bootstrap=path.join(dir,'bootstrap.cjs');
 // 隔离主进程保留真实 IPC/持久化，只替换网络采集、翻译并拦截外部跳转。
-fs.writeFileSync(bootstrap,`const {shell,Notification}=require('electron');Notification.isSupported=()=>false;
+fs.writeFileSync(bootstrap,`const {shell,Notification,Menu,clipboard}=require('electron');Notification.isSupported=()=>false;
 global.subscriptionsFixture={step:1,base:String((BigInt(Date.now()-600000)-1288834974657n)<<22n),calls:[],opened:[],fail:false,hold:false,translationCalls:[],translationFail:false,translationHold:false};shell.openExternal=async url=>global.subscriptionsFixture.opened.push(url);
+// 仅拦截复制菜单与剪贴板，不改动用户系统剪贴板；其他原生菜单仍走真实实现。
+global.subscriptionCopies=[];global.subscriptionCopyMenus=[];clipboard.writeText=text=>global.subscriptionCopies.push(text);
+const buildMenu=Menu.buildFromTemplate.bind(Menu);Menu.buildFromTemplate=items=>items.length===1 && items[0].label==='复制内容'?{popup:options=>global.subscriptionCopyMenus.push({item:items[0],windowId:options.window.id})}:buildMenu(items);
 const archery=require(${JSON.stringify(path.join(root,'src/channels/archery-pending.cjs'))}),createArchery=archery.createArcheryPending;
 archery.createArcheryPending=options=>createArchery({...options,readConfig:()=>{throw Error('isolated');}});
 require(${JSON.stringify(path.join(root,'src/app/x-subscription-reader.cjs'))}).createXSubscriptionReader=()=>async(username,{signal})=>{
@@ -73,6 +76,22 @@ async function launch() {
   assert.equal(await body.evaluate(el=>getComputedStyle(el).webkitLineClamp),'2');
   assert.ok(await body.evaluate(el=>el.scrollHeight>el.clientHeight));
   assert.equal(await panel.getByRole('button',{name:'展开全文',exact:true}).count(),0);
+  const copyValue=await body.evaluate(el=>({username:'thsottiaux',id:el.closest('article').dataset.postId}));
+  const fullText=await body.textContent();
+  await body.click({button:'right'});await app.evaluate(()=>new Promise(setImmediate));
+  assert.equal(await app.evaluate(()=>global.subscriptionCopyMenus.at(-1).item.label),'复制内容');
+  assert.equal(await app.evaluate(()=>global.subscriptionCopies.length),0,'打开菜单尚未复制');
+  await app.evaluate(()=>global.subscriptionCopyMenus.at(-1).item.click());
+  assert.equal(await app.evaluate(()=>global.subscriptionCopies.at(-1)),fullText,'折叠正文复制完整缓存内容');
+  assert.equal(await body.evaluate(el=>el.classList.contains('is-collapsed')),true,'右键不展开正文');
+  assert.equal(await panel.locator('.subscriptions-unread-dot').count(),1,'右键复制不修改未读状态');
+  const missingTranslation=await panel.evaluate(value=>window.whale.subscriptions('copy-menu',{...value,translation:true}),copyValue);
+  assert.ok(missingTranslation.error,'没有译文时不能复制伪造译文');
+  const missingPost=await panel.evaluate(()=>window.whale.subscriptions('copy-menu',{username:'thsottiaux',id:'99999999',text:'伪造正文'}));
+  assert.ok(missingPost.error);
+  await panel.evaluate(value=>window.whale.subscriptions('copy-menu',{...value,text:'伪造正文'}),copyValue);
+  await app.evaluate(()=>global.subscriptionCopyMenus.at(-1).item.click());
+  assert.equal(await app.evaluate(()=>global.subscriptionCopies.at(-1)),fullText,'仅复制主进程缓存，不接受页面正文');
   await body.click();
   await panel.waitForFunction(()=>document.querySelectorAll('.subscriptions-unread-dot').length===0);
   assert.equal((await app.evaluate(()=>global.subscriptionsFixture.opened)).length,0,'点击正文不打开外部原文');
@@ -82,6 +101,9 @@ async function launch() {
 
   await panel.getByRole('button',{name:'中文翻译',exact:true}).click();
   await panel.waitForFunction(()=>document.querySelector('.subscriptions-translation')?.textContent.includes('额度即将重置'));
+  await panel.locator('.subscriptions-translation p').click({button:'right'});
+  await app.evaluate(()=>new Promise(setImmediate));await app.evaluate(()=>global.subscriptionCopyMenus.at(-1).item.click());
+  assert.equal(await app.evaluate(()=>global.subscriptionCopies.at(-1)),await panel.locator('.subscriptions-translation p').textContent(),'译文区域复制译文全文');
   assert.equal(await panel.locator('.subscriptions-translation img').count(),0);
   assert.equal(await panel.locator('.subscriptions-translation > strong').count(),0,'译文不再显示额外标题');
   assert.equal(await panel.getByRole('button',{name:'取消翻译',exact:true}).getAttribute('aria-expanded'),'true');
@@ -107,6 +129,7 @@ async function launch() {
   const pet=app.windows().find(page=>page.url().endsWith('/pet.html'));assert.ok(pet);
   assert.equal(await pet.evaluate(async()=>{try{await window.whale.subscriptions('snapshot');return 'allowed';}catch{return 'denied';}}),'denied');
   assert.equal(await pet.evaluate(async()=>{try{await window.whale.subscriptions('translate',{});return 'allowed';}catch{return 'denied';}}),'denied');
+  assert.equal(await pet.evaluate(async()=>{try{await window.whale.subscriptions('copy-menu',{});return 'allowed';}catch{return 'denied';}}),'denied');
   const savedCard=panel.locator(`[data-post-id="${translatedValue.id}"]`);
   assert.ok(await savedCard.locator('.subscriptions-translation').isHidden(),'重启后默认收起已缓存译文');
   assert.equal(await savedCard.getByRole('button',{name:'中文翻译',exact:true}).getAttribute('aria-expanded'),'false');
@@ -234,6 +257,11 @@ async function launch() {
   await settleScroll();
   const afterRead=await middle.evaluate(el=>({top:el.getBoundingClientRect().top,y:scrollY}));
   assert.ok(Math.abs(afterRead.top-beforeRead.top)<=2 && afterRead.y>500,`点击正文应保持阅读位置：${JSON.stringify({beforeRead,afterRead})}`);
+  const beforeCopy=await middle.evaluate(el=>({top:el.getBoundingClientRect().top,y:scrollY}));
+  await middle.locator('.subscriptions-post-body').click({button:'right'});
+  await app.evaluate(()=>new Promise(setImmediate));await app.evaluate(()=>global.subscriptionCopyMenus.at(-1).item.click());
+  const afterCopy=await middle.evaluate(el=>({top:el.getBoundingClientRect().top,y:scrollY}));
+  assert.ok(Math.abs(afterCopy.top-beforeCopy.top)<=2 && Math.abs(afterCopy.y-beforeCopy.y)<=2,'右键复制保持阅读位置');
   const beforeTranslate=await middle.evaluate(el=>el.getBoundingClientRect().top);
   await middle.getByRole('button',{name:'中文翻译',exact:true}).click();
   await panel.waitForFunction(id=>document.querySelector(`[data-post-id="${id}"] .subscriptions-translation`) && !document.querySelector(`[data-post-id="${id}"] .subscriptions-translation`).hidden,middleId);
@@ -253,5 +281,5 @@ async function launch() {
 
   await panel.locator('#subscriptions-tab-manage').click();
   await panel.getByRole('button',{name:'删除 @thsottiaux',exact:true}).click();assert.ok(await panel.locator('#subscriptions-recommend-tibo').isEnabled());
-  assert.deepEqual(errors,[]);console.log('Subscriptions UI OK: top-right actions, translation expand/collapse/cache/restart/retry/cancel, link input, unread/read, filtering, safe links/text, clear/restart, IPC and 860/1060px layout');
+  assert.deepEqual(errors,[]);console.log('Subscriptions UI OK: right-click copy original/translation, top-right actions, translation expand/collapse/cache/restart/retry/cancel, link input, unread/read, filtering, safe links/text, clear/restart, IPC and 860/1060px layout');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{if(app)await app.close();fs.rmSync(dir,{recursive:true,force:true});});

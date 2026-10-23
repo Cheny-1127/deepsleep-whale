@@ -54,6 +54,16 @@ export function createMessageSubscriptionsView() {
   const button = (text, action, className = 'outline') => {
     const el = node('button', text, className);el.type = 'button';el.addEventListener('click', action);return el;
   };
+  function copyMenu(element, value) {
+    element.addEventListener('contextmenu',async event=>{
+      event.preventDefault();event.stopPropagation();
+      // 复制独立于修改操作，不重建列表，避免右键打断展开状态和当前阅读位置。
+      try {
+        const result = await window.whale.subscriptions('copy-menu',value);
+        if (result.error) throw Error(result.error);
+      } catch (err) {error(err.message || '无法打开复制菜单，请重试。');}
+    });
+  }
   async function call(name, value, message) {
     if (pending) return false;
     pending = true;revision++;render();error();feedback('');
@@ -188,6 +198,7 @@ export function createMessageSubscriptionsView() {
       icon.append(path);deleteButton.append(icon);actions.append(translateButton,deleteButton);header.append(heading,actions);
       // 动态正文始终通过 textContent 写入，不插入远程 HTML、图片或可执行链接。
       const body = node('p',post.text,'subscriptions-post-body');
+      copyMenu(body,value);
       const bodyExpanded = expandedBodies.has(key);body.classList.toggle('is-collapsed',!bodyExpanded);
       body.id = `subscription-body-${post.username}-${post.id}`;
       // 仅正文触发阅读：超出两行时展开，短文不改变排版；标题和翻译沿用各自操作。
@@ -212,6 +223,7 @@ export function createMessageSubscriptionsView() {
         // 已缓存的译文仍由本次页面的展开状态控制；只显示正文，不再添加“中文译文”标题。
         const translated = node('div','','subscriptions-translation');translated.lang = 'zh-CN';
         translated.id = `subscription-translation-${post.username}-${post.id}`;translated.hidden = !expanded;
+        copyMenu(translated,{...value,translation:true});
         translated.append(node('p',post.translation.text));card.append(translated);
       }
       if (post.translationError) card.append(node('p',post.translationError,'ui-alert'));
