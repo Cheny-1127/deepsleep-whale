@@ -100,7 +100,38 @@ export function createMessageSubscriptionsView() {
     } else {expandedTranslations.add(key);void translate(post);}
     if (post.unread) void call('mark-read',{username:post.username,id:post.id});
   }
-  function select(username) {filter = username;lastContent = '';render();}
+  const picker = $('subscriptions-picker'), pickerButton = $('subscriptions-picker-button');
+  function select(username) {
+    // 选定后清空候选搜索，下一次展开可重新查看全部账号；焦点回到入口方便继续键盘操作。
+    filter = username;picker.open = false;$('subscriptions-search').value = '';
+    lastContent = '';render();pickerButton.focus();
+  }
+  function renderPicker() {
+    if (!data) return;
+    // 搜索只缩小候选账号，选定后才改变正文；后台快照更新不重建搜索框。
+    const query = $('subscriptions-search').value.normalize('NFKC').trim().toLocaleLowerCase();
+    const focused = document.activeElement?.closest('.subscriptions-account')?.dataset.username;
+    const names = new Map(data.accounts.map(a=>[a.username,a.displayName || data.posts.find(p=>p.username===a.username && p.displayName)?.displayName || `@${a.username}`]));
+    $('subscriptions-selected').textContent = filter ? names.get(filter) : '全部账号';
+    pickerButton.setAttribute('aria-label',`筛选订阅账号：${$('subscriptions-selected').textContent}`);
+    $('subscriptions-all').setAttribute('aria-pressed',String(!filter));
+    $('subscriptions-accounts').replaceChildren();
+    for (const account of data.accounts) {
+      const name = names.get(account.username);
+      if (![name,`@${account.username}`].some(text=>text.normalize('NFKC').toLocaleLowerCase().includes(query))) continue;
+      const choose = button('',()=>select(account.username),'ui-menu-item subscriptions-account');
+      choose.title = `@${account.username}`;choose.dataset.username = account.username;
+      choose.setAttribute('aria-pressed',String(filter === account.username));
+      const label = node('span','','subscriptions-account-label');
+      label.append(node('span',name),node('small',`@${account.username}`));
+      choose.append(label);
+      if (account.unread) choose.append(node('small',`${account.unread} 未读`));
+      $('subscriptions-accounts').append(choose);
+    }
+    $('subscriptions-no-match').hidden = !query || $('subscriptions-accounts').childElementCount > 0;
+    // 自动刷新会重建账号选项，按用户名找回焦点，避免键盘选择被后台快照打断。
+    if (focused) [...$('subscriptions-accounts').children].find(el=>el.dataset.username===focused)?.focus();
+  }
   function render() {
     updateSidebarStatus('subscriptions',data);
     const restore = readingPosition();
@@ -124,37 +155,28 @@ export function createMessageSubscriptionsView() {
     for (const id of ['subscriptions-close-add','subscriptions-cancel-add','subscriptions-input','subscriptions-remark']) $(id).disabled = pending;
     if (!data) return;
     $('subscriptions-refresh').disabled ||= data.busy || !data.accounts.some(a => a.enabled);
-    $('subscriptions-refresh').textContent = data.busy ? '正在检查…' : '立即检查';
+    $('subscriptions-refresh').textContent = data.busy ? '正在刷新…' : '刷新动态';
     $('subscriptions-read-all').disabled ||= !data.unread;
     $('subscriptions-add').disabled ||= data.accounts.length >= data.accountLimit;
     $('subscriptions-open-add').disabled = $('subscriptions-add').disabled;
-    $('subscriptions-status').textContent = `${data.accounts.length} 个订阅 · ${data.posts.length} 条缓存 · ${data.unread} 条未读`;
+    $('subscriptions-status').textContent = `${data.accounts.length} 个订阅 · ${data.posts.length} 条动态 · ${data.unread} 条未读`;
     renderSummary(data);
     if (data.storeError) error(data.storeError);
     if (filter && !data.accounts.some(a => a.username === filter)) filter = '';
     const cachedKeys = new Set(data.posts.map(post => `${post.username}/${post.id}`));
     for (const set of [expandedTranslations,expandedBodies]) for (const key of set) if (!cachedKeys.has(key)) set.delete(key);
-    // 定时只读快照不重建未变化的列表，避免打断键盘焦点和正在阅读的位置。
-    const query = $('subscriptions-search').value.normalize('NFKC').trim().toLocaleLowerCase();
     // 头像随账号资料传输一次，各条消息复用，避免大量动态在 IPC 中重复传输图片。
     const avatars = new Map(data.accounts.map(a=>[a.username,a.avatar]));
     const names = new Map(data.accounts.map(a=>[a.username,a.displayName || data.posts.find(p=>p.username===a.username && p.displayName)?.displayName || `@${a.username}`]));
-    const matches = new Set(data.accounts.filter(a=>[names.get(a.username),`@${a.username}`].some(text=>text.normalize('NFKC').toLocaleLowerCase().includes(query))).map(a=>a.username));
-    const content = JSON.stringify([data.accounts,data.posts,filter,query,$('subscriptions-unread').checked,pending]);
+    // 定时只读快照不重建未变化的列表，避免打断键盘焦点和正在阅读的位置。
+    const content = JSON.stringify([data.accounts,data.posts,filter,$('subscriptions-unread').checked,pending]);
     if (content === lastContent) return;lastContent = content;
-    $('subscriptions-all').setAttribute('aria-pressed',String(!filter));
-    $('subscriptions-accounts').replaceChildren();
+    renderPicker();
     $('subscriptions-managed-accounts').replaceChildren();
     $('subscriptions-manage-empty').hidden = data.accounts.length > 0;
     $('subscriptions-table').hidden = data.accounts.length === 0;
     for (const username of remarkDrafts.keys()) if (!data.accounts.some(a=>a.username===username)) remarkDrafts.delete(username);
     for (const account of data.accounts) {
-      const choose = button('',()=>select(account.username),'outline subscriptions-account');
-      choose.hidden = !matches.has(account.username);choose.title = `@${account.username}`;
-      choose.dataset.username = account.username;choose.setAttribute('aria-pressed',String(filter === account.username));
-      choose.append(node('span',names.get(account.username)));
-      if (account.unread) choose.append(node('small',`${account.unread} 未读`));
-      $('subscriptions-accounts').append(choose);
       const managed = node('tr','','subscriptions-managed-account');managed.dataset.username = account.username;
       const name = node('th',names.get(account.username));name.scope = 'row';
       const handle = node('td',`@${account.username}`);
@@ -174,23 +196,30 @@ export function createMessageSubscriptionsView() {
         }
       });
       remarkForm.append(remark);remarkCell.append(remarkForm);
+      // 最后刷新表示成功获取动态的时间；失败不会更新 checkedAt，避免把失败时间误当作数据已更新。
+      const checked = node('td','','subscriptions-checked');
+      checked.title = '上次成功获取动态的时间；刷新失败时保留原时间。';
+      checked.append(node('span',account.checkedAt === null ? '尚未成功刷新' : time(account.checkedAt)));
+      checked.append(node('small',account.enabled ? '每小时自动检查' : '已暂停'));
       const tools = node('td','','subscriptions-account-tools');
       const toggle = button(account.enabled ? '取消关注' : '关注',()=>call('set-enabled',{username:account.username,enabled:!account.enabled}));
       toggle.setAttribute('aria-label',`${account.enabled ? '取消关注' : '关注'} @${account.username}`);
       toggle.disabled = pending || Boolean(data.storeError);tools.append(toggle);
-      managed.append(name,handle,remarkCell,tools);$('subscriptions-managed-accounts').append(managed);
+      managed.append(name,handle,remarkCell,checked,tools);$('subscriptions-managed-accounts').append(managed);
     }
-    $('subscriptions-feed-title').textContent = filter ? names.get(filter) : query ? '筛选结果' : '全部动态';
+    $('subscriptions-feed-title').textContent = filter ? names.get(filter) : '全部动态';
     $('subscriptions-feed-title').title = filter ? `@${filter}` : '';
-    const accounts = data.accounts.filter(a => matches.has(a.username) && (!filter || a.username === filter));
+    // 刷新时间集中在订阅管理；读取失败仍在正文上方提示，避免阅读时漏掉异常。
+    const accounts = data.accounts.filter(a => a.error && (!filter || a.username === filter));
     $('subscriptions-account-status').replaceChildren();
+    $('subscriptions-account-status').hidden = !accounts.length;
     for (const account of accounts) {
-      const status = node('div',`${names.get(account.username)} · ${account.enabled ? '每小时检查' : '已暂停'} · ${time(account.checkedAt)}${account.error ? ` · ${account.error}` : ''}`);
+      const status = node('div',`${names.get(account.username)} · ${account.error}`);
       status.title = `@${account.username}`;
-      if (account.error) status.append(' ',button('打开主页',()=>call('open-profile',account.username),'text-button'));
+      status.append(' ',button('打开主页',()=>call('open-profile',account.username),'text-button'));
       $('subscriptions-account-status').append(status);
     }
-    const posts = data.posts.filter(p => matches.has(p.username) && (!filter || p.username === filter) && (!$('subscriptions-unread').checked || p.unread));
+    const posts = data.posts.filter(p => (!filter || p.username === filter) && (!$('subscriptions-unread').checked || p.unread));
     const fragment = document.createDocumentFragment();
     for (const post of posts) {
       const card = node('article','','ui-card subscriptions-post');card.dataset.postId = post.id;
@@ -215,7 +244,8 @@ export function createMessageSubscriptionsView() {
       }
       const actions = node('div','','subscriptions-post-actions');
       const translating = post.translating || translationRequests.has(key);
-      const translateButton = button(translating ? '翻译中…' : expanded ? '取消翻译' : '中文翻译',()=>toggleTranslation(post));
+      const translateButton = button(translating ? '翻译中…' : expanded ? '收起翻译' : '翻译',()=>toggleTranslation(post),'text-button subscriptions-translate');
+      translateButton.title = '翻译为中文';
       translateButton.disabled = pending || translating || (!post.translation && Boolean(data.storeError));
       translateButton.setAttribute('aria-expanded',String(expanded));
       if (post.translation) translateButton.setAttribute('aria-controls',`subscription-translation-${post.username}-${post.id}`);
@@ -265,7 +295,7 @@ export function createMessageSubscriptionsView() {
     $('subscriptions-posts').replaceChildren(fragment);
     for (const body of $('subscriptions-posts').querySelectorAll('.subscriptions-post-body')) updateBodyState(body);
     $('subscriptions-empty').hidden = posts.length > 0;
-    $('subscriptions-empty').textContent = !data.accounts.length ? '还没有订阅，添加一个 X 账号开始阅读。' : query ? '没有匹配的动态，请调整昵称或账号筛选。' : $('subscriptions-unread').checked ? '暂时没有未读动态。' : data.busy ? '正在读取公开动态，首次检查最多需要半分钟…' : '暂无缓存。可点击“立即检查”；新获取的动态默认未读。';
+    $('subscriptions-empty').textContent = !data.accounts.length ? '还没有订阅，添加一个 X 账号开始阅读。' : $('subscriptions-unread').checked ? '暂时没有未读动态。' : data.busy ? '正在读取公开动态，首次检查最多需要半分钟…' : '暂无动态。可点击“刷新动态”；新获取的动态默认未读。';
     restore();
   }
   async function load() {
@@ -313,9 +343,29 @@ export function createMessageSubscriptionsView() {
     if (account) void call('set-enabled',{username,enabled:!account.enabled});
     else void call('add',username,'已添加订阅，新获取的动态将标为未读。');
   });
-  // 输入搜索时回到全部账号，避免之前选中的账号挡住其他昵称的匹配结果。
-  $('subscriptions-search').addEventListener('input',()=>{filter = '';lastContent = '';render();});
+  $('subscriptions-search').addEventListener('input',renderPicker);
+  picker.addEventListener('toggle',()=>{
+    if (picker.open) {renderPicker();$('subscriptions-search').focus();}
+    else {$('subscriptions-search').value = '';}
+  });
+  // 选择器支持原生 Tab 顺序和方向键；退出后把焦点还给入口，不留在隐藏选项上。
+  picker.addEventListener('keydown',event=>{
+    if (!picker.open || event.isComposing) return;
+    if (event.key === 'Escape') {event.preventDefault();picker.open = false;pickerButton.focus();return;}
+    const options = [$('subscriptions-all'),...$('subscriptions-accounts').children];
+    const index = options.indexOf(document.activeElement);
+    let next;
+    if (event.key === 'ArrowDown') next = (index+1)%options.length;
+    if (event.key === 'ArrowUp') next = index < 0 ? options.length-1 : (index-1+options.length)%options.length;
+    if (index >= 0 && event.key === 'Home') next = 0;
+    if (index >= 0 && event.key === 'End') next = options.length-1;
+    if (next !== undefined) {event.preventDefault();options[next].focus();}
+  });
+  document.addEventListener('click',event=>{if (picker.open && !picker.contains(event.target)) picker.open = false;});
+  // macOS 鼠标点击按钮时焦点可能暂时回到 body，不能提前关闭并吞掉随后的 click。
+  picker.addEventListener('focusout',event=>{if (event.relatedTarget && !picker.contains(event.relatedTarget)) picker.open = false;});
   $('subscriptions-unread').addEventListener('change',render);
+  // 账号筛选仅影响阅读范围，手动刷新仍由主进程检查所有已开启的订阅。
   $('subscriptions-refresh').addEventListener('click',()=>call('refresh'));
   $('subscriptions-read-all').addEventListener('click',()=>call('mark-read',null,'已全部标为已读。'));
   $('subscriptions-clear').addEventListener('click',()=>call('clear-cache',undefined,'缓存已清除，订阅、已读状态和去重进度已保留。'));
@@ -324,6 +374,7 @@ export function createMessageSubscriptionsView() {
   new MutationObserver(()=>{
     expandedTranslations.clear();expandedBodies.clear();lastContent = '';
     if (view.hidden && addDialog.open) addDialog.close();
+    if (view.hidden) picker.open = false;
     if (!view.hidden) {selectTab(tabs[0]);render();void load();}
   }).observe(view,{attributes:true,attributeFilter:['hidden']});
   void load();return {renderSummary};
