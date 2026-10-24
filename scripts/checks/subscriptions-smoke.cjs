@@ -31,7 +31,17 @@ async function launch() {
   assert.ok(panel);await panel.locator('#nav-subscriptions').click();return panel;
 }
 (async()=>{
-  let panel=await launch();const errors=[];panel.on('pageerror',error=>errors.push(error.message));
+  let panel=await launch();
+  // 走真实鼠标点击并核对选中值，防止只断言弹层关闭而漏掉 macOS 焦点导致的点击丢失。
+  const chooseAccount=async username=>{
+    if (await panel.locator('#subscriptions-picker').getAttribute('open') === null) await panel.locator('#subscriptions-picker-button').click();
+    const option=panel.locator(username ? `button[data-username="${username}"]` : '#subscriptions-all');
+    const selected=username ? await option.locator('.subscriptions-account-label > span').textContent() : '全部账号';
+    await option.click();
+    assert.equal(await panel.locator('#subscriptions-selected').textContent(),selected,'鼠标选中后更新当前账号');
+    assert.equal(await panel.locator('#subscriptions-picker').getAttribute('open'),null);
+  };
+  const errors=[];panel.on('pageerror',error=>errors.push(error.message));
   await panel.waitForFunction(()=>document.querySelector('#subscriptions-status').textContent.includes('0 个订阅'));
   assert.ok(await panel.locator('#home-view').isHidden());
   assert.equal(await panel.locator('#subscriptions-tab-feed').getAttribute('aria-selected'),'true');
@@ -70,7 +80,7 @@ async function launch() {
   await panel.locator('#subscriptions-remark').fill('AI 动态');
   await panel.locator('#subscriptions-input').fill('https://x.com/thsottiaux/status/2113162277688070445');await panel.locator('#subscriptions-add').click();
   await panel.waitForFunction(()=>!document.getElementById('subscriptions-add-dialog').open);
-  assert.deepEqual(await panel.locator('#subscriptions-table thead th').allTextContents(),['名称','账号','自定义备注','操作']);
+  assert.deepEqual(await panel.locator('#subscriptions-table thead th').allTextContents(),['名称','账号','自定义备注','最后刷新','操作']);
   assert.equal(await panel.locator('#subscriptions-panel-manage > section h2').first().textContent(),'我的订阅');
   assert.equal(await panel.locator('#subscriptions-managed-accounts td').first().textContent(),'@thsottiaux');
   const remarkInput=()=>panel.getByRole('textbox',{name:'@thsottiaux 自定义备注',exact:true});
@@ -82,6 +92,9 @@ async function launch() {
   assert.equal(await panel.locator('.subscriptions-remark-form button').count(),0);
   await remarkInput().press('Enter');
   await panel.waitForFunction(()=>document.getElementById('subscriptions-feedback').textContent==='备注已保存。');
+  await panel.waitForFunction(()=>/\d+\/\d+/.test(document.querySelector('.subscriptions-checked > span').textContent));
+  const checkedAt=(await panel.evaluate(()=>window.whale.subscriptions('snapshot'))).value.accounts[0].checkedAt;
+  assert.equal(await panel.locator('.subscriptions-checked > span').textContent(),new Date(checkedAt).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}));
   assert.equal(await panel.locator('#subscriptions-managed-accounts img').count(),0);
   for(const width of [860,1060]) {
     await app.evaluate(({BrowserWindow},width)=>BrowserWindow.getAllWindows().find(win=>win.webContents.getURL().endsWith('/index.html')).setSize(width,900),width);
@@ -104,11 +117,43 @@ async function launch() {
   assert.equal(await panel.locator('.subscriptions-post-heading strong').first().getAttribute('title'),'@thsottiaux');
   assert.ok((await panel.locator('button[data-username="thsottiaux"]').textContent()).startsWith('Tibo'));
   assert.equal(await panel.locator('button[data-username="thsottiaux"]').getAttribute('title'),'@thsottiaux');
-  await panel.locator('#subscriptions-search').fill('tIbO');assert.equal(await panel.locator('.subscriptions-post').count(),1);
-  await panel.locator('#subscriptions-search').fill('@thsottiaux');assert.equal(await panel.locator('.subscriptions-post').count(),1);
-  await panel.locator('#subscriptions-search').fill('没有这个昵称');assert.equal(await panel.locator('.subscriptions-post').count(),0);
-  assert.ok(await panel.locator('#subscriptions-empty').isVisible());
-  await panel.locator('#subscriptions-search').fill('');
+  assert.equal(await panel.locator('#subscriptions-refresh').textContent(),'刷新动态');
+  assert.ok(await panel.locator('#subscriptions-account-status').isHidden(),'正常检查时间不占据正文空间');
+  await panel.locator('#subscriptions-picker-button').click();
+  await panel.locator('#subscriptions-search').fill('tIbO');assert.equal(await panel.locator('.subscriptions-account').count(),1);
+  await panel.locator('#subscriptions-search').fill('@thsottiaux');assert.equal(await panel.locator('.subscriptions-account').count(),1);
+  assert.ok(!/检查|刷新|\d+\/\d+/.test(await panel.locator('.subscriptions-account').textContent()),'账号选择器只显示身份和未读信息');
+  assert.ok(await panel.locator('.subscriptions-account').evaluate(el=>el.getBoundingClientRect().height<60),'账号选项保持紧凑');
+  assert.equal(await panel.locator('#subscriptions-picker-button').evaluate(el=>getComputedStyle(el).outlineStyle),'none','搜索框聚焦时入口不重复显示焦点框');
+  await panel.locator('#subscriptions-search').fill('没有这个昵称');
+  assert.equal(await panel.locator('.subscriptions-account').count(),0);assert.ok(await panel.locator('#subscriptions-no-match').isVisible());
+  assert.equal(await panel.locator('.subscriptions-post').count(),1,'搜索候选账号不会改变正在阅读的动态');
+  await panel.keyboard.press('Escape');
+  assert.equal(await panel.locator('#subscriptions-picker-button').evaluate(el=>document.activeElement===el),true);
+  await panel.locator('#subscriptions-picker-button').press('Enter');
+  await panel.locator('#subscriptions-search').fill('tibo');
+  await panel.keyboard.press('ArrowUp');
+  assert.equal(await panel.evaluate(()=>document.activeElement.dataset.username),'thsottiaux','从搜索框向上跳到最后一个账号');
+  await panel.keyboard.press('Home');
+  assert.equal(await panel.evaluate(()=>document.activeElement.id),'subscriptions-all');
+  await panel.locator('#subscriptions-search').focus();
+  await panel.keyboard.press('ArrowDown');await panel.keyboard.press('ArrowDown');await panel.keyboard.press('Enter');
+  assert.equal(await panel.locator('#subscriptions-selected').textContent(),'Tibo');
+  assert.equal(await panel.locator('#subscriptions-picker').getAttribute('open'),null);
+  await chooseAccount('');
+  for (const width of [1060,860]) {
+    await app.evaluate(({BrowserWindow},width)=>BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/index.html')).setSize(width,770),width);
+    await panel.waitForTimeout(100);
+    assert.ok(await panel.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+    assert.ok(await panel.locator('.subscriptions-controls').evaluate(el=>el.getBoundingClientRect().height<120),'两行工具区高度受控');
+    await panel.screenshot({path:path.join(root,'out',`subscriptions-compact-${width}.png`),fullPage:true});
+    await panel.locator('#subscriptions-picker-button').click();
+    assert.ok(await panel.locator('.subscriptions-picker-menu').evaluate(el=>el.getBoundingClientRect().right<=innerWidth));
+    await panel.screenshot({path:path.join(root,'out',`subscriptions-picker-${width}.png`),fullPage:true});
+    await panel.locator('#subscriptions-unread').click();
+    assert.equal(await panel.locator('#subscriptions-picker').getAttribute('open'),null,'点击外部收起选择器');
+    await panel.locator('#subscriptions-unread').uncheck();
+  }
 
   assert.equal(await panel.locator('#subscriptions-recommend-tibo').textContent(),'已关注');assert.ok(await panel.locator('#subscriptions-recommend-tibo').isEnabled());
   await panel.locator('#subscriptions-tab-recommend').click();
@@ -157,23 +202,23 @@ async function launch() {
   await body.click();
   assert.equal(await body.evaluate(el=>el.classList.contains('is-collapsed')),false,'已展开的正文保持展开');
 
-  await panel.getByRole('button',{name:'中文翻译',exact:true}).click();
+  await panel.getByRole('button',{name:'翻译',exact:true}).click();
   await panel.waitForFunction(()=>document.querySelector('.subscriptions-translation')?.textContent.includes('额度即将重置'));
   await panel.locator('.subscriptions-translation p').click({button:'right'});
   await app.evaluate(()=>new Promise(setImmediate));await app.evaluate(()=>global.subscriptionCopyMenus.at(-1).item.click());
   assert.equal(await app.evaluate(()=>global.subscriptionCopies.at(-1)),await panel.locator('.subscriptions-translation p').textContent(),'译文区域复制译文全文');
   assert.equal(await panel.locator('.subscriptions-translation img').count(),0);
   assert.equal(await panel.locator('.subscriptions-translation > strong').count(),0,'译文不再显示额外标题');
-  assert.equal(await panel.getByRole('button',{name:'取消翻译',exact:true}).getAttribute('aria-expanded'),'true');
-  await panel.getByRole('button',{name:'取消翻译',exact:true}).click();
+  assert.equal(await panel.getByRole('button',{name:'收起翻译',exact:true}).getAttribute('aria-expanded'),'true');
+  await panel.getByRole('button',{name:'收起翻译',exact:true}).click();
   assert.ok(await panel.locator('.subscriptions-translation').isHidden());
-  assert.equal(await panel.getByRole('button',{name:'中文翻译',exact:true}).getAttribute('aria-expanded'),'false');
-  await panel.getByRole('button',{name:'中文翻译',exact:true}).click();
+  assert.equal(await panel.getByRole('button',{name:'翻译',exact:true}).getAttribute('aria-expanded'),'false');
+  await panel.getByRole('button',{name:'翻译',exact:true}).click();
   assert.ok(await panel.locator('.subscriptions-translation').isVisible());
   assert.equal(await app.evaluate(()=>global.subscriptionsFixture.translationCalls.length),1,'expand uses saved text without another request');
   await panel.locator('#nav-home').click();await panel.locator('#nav-subscriptions').click();
   assert.ok(await panel.locator('.subscriptions-translation').isHidden(),'重新进入默认收起译文');
-  await panel.getByRole('button',{name:'中文翻译',exact:true}).click();
+  await panel.getByRole('button',{name:'翻译',exact:true}).click();
   assert.ok(await panel.locator('.subscriptions-translation').isVisible());
   assert.equal(await app.evaluate(()=>global.subscriptionsFixture.translationCalls.length),1,'重新进入展开复用译文缓存');
   const translatedValue=await panel.locator('.subscriptions-post').evaluate(el=>({username:'thsottiaux',id:el.dataset.postId}));
@@ -182,6 +227,11 @@ async function launch() {
   await app.close();app=null;panel=await launch();panel.on('pageerror',error=>errors.push(error.message));
   await panel.waitForFunction(()=>document.querySelector('.subscriptions-translation'));
   assert.equal(await app.evaluate(()=>global.subscriptionsFixture.translationCalls.length),0,'restart uses saved translation');
+  for (const width of [1060,860]) {
+    await app.evaluate(({BrowserWindow},width)=>BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/index.html')).setSize(width,770),width);
+    await panel.waitForTimeout(100);
+    await panel.screenshot({path:path.join(root,'out',`subscriptions-compact-${width}.png`),fullPage:true});
+  }
   const deniedSource=await panel.evaluate(()=>window.whale.subscriptions('translate',{username:'thsottiaux',id:'99999999',text:'arbitrary source'}));
   assert.ok(deniedSource.error);assert.equal(await app.evaluate(()=>global.subscriptionsFixture.translationCalls.length),0);
   const pet=app.windows().find(page=>page.url().endsWith('/pet.html'));assert.ok(pet);
@@ -190,7 +240,7 @@ async function launch() {
   assert.equal(await pet.evaluate(async()=>{try{await window.whale.subscriptions('copy-menu',{});return 'allowed';}catch{return 'denied';}}),'denied');
   const savedCard=panel.locator(`[data-post-id="${translatedValue.id}"]`);
   assert.ok(await savedCard.locator('.subscriptions-translation').isHidden(),'重启后默认收起已缓存译文');
-  assert.equal(await savedCard.getByRole('button',{name:'中文翻译',exact:true}).getAttribute('aria-expanded'),'false');
+  assert.equal(await savedCard.getByRole('button',{name:'翻译',exact:true}).getAttribute('aria-expanded'),'false');
   const bad=await panel.evaluate(()=>window.whale.subscriptions('open-profile','https://evil.test'));assert.ok(bad.error);
   assert.equal((await panel.evaluate(()=>window.whale.subscriptions('snapshot'))).value.accounts[0].remark,'<img src=x> 关注 AI');
   assert.equal((await panel.evaluate(()=>window.whale.subscriptions('snapshot'))).value.recommendationReasons.thsottiaux,'关注产品更新 <img src=x>');
@@ -210,18 +260,18 @@ async function launch() {
   await panel.screenshot({path:path.join(root,'out','subscriptions-unread.png'),fullPage:true});
   assert.equal(await panel.locator('.subscriptions-translation').count(),1,'refresh reuses saved translation');
   assert.ok(await savedCard.locator('.subscriptions-translation').isHidden(),'refresh retains the collapsed state');
-  await panel.locator('button[data-username="thsottiaux"]').click();
+  await chooseAccount('thsottiaux');
   assert.ok(await savedCard.locator('.subscriptions-translation').isHidden(),'filtering retains the collapsed state');
-  await savedCard.getByRole('button',{name:'中文翻译',exact:true}).click();
+  await savedCard.getByRole('button',{name:'翻译',exact:true}).click();
   assert.ok(await savedCard.locator('.subscriptions-translation').isVisible());
   assert.equal(await app.evaluate(()=>global.subscriptionsFixture.translationCalls.length),0,'opening cached translation requires no IPC translation');
   await app.evaluate(()=>{global.subscriptionsFixture.translationFail=true;});
-  await panel.getByRole('button',{name:'中文翻译',exact:true}).first().click();
+  await panel.getByRole('button',{name:'翻译',exact:true}).first().click();
   await panel.waitForFunction(()=>document.querySelector('.subscriptions-post .ui-alert'));
   assert.ok(!(await panel.locator('#subscriptions-posts').textContent()).includes('secret translation'));
   assert.equal(await panel.locator('.subscriptions-unread-dot').count(),1,'点击中文翻译即设为已读，翻译失败仍保留已读');
   await app.evaluate(()=>{const f=global.subscriptionsFixture;f.translationFail=false;f.translationHold=true;});
-  await panel.getByRole('button',{name:'中文翻译',exact:true}).first().click();
+  await panel.getByRole('button',{name:'翻译',exact:true}).first().click();
   await panel.waitForFunction(()=>[...document.querySelectorAll('.subscriptions-post button')].some(el=>el.textContent==='翻译中…'));
   assert.ok(await panel.locator('#subscriptions-clear').isEnabled());assert.ok(await panel.locator('#subscriptions-refresh').isEnabled());
   // 翻译请求跨页完成也只保存缓存，返回时仍默认收起。
@@ -246,11 +296,14 @@ async function launch() {
   await panel.waitForFunction(()=>document.querySelector('#subscriptions-badge').hidden);
   await panel.locator('#subscriptions-tab-manage').click();
   await panel.getByRole('button',{name:'取消关注 @thsottiaux',exact:true}).click();assert.ok(await panel.locator('#subscriptions-refresh').isDisabled());
+  assert.equal(await panel.locator('.subscriptions-checked > small').textContent(),'已暂停');
   await panel.getByRole('button',{name:'关注 @thsottiaux',exact:true}).click();
   await panel.locator('#subscriptions-tab-feed').click();
+  const lastSuccess=await panel.locator('.subscriptions-checked > span').textContent();
   await app.evaluate(()=>{global.subscriptionsFixture.fail=true;});await panel.locator('#subscriptions-refresh').click();
   await panel.waitForFunction(()=>document.querySelector('#subscriptions-account-status').textContent.includes('公开页面'));
   assert.equal(await panel.locator('.subscriptions-post').count(),3);assert.ok(!(await panel.locator('#subscriptions-account-status').textContent()).includes('secret diagnostics'));
+  assert.equal(await panel.locator('.subscriptions-checked > span').textContent(),lastSuccess,'刷新失败保留最后成功刷新时间');
   await panel.getByRole('button',{name:'打开主页',exact:true}).click();assert.equal((await app.evaluate(()=>global.subscriptionsFixture.opened)).at(-1),'https://x.com/thsottiaux');
   for(const width of [1060,860]) {
     await app.evaluate(({BrowserWindow},width)=>BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/index.html')).setSize(width,770),width);
@@ -267,7 +320,7 @@ async function launch() {
     fs.mkdirSync(path.join(root,'out'),{recursive:true});await panel.screenshot({path:path.join(root,'out',`subscriptions-${width}.png`),fullPage:true});
   }
   await app.evaluate(()=>{global.subscriptionsFixture.translationHold=true;});
-  await panel.locator('.subscriptions-post').filter({hasNot:panel.locator('.subscriptions-translation')}).getByRole('button',{name:'中文翻译',exact:true}).click();
+  await panel.locator('.subscriptions-post').filter({hasNot:panel.locator('.subscriptions-translation')}).getByRole('button',{name:'翻译',exact:true}).click();
   await panel.waitForFunction(()=>[...document.querySelectorAll('.subscriptions-post button')].some(el=>el.textContent==='翻译中…'));
   await panel.locator('#subscriptions-tab-manage').click();
   await panel.locator('#subscriptions-clear').click();assert.equal(await panel.locator('.subscriptions-post').count(),0);assert.equal(await panel.locator('.subscriptions-account').count(),1);
@@ -281,17 +334,19 @@ async function launch() {
   await panel.locator('#subscriptions-tab-feed').click();
   await panel.waitForFunction(()=>document.querySelectorAll('.subscriptions-post').length===1);
   assert.equal(await panel.locator('.subscriptions-account').count(),2);
-  await panel.locator('button[data-username="thsottiaux"]').click();
-  await panel.locator('#subscriptions-search').fill('tibo');assert.equal(await panel.locator('.subscriptions-post').count(),0);
-  await panel.locator('#subscriptions-search').fill('openai');assert.equal(await panel.locator('.subscriptions-post').count(),1);
+  await chooseAccount('thsottiaux');
+  await panel.locator('#subscriptions-picker-button').click();
+  await panel.locator('#subscriptions-search').fill('openai');
+  assert.equal(await panel.locator('.subscriptions-post').count(),0,'搜索其他账号不切换当前作者');
+  assert.equal(await panel.locator('button[data-username="thsottiaux"]').count(),0);
+  await chooseAccount('openai');
+  assert.equal(await panel.locator('.subscriptions-post').count(),1);
   assert.equal(await panel.locator('.subscriptions-avatar').textContent(),'O');
   assert.equal(await panel.locator('.subscriptions-avatar img').count(),0,'无头像时保留昵称首字占位');
-  assert.ok(await panel.locator('button[data-username="thsottiaux"]').isHidden());
-  await panel.locator('#subscriptions-search').fill('');
 
-  await panel.locator('button[data-username="thsottiaux"]').click();assert.equal(await panel.locator('.subscriptions-post').count(),0);
-  await panel.locator('button[data-username="openai"]').click();assert.equal(await panel.locator('.subscriptions-post').count(),1);
-  await panel.locator('#subscriptions-all').click();assert.equal(await panel.locator('.subscriptions-post').count(),1);
+  await chooseAccount('thsottiaux');assert.equal(await panel.locator('.subscriptions-post').count(),0);
+  await chooseAccount('openai');assert.equal(await panel.locator('.subscriptions-post').count(),1);
+  await chooseAccount('');assert.equal(await panel.locator('.subscriptions-post').count(),1);
   await panel.locator('#subscriptions-tab-manage').click();
   await panel.evaluate(username=>window.whale.subscriptions('remove',username),'openai');await panel.waitForFunction(username=>!document.querySelector('#subscriptions-managed-accounts tr[data-username="'+username+'"]'),'openai');
   await panel.evaluate(username=>window.whale.subscriptions('remove',username),'thsottiaux');await panel.waitForFunction(username=>!document.querySelector('#subscriptions-managed-accounts tr[data-username="'+username+'"]'),'thsottiaux');assert.equal(await panel.locator('.subscriptions-account').count(),0);
@@ -304,7 +359,7 @@ async function launch() {
   await panel.locator('#subscriptions-tab-feed').click();
   const deletedId=await panel.locator('.subscriptions-post').getAttribute('data-post-id');
   const deleteMessage=panel.locator('.subscriptions-post').getByRole('button',{name:'删除消息',exact:true});
-  assert.equal(await deleteMessage.evaluate(el=>el.previousElementSibling.textContent),'中文翻译');
+  assert.equal(await deleteMessage.evaluate(el=>el.previousElementSibling.textContent),'翻译');
   await deleteMessage.click();assert.equal(await panel.locator('.subscriptions-post').count(),0);
   const deletedCache=JSON.parse(fs.readFileSync(path.join(dir,'message-subscriptions.json'),'utf8')).accounts[0];
   assert.equal(deletedCache.posts.length,0);assert.ok(deletedCache.deletedIds.includes(deletedId));
@@ -328,7 +383,7 @@ async function launch() {
   const afterCopy=await middle.evaluate(el=>({top:el.getBoundingClientRect().top,y:scrollY}));
   assert.ok(Math.abs(afterCopy.top-beforeCopy.top)<=2 && Math.abs(afterCopy.y-beforeCopy.y)<=2,'右键复制保持阅读位置');
   const beforeTranslate=await middle.evaluate(el=>el.getBoundingClientRect().top);
-  await middle.getByRole('button',{name:'中文翻译',exact:true}).click();
+  await middle.getByRole('button',{name:'翻译',exact:true}).click();
   await panel.waitForFunction(id=>document.querySelector(`[data-post-id="${id}"] .subscriptions-translation`) && !document.querySelector(`[data-post-id="${id}"] .subscriptions-translation`).hidden,middleId);
   await settleScroll();assert.ok(Math.abs(await middle.evaluate(el=>el.getBoundingClientRect().top)-beforeTranslate)<=2,'翻译完成保持当前消息位置');
   await middle.evaluate(el=>window.scrollTo(0,scrollY+el.getBoundingClientRect().top));await settleScroll();

@@ -4,37 +4,58 @@
 .subscriptions-recommendations { margin-bottom: 20px; }
 .subscriptions-recommendation-reason { color: var(--ui-text-muted); line-height: 1.7; }
 .subscriptions-recommendation-table button { white-space: nowrap; }
-.subscriptions-toolbar, .subscriptions-add, .subscriptions-feed-heading, .subscriptions-post-heading, .subscriptions-post-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.subscriptions-toolbar > span, .subscriptions-hint, #subscriptions-feedback, #subscriptions-account-status { color: var(--ui-text-muted); font-size: var(--ui-font-small); line-height: 1.7; }
+.subscriptions-toolbar, .subscriptions-add, .subscriptions-post-heading, .subscriptions-post-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.subscriptions-toolbar > span, .subscriptions-hint, #subscriptions-feedback { color: var(--ui-text-muted); font-size: var(--ui-font-small); line-height: 1.7; }
 #subscriptions-feedback { color: var(--ui-accent); }
 #subscriptions-form { margin-top: 15px; }
 #subscriptions-form > label { display: block; font-size: var(--ui-font-small); margin-bottom: 8px; }
 .subscriptions-add input { flex: 1; min-width: 180px; }
 .subscriptions-hint { margin: 14px 0 0; }
-.subscriptions-layout { display: grid; gap: 18px; }
-.subscriptions-accounts, #subscriptions-accounts { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; min-width: 0; }
-#subscriptions-accounts { display: contents; }
-.subscriptions-filter-label { color: var(--ui-text-muted); font-size: var(--ui-font-small); }
-.subscriptions-accounts button { display: inline-flex; align-items: center; gap: 8px; overflow-wrap: anywhere; max-width: 100%; }
-.subscriptions-accounts button[aria-pressed="true"] { background: var(--ui-selected); color: var(--ui-accent); }
+.subscriptions-layout { display: grid; gap: 16px; }
+/* 筛选和操作各占一行；不把统计或检查时间做成独立卡片。 */
+.subscriptions-controls { display: grid; gap: 10px; padding-bottom: 14px; border-bottom: 1px solid var(--ui-divider); }
+.subscriptions-accounts { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; min-width: 0; }
+.subscriptions-unread-filter { display: inline-flex; align-items: center; gap: 5px; color: var(--ui-text-muted); font-size: var(--ui-font-small); }
+.subscriptions-unread-filter input { margin: 0; }
+.subscriptions-feed-tools { justify-content: space-between; }
+.subscriptions-feed-actions { display: flex; align-items: center; gap: 16px; margin-left: auto; }
+.subscriptions-feed-actions .text-button { font-size: var(--ui-font-small); min-height: var(--ui-control-height); }
+/* 视觉上由账号选择器标识当前范围，保留动态标题供屏幕阅读器按标题导航。 */
+.subscriptions-feed-title { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+#subscriptions-account-status { margin: 0 0 12px; }
+#subscriptions-account-status .text-button { color: inherit; text-decoration: underline; font-size: inherit; }
+.subscriptions-picker { position: relative; width: 210px; max-width: 100%; }
+.subscriptions-picker > summary > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subscriptions-picker > summary svg { flex-shrink: 0; }
+.subscriptions-picker[open] > summary svg { transform: rotate(180deg); }
+/* 焦点进入搜索框后，入口不再同时显示外框；键盘回到入口时仍保留焦点提示。 */
+.subscriptions-picker[open] > summary:not(:focus-visible) { outline: none; }
+.subscriptions-picker-menu { position: absolute; top: calc(100% + 8px); left: 0; z-index: 11; width: min(300px, calc(100vw - 280px)); min-width: 100%; padding: 5px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-menu); background: var(--ui-surface); box-shadow: var(--ui-popup-shadow); }
+.subscriptions-picker-search { display: block; padding: 5px 5px 9px; border-bottom: 1px solid var(--ui-divider); }
+.subscriptions-picker-options { max-height: 300px; overflow-y: auto; padding-top: 4px; }
+.subscriptions-picker-options button[aria-pressed="true"] { background: var(--ui-selected); color: var(--ui-accent); }
+.subscriptions-account { align-items: center; overflow-wrap: anywhere; }
+.subscriptions-account-label { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; min-width: 0; }
+.subscriptions-account small { color: var(--ui-text-muted); font-size: 12px; line-height: 1.6; }
+.subscriptions-account > small { flex-shrink: 0; }
+#subscriptions-no-match { margin: 0; padding: 12px; color: var(--ui-text-muted); font-size: var(--ui-font-small); }
 .subscriptions-account-tools { display: flex; align-items: center; gap: 8px; padding: 0 10px; }
-.subscriptions-account-tools button, .subscriptions-account small { font-size: var(--ui-font-small); color: var(--ui-text-muted); }
-.subscriptions-feed-heading { justify-content: space-between; min-height: 30px; }
-.subscriptions-feed-heading label { font-size: var(--ui-font-small); color: var(--ui-text-muted); }
-.subscriptions-post { margin-bottom: 12px; }
+.subscriptions-account-tools button { font-size: var(--ui-font-small); color: var(--ui-text-muted); }
+.subscriptions-post { margin-bottom: 12px; padding: 16px 20px; }
 .subscriptions-post-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 12px; }
 .subscriptions-post-heading { min-width: 0; font-size: var(--ui-font-small); color: var(--ui-text-subtle); }
 .subscriptions-post-heading strong { color: var(--ui-text); overflow-wrap: anywhere; }
-.subscriptions-post p { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.9; margin: 14px 0; }
+.subscriptions-post p { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.9; margin: 12px 0 0; }
 .subscriptions-post .subscriptions-truncated { color: var(--ui-text-muted); font-size: var(--ui-font-small); }
 .subscriptions-translation { border-top: 1px solid var(--ui-divider); padding-top: 14px; }
 .subscriptions-post-actions { align-self: stretch; justify-content: flex-end; flex-wrap: nowrap; }
 .subscriptions-post-actions button { white-space: nowrap; }
+.subscriptions-post-actions .subscriptions-translate { padding: 6px 8px; min-height: var(--ui-control-height); font-size: var(--ui-font-small); color: var(--ui-text-muted); border-radius: var(--ui-radius-control); }
+.subscriptions-translate:hover:not(:disabled) { background: var(--ui-hover); }
 .subscriptions-badge { padding: 2px 5px; background: var(--ui-accent); color: var(--ui-on-accent); border-radius: var(--ui-radius-control); font-size: var(--ui-font-caption); }
 .subscriptions-unread-dot { width: 6px; height: 6px; flex-shrink: 0; border-radius: 50%; background: var(--ui-accent); }
 #subscriptions-empty { line-height: 1.8; color: var(--ui-text-muted); }
 
-#subscriptions-panel-feed > .subscriptions-toolbar { margin-bottom: 18px; }
 .subscriptions-table-scroll { overflow-x: auto; margin-top: 16px; }
 .subscriptions-table { width: 100%; border-collapse: collapse; table-layout: fixed; text-align: left; }
 .subscriptions-table th, .subscriptions-table td { padding: 14px 10px; border-bottom: 1px solid var(--ui-divider); overflow-wrap: anywhere; vertical-align: middle; }
@@ -42,6 +63,14 @@
 .subscriptions-table th:nth-child(1) { width: 18%; }
 .subscriptions-table th:nth-child(2) { width: 24%; }
 .subscriptions-table th:nth-child(4) { width: 18%; }
+/* 管理表给刷新时间固定一列，推荐关注表继续使用原来的四列宽度。 */
+#subscriptions-table th:nth-child(1) { width: 12%; }
+#subscriptions-table th:nth-child(2) { width: 22%; }
+#subscriptions-table th:nth-child(4) { width: 24%; }
+#subscriptions-table th:nth-child(5) { width: 104px; }
+.subscriptions-checked { font-size: var(--ui-font-small); color: var(--ui-text-muted); }
+.subscriptions-checked > span, .subscriptions-checked > small { display: block; }
+.subscriptions-checked > small { margin-top: 4px; font-size: 12px; color: var(--ui-text-subtle); }
 .subscriptions-table tbody th { font-size: var(--ui-font-body); font-weight: 600; }
 .subscriptions-table tbody tr:last-child > * { border-bottom: 0; }
 .subscriptions-table .subscriptions-account-tools { display: table-cell; }
@@ -66,7 +95,7 @@ button.subscriptions-post-heading:hover:not(:disabled) { background: var(--ui-ho
 .subscriptions-post-body[role="button"]:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 4px; }
 .subscriptions-post-body[aria-disabled="true"] { cursor: default; }
 
-#subscriptions-search { width: 210px; max-width: 100%; }
+#subscriptions-search { width: 100%; min-width: 0; }
 
 .subscriptions-delete { min-height: var(--ui-control-height); width: var(--ui-control-height); }
 
