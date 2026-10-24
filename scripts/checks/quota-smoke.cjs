@@ -594,6 +594,15 @@ let app;
   assert.equal(await field(2,'title').textContent(),'流量跟踪配置-2');assert.equal(await field(3,'title').textContent(),'流量跟踪配置-3');
   assert.deepEqual((await state()).settings.trackingConfigs.map(config=>config.accountId),[null,null],'复制配置从暂不跟踪开始');
   assert.equal(await field(2,'accounts').getByRole('radio',{name:'test-codex-account',exact:true}).isDisabled(),true,'副配置不能重复主账号');
+  for(const id of [2,3]) {
+    const options=field(id,'accounts');
+    const disabledStyle=await options.getByRole('radio',{name:'test-codex-account',exact:true}).evaluate(el=>{const label=el.closest('label'),s=getComputedStyle(label);return {color:s.color,opacity:Number(s.opacity),cursor:s.cursor,title:label.title};});
+    const enabledStyle=await options.getByRole('radio',{name:'another-account',exact:true}).evaluate(el=>{const s=getComputedStyle(el.closest('label'));return {color:s.color,opacity:Number(s.opacity)};});
+    assert.notEqual(disabledStyle.color,enabledStyle.color,'禁用账号名称显示灰色');
+    assert.ok(disabledStyle.opacity<enabledStyle.opacity,'整条禁用选项弱化显示');
+    assert.equal(disabledStyle.cursor,'not-allowed');assert.match(disabledStyle.title,/占用/);
+  }
+  await card(2).screenshot({path:'/tmp/whale-quota-disabled-accounts.png'});
   assert.equal(await panel.locator('#quota-pet-copy').isEnabled(),true);
   for(const id of [2,3])for(const action of ['copy','delete']) {
     const a=await field(id,action).boundingBox(),t=await field(id,'title').boundingBox();assert.ok(a.x>t.x+t.width,'图标位于标题右侧');
