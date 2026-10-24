@@ -1,3 +1,4 @@
+import { updateSidebarStatus } from './sidebar-view.mjs';
 const $=id=>document.getElementById('mail-'+id);
 const statuses={disconnected:'未连接',checking:'正在收取',connected:'已连接',paused:'已暂停',error:'连接异常'};
 // 小屋按需读取邮箱快照，邮件字段始终通过 textContent 展示，不执行邮件 HTML。
@@ -9,6 +10,7 @@ export function createMailView() {
   let savedPasswordShown=false,passwordScope='',passwordRequest=0,revealing=false;
   function render(data) {
     if(!data)return;latest=data;
+    updateSidebarStatus('mail',data);
     $('status').textContent=statuses[data.state]||'未连接';
     $('config-state').textContent=data.config?.hasPassword?'已配置':'未配置';
     $('account').textContent=data.email?`已保存邮箱：${data.email}`:'填写你的邮箱地址，选择邮箱类型。';

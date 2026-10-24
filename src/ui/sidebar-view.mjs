@@ -1,3 +1,31 @@
+// 只根据确认的配置标记状态；暂停的入口仍可进入设置和查看缓存。
+export function updateSidebarStatus(id,data) {
+  const button=document.getElementById('nav-'+id);
+  if(!button||!data)return;
+  let status='';
+  if(id==='hooks') {
+    // 能力检测完成后才判断“未启用”，避免检测中的临时状态让菜单闪灰。
+    const sources=Object.keys(data.settings.sources).filter(source=>data.settings.sources[source]);
+    if(!sources.length)status='已暂停';
+    else if(sources.every(source=>data.hookAvailability?.[source]?.state==='checked'&&
+      !Object.entries(data.hookAvailability[source].events).some(([event,value])=>value.available&&data.settings.events?.[source]?.[event]!==false)))status='未启用';
+  } else if(id==='wechat')status=!data.account?'未连接':data.enabled===false?'已暂停':'';
+  else if(id==='mail')status=!data.config?'未配置':data.enabled===false?'已暂停':'';
+  else if(id==='archery')status=data.enabled===false?'已暂停':'';
+  // 多账号功能仅在全部账号暂停时置灰；单个账号暂停不代表整个功能停用。
+  else if(id==='subscriptions')status=!data.accounts.length?'未订阅':data.accounts.every(account=>!account.enabled)?'已暂停':'';
+  else if(id==='quota')status=data.accounts.length&&data.accounts.every(account=>account.refreshEnabled===false)?'已暂停':'';
+  // 主进程频繁广播快照，相同状态不重复修改 DOM 或读屏说明。
+  if(button.dataset.status===status)return;
+  button.dataset.status=status;
+  button.title=(status?status+' · 点击查看或设置 · ':'')+'长按整理菜单';
+  // 视觉上只保留灰色背景，具体原因通过悬停提示和 aria-describedby 提供。
+  let badge=button.querySelector('.sidebar-status');
+  if(!badge){badge=document.createElement('span');badge.className='sidebar-status';badge.id='sidebar-status-'+id;button.append(badge);}
+  badge.textContent=status;badge.hidden=!status;
+  if(status)button.setAttribute('aria-describedby',badge.id);else button.removeAttribute('aria-describedby');
+}
+
 // 菜单节点只移动、不重建，保留页面切换监听与未读徽标。
 export function createSidebarView() {
   const sidebar=document.querySelector('.sidebar'),nav=sidebar?.querySelector('nav');
@@ -34,6 +62,8 @@ export function createSidebarView() {
     control.append(icon);
     const label=button.textContent.trim().replace(/^[^\p{L}\p{N}]+/u,'').trim();
     button.title='长按整理菜单';control.dataset.label=label;
+    // 移动原有节点以保留未读徽标；名称单独限宽，避免收纳后撑出侧栏。
+    const copy=make('span','sidebar-menu-label');copy.append(...button.childNodes);button.append(copy);
     row.append(button,control);rows.set(id,row);visible.append(row);
     control.addEventListener('click',()=>{
       if(!ready||saving||drag)return;
@@ -165,6 +195,10 @@ export function createSidebarView() {
     [list[index],list[next]]=[list[next],list[index]];rearrange();button.focus();void save();
   });
   rearrange(false);
+  // 读取内存快照，未打开功能页时也能显示已保存的开关；不会触发远端刷新。
+  for(const id of ['mail','archery','quota','subscriptions'])window.whale[id]('snapshot').then(result=>{
+    if(result.value)updateSidebarStatus(id,result.value);
+  }).catch(()=>{});
   // 加载完成前保留普通导航，但禁止整理，避免默认布局覆盖已有自定义顺序。
   window.whale.sidebar().then(value=>{layout=value;saved=structuredClone(value);ready=true;organize.disabled=false;rearrange(false);}).catch(()=>{feedback.textContent='菜单布局读取失败，请重新打开小屋后重试。';});
 }

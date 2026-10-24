@@ -1,3 +1,4 @@
+import { updateSidebarStatus } from './sidebar-view.mjs';
 const $ = id => document.getElementById(id);
 const time = value => value === null ? '尚未成功检查' : new Date(value).toLocaleString('zh-CN', {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
 const node = (tag, text, className) => {const el = document.createElement(tag);el.textContent = text;if (className) el.className = className;return el;};
@@ -101,6 +102,7 @@ export function createMessageSubscriptionsView() {
   }
   function select(username) {filter = username;lastContent = '';render();}
   function render() {
+    updateSidebarStatus('subscriptions',data);
     const restore = readingPosition();
     for (const id of ['subscriptions-add','subscriptions-open-add','subscriptions-refresh','subscriptions-read-all']) $(id).disabled = pending || Boolean(data?.storeError);
     // 清理可中止正在进行的自动采集；手动操作仍串行，避免响应乱序覆盖页面。
