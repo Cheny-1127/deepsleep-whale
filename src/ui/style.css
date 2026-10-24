@@ -192,3 +192,7 @@ button,input{-webkit-app-region:no-drag}.studio{display:flex;background:var(--ui
 
 /* 每个账号独立记录成功时间；保留换行，上方年月日、下方时分秒。 */
 .quota-account-synced{font-size:10px;font-weight:400;line-height:1.7;color:var(--ui-text-subtle);font-variant-numeric:tabular-nums;white-space:pre}
+
+/* 禁用状态作用于整条账号选项，避免只有圆点变淡、名称仍看起来可选；保留占用原因的悬停提示。 */
+.quota-pet-settings [role="radiogroup"]>label:has(input:disabled){color:var(--ui-text-subtle);opacity:var(--ui-disabled-opacity);cursor:not-allowed}
+.quota-pet-settings [role="radiogroup"]>label input:disabled{opacity:1;accent-color:var(--ui-text-subtle);cursor:not-allowed}
