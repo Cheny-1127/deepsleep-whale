@@ -10,6 +10,13 @@
   --ui-text: #43564d;
   --ui-text-muted: #60766b;
   --ui-text-subtle: #85928b;
+  /* 侧栏图标按功能开关配色；选中仅加深开启色，停用色始终优先。 */
+  --ui-sidebar-icon-enabled: #628371;
+  --ui-sidebar-icon-selected: #28675e;
+  --ui-sidebar-icon-disabled: #929992;
+  /* 闪电的描边与填充分开配置；停用时两者统一使用上面的灰色。 */
+  --ui-sidebar-icon-accent: #d49b25;
+  --ui-sidebar-icon-accent-fill: #f6c453;
   --ui-accent: #326e5c;
   --ui-accent-hover: #265b4b;
   --ui-on-accent: #fff;

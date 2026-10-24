@@ -30,6 +30,16 @@ async function hold(id) {
 }
 (async()=>{
   await launch();const initial=await state();
+  // 选中与未选中菜单共用图标画布和线宽，图标与文字垂直居中，文字起点一致。
+  const iconMetrics=await panel.locator('.sidebar .nav-item').evaluateAll(buttons=>buttons.map(button=>{
+    const icon=button.querySelector('.sidebar-icon'),label=button.querySelector('.sidebar-menu-label');
+    const rect=icon.getBoundingClientRect(),text=label.getBoundingClientRect(),row=button.getBoundingClientRect(),style=getComputedStyle(icon);
+    return {width:rect.width,height:rect.height,stroke:style.strokeWidth,textOffset:text.left-row.left,centerOffset:Math.abs(rect.top+rect.height/2-text.top-text.height/2)};
+  }));
+  assert.equal(iconMetrics.length,8);
+  assert.equal(new Set(iconMetrics.map(icon=>`${icon.width}/${icon.height}/${icon.stroke}`)).size,1,'所有功能图标规格一致');
+  assert.equal(new Set(iconMetrics.map(icon=>icon.textOffset)).size,1,'所有菜单文字起点一致');
+  assert.ok(iconMetrics.every(icon=>icon.centerOffset<1),'图标与文字垂直居中');
   // 未打开页面时即显示已保存的暂停/未配置状态；暂停入口仍可点击恢复。
   for(const [id,status] of [['archery','已暂停'],['hooks','已暂停'],['mail','未配置'],['wechat','未连接'],['subscriptions','未订阅']]) {
     await panel.waitForFunction(({id,status})=>document.getElementById('nav-'+id).dataset.status===status,{id,status});
@@ -37,11 +47,14 @@ async function hold(id) {
   }
   assert.notEqual(await panel.locator('#nav-archery').evaluate(el=>getComputedStyle(el).color),await panel.locator('#nav-home').evaluate(el=>getComputedStyle(el).color));
   await panel.locator('#nav-archery').click();
+  const pausedIconColor=await panel.locator('#nav-archery .sidebar-icon').evaluate(el=>getComputedStyle(el).color);
   await panel.locator('#archery-status').click();
   await panel.waitForFunction(()=>document.getElementById('nav-archery').dataset.status==='');
+  assert.notEqual(await panel.locator('#nav-archery .sidebar-icon').evaluate(el=>getComputedStyle(el).color),pausedIconColor,'开启后图标使用开启色');
   await panel.waitForFunction(()=>!document.getElementById('archery-status').disabled);
   await panel.locator('#archery-status').click();
   await panel.waitForFunction(()=>document.getElementById('nav-archery').dataset.status==='已暂停');
+  assert.equal(await panel.locator('#nav-archery .sidebar-icon').evaluate(el=>getComputedStyle(el).color),pausedIconColor,'暂停后恢复停用色，选中页面不覆盖开关状态');
   await panel.locator('#nav-hooks').click();assert.equal(await panel.locator('#hooks-view').isVisible(),true);
   // 长按只进入整理，跨越多项后邻项让位；松手不能打开被拖项。
   await hold('home');const target=await panel.locator('#nav-wechat').boundingBox();
