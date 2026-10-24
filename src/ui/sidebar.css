@@ -6,7 +6,14 @@
 .sidebar-organize{padding:3px 5px;background:transparent;color:#627f70;font-size:10px;border-radius:5px}
 .sidebar-list{position:relative;display:flow-root}
 .sidebar-row{position:relative;margin:5px 0;border-radius:10px;user-select:none}
-.sidebar .sidebar-row .nav-item{margin:0;box-sizing:border-box;line-height:20px;touch-action:pan-y;display:flex;align-items:center;gap:5px}
+.sidebar .sidebar-row .nav-item{margin:0;box-sizing:border-box;line-height:20px;touch-action:pan-y;display:flex;align-items:center;gap:8px}
+/* 16px 固定占位配合 8px 间距对齐菜单文字；颜色在 tokens.css 配置，尺寸和线宽不随选中态变化。 */
+.sidebar-icon{display:block;width:16px;height:16px;flex:0 0 16px;color:var(--ui-sidebar-icon-enabled);fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.sidebar .nav-item.selected .sidebar-icon:not(.sidebar-icon-accent){color:var(--ui-sidebar-icon-selected)}
+.sidebar-icon-accent{color:var(--ui-sidebar-icon-accent);fill:var(--ui-sidebar-icon-accent-fill)}
+/* 非空状态表示整体暂停或尚未启用；即使正在查看该页面，图标也保持停用色。 */
+.sidebar .nav-item[data-status]:not([data-status=""]) .sidebar-icon{color:var(--ui-sidebar-icon-disabled)}
+.sidebar .nav-item[data-status]:not([data-status=""]) .sidebar-icon-accent{fill:var(--ui-sidebar-icon-disabled)}
 .sidebar-menu-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* 状态说明仅供读屏使用；界面通过灰色背景区分，悬停可查看具体状态。 */
 .sidebar-status{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}

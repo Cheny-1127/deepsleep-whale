@@ -72,10 +72,10 @@ test('the header switch shows 已连接 or 已暂停 and only toggles automatic 
   assert.equal(f.get('status').textContent,'已连接');
 });
 
-test('navigation names Archery exactly and places it immediately after home',()=>{
+test('navigation preserves menu order and Archery name with decorative SVG icons',()=>{
   const html=fs.readFileSync(path.join(__dirname,'../src/ui/index.html'),'utf8');
-  const nav=[...html.matchAll(/id="nav-([a-z]+)"[^>]*>([^<]+)<\/button>/g)];
-  assert.deepEqual(nav.map(match=>match[1]),['home','archery','hooks','wechat','mail','quota','shortcuts']);
-  assert.match(nav[1][2],/Archery$/);assert.ok(!nav[1][2].includes('待审核'));
+  const nav=[...html.matchAll(/id="nav-([a-z]+)"[^>]*>([\s\S]*?)<\/button>/g)];
+  assert.deepEqual(nav.map(match=>match[1]),['home','subscriptions','archery','hooks','wechat','mail','quota','shortcuts']);
+  assert.equal(nav[2][2].replace(/<[^>]*>/g,'').trim(),'Archery');
   assert.ok(html.includes('<h1 id="archery-heading">Archery</h1>'));
 });

@@ -60,10 +60,9 @@ export function createSidebarView() {
       if(vertical)stroke.classList.add('sidebar-plus-stroke');icon.append(stroke);
     }
     control.append(icon);
-    const label=button.textContent.trim().replace(/^[^\p{L}\p{N}]+/u,'').trim();
+    // 从独立名称节点读取标签，避免把装饰图标或隐藏的状态说明带入整理按钮名称。
+    const label=button.querySelector('.sidebar-menu-label').textContent.trim();
     button.title='长按整理菜单';control.dataset.label=label;
-    // 移动原有节点以保留未读徽标；名称单独限宽，避免收纳后撑出侧栏。
-    const copy=make('span','sidebar-menu-label');copy.append(...button.childNodes);button.append(copy);
     row.append(button,control);rows.set(id,row);visible.append(row);
     control.addEventListener('click',()=>{
       if(!ready||saving||drag)return;
