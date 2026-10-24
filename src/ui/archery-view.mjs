@@ -1,3 +1,4 @@
+import { updateSidebarStatus } from './sidebar-view.mjs';
 const $=id=>document.getElementById('archery-'+id);
 
 export function createArcheryView() {
@@ -5,6 +6,7 @@ export function createArcheryView() {
   let latest=null,busy=false,listKey='',sequence=0,approvalButtons=[],actionError='';
   function render(data) {
     if(!data)return;latest=data;
+    updateSidebarStatus('archery',data);
     // 「已连接 / 已暂停」只控制本地定时读取，不表示 Archery 服务端会话状态。
     const on=data.enabled!==false;
     $('status').textContent=on?'已连接':'已暂停';

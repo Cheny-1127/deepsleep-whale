@@ -1,3 +1,4 @@
+import { updateSidebarStatus } from './sidebar-view.mjs';
 const $ = id => document.getElementById('quota-' + id);
 const columns = [['showName', 'show-name', 'name-heading'], ['showPlatform', 'show-platform', 'platform-heading'],
   ['showRemaining', 'show-remaining', 'remaining-heading'], ['showSyncedAt', 'show-synced-at', 'synced-at-heading'], ['showRefresh', 'show-refresh', 'refresh-heading']];
@@ -95,6 +96,7 @@ export function createQuotaView() {
   function render(data) {
     if (!data) return;
     latest = data;
+    updateSidebarStatus('quota',data);
     intervalControls();
     const intervalLabel = data.refreshIntervalLabel || '5 分钟';
     const refreshing = data.busy || busy;

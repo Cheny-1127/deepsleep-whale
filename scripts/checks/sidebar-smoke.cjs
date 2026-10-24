@@ -3,6 +3,8 @@
 const {_electron:electron}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const root=path.resolve(__dirname,'../..'),dir=fs.mkdtempSync('/tmp/whale-sidebar-ui-'),bootstrap=path.join(dir,'bootstrap.cjs');
+fs.writeFileSync(path.join(dir,'archery.json'),JSON.stringify({enabled:false}));
+fs.writeFileSync(path.join(dir,'settings.json'),JSON.stringify({sources:{codex:false,cursor:false}}));
 fs.writeFileSync(bootstrap,`const {Notification}=require('electron');Notification.isSupported=()=>false;
 const channel=require(${JSON.stringify(path.join(root,'src/channels/archery-pending.cjs'))}),create=channel.createArcheryPending;
 channel.createArcheryPending=options=>create({...options,readConfig:()=>{throw Object.assign(new Error('测试隔离'),{archeryConfig:true});}});
@@ -28,6 +30,18 @@ async function hold(id) {
 }
 (async()=>{
   await launch();const initial=await state();
+  // 未打开页面时即显示已保存的暂停/未配置状态；暂停入口仍可点击恢复。
+  for(const [id,status] of [['archery','已暂停'],['hooks','已暂停'],['mail','未配置'],['wechat','未连接'],['subscriptions','未订阅']]) {
+    await panel.waitForFunction(({id,status})=>document.getElementById('nav-'+id).dataset.status===status,{id,status});
+    assert.equal(await panel.locator('#nav-'+id).isEnabled(),true);
+  }
+  assert.notEqual(await panel.locator('#nav-archery').evaluate(el=>getComputedStyle(el).color),await panel.locator('#nav-home').evaluate(el=>getComputedStyle(el).color));
+  await panel.locator('#nav-archery').click();
+  await panel.locator('#archery-status').click();
+  await panel.waitForFunction(()=>document.getElementById('nav-archery').dataset.status==='');
+  await panel.waitForFunction(()=>!document.getElementById('archery-status').disabled);
+  await panel.locator('#archery-status').click();
+  await panel.waitForFunction(()=>document.getElementById('nav-archery').dataset.status==='已暂停');
   await panel.locator('#nav-hooks').click();assert.equal(await panel.locator('#hooks-view').isVisible(),true);
   // 长按只进入整理，跨越多项后邻项让位；松手不能打开被拖项。
   await hold('home');const target=await panel.locator('#nav-wechat').boundingBox();
@@ -60,6 +74,12 @@ async function hold(id) {
       if(mode==='normal')await panel.locator('#sidebar-organize').click();
       const clip=await panel.evaluate(()=>{const sidebar=document.querySelector('.sidebar').getBoundingClientRect(),label=document.querySelector('.nav-label').getBoundingClientRect(),nav=document.querySelector('.sidebar nav').getBoundingClientRect();return {x:sidebar.x,y:label.y-8,width:sidebar.width,height:nav.bottom-label.y+16};});
       await panel.screenshot({path:`/tmp/whale-sidebar-hierarchy-${width}-${mode}.png`,clip,animations:'disabled'});
+      const badge=panel.locator('#nav-hooks .sidebar-status');
+      assert.equal(await badge.textContent(),'已暂停','保留读屏状态说明');
+      assert.equal(await badge.evaluate(el=>getComputedStyle(el,'::before').content),'none','菜单不显示状态符号');
+      assert.notEqual(await panel.locator('#nav-archery').evaluate(el=>getComputedStyle(el).backgroundColor),await panel.locator('#nav-home').evaluate(el=>getComputedStyle(el).backgroundColor),'收纳区通过背景区分暂停状态');
+      assert.equal(await panel.locator('#nav-hooks').getAttribute('title'),'已暂停 · 点击查看或设置 · 长按整理菜单');
+      assert.equal(await panel.locator('#nav-hooks .sidebar-menu-label').evaluate(el=>el.scrollWidth<=el.clientWidth),true,'收纳菜单名保持完整');
       if(mode==='normal')await panel.locator('#sidebar-organize').click();
     }
   }

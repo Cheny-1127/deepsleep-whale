@@ -1,5 +1,5 @@
 'use strict';
-import { createSidebarView } from './sidebar-view.mjs';
+import { createSidebarView, updateSidebarStatus } from './sidebar-view.mjs';
 import { createHookSettingsView, showView } from './hooks-view.mjs';
 import { createReminderView } from './reminders-view.mjs';
 import { createWechatView } from './wechat-view.mjs';
@@ -81,6 +81,8 @@ actionTabs.forEach((tab,index)=>{
 });
 function render(data) {
   lastData=data;
+  updateSidebarStatus('hooks',data);
+  updateSidebarStatus('wechat',data.wechat);
   // 以原生窗口状态为准，托盘或右键隐藏桌宠后，小屋按钮也会同步。
   if($('pet-visibility-toggle'))$('pet-visibility-toggle').textContent=data.petVisible?'隐藏':'显示';
   hooksView.render(data);
