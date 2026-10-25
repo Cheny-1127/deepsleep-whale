@@ -50,13 +50,15 @@ function replyParts(text) {
   // 编号也占消息长度；预留空间后再分段，原文和编号一同持久化以供断点重投。
   return splitText(value,1768).map((part,index,all)=>`【结果 ${index+1}/${all.length}】\n\n${part}`);
 }
-function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThreads=listCodexThreads,readThread=readCodexThread,discoverClients=discoverRunningClients,onChange=()=>{},loginDelay=1000,pollDelay=500,questionTimeoutMs=300000,execution,validateAccount=()=>{}}) {
+function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThreads=listCodexThreads,readThread=readCodexThread,discoverClients=discoverRunningClients,onChange=()=>{},loginDelay=1000,pollDelay=500,questionTimeoutMs=300000,execution,validateAccount=()=>{},loginTokens=()=>[]}) {
   let state,loadError='',status='disconnected',error='',deliveryError='',failedDeliveryId='',deliveryRetryAt=0,deliveryFailures=0,qr=null,loginController,pollController,closed=false,active=null,flushing=false;
   const approvals=new Map(),inputs=new Map();
   const titleReaders=new Map();
   let typing=null,typingQueue=Promise.resolve();
   const menus=new Map(),commands=new Map(),queryContexts=new Map();let queryEpoch=0;
   try {state=migrate(store.load());}catch(e){state=fresh();loadError=e.message;}
+  // 失效凭据与主动暂停不同；重启后仍应引导重新扫码，不能把旧 token 当作可恢复的连接。
+  if(state.account?.stale){state.enabled=false;status='expired';error='微信登录已失效，请重新扫码';}
   // 重启只恢复有持久化关联的桌面监听；排队消息和 CLI 任务绝不重新执行。
   for(const job of state.jobs)if(['running','queued','approval','question','recovering'].includes(job.state)){
     if(typeof job.text==='string')job.exchange??={request:job.text};
@@ -250,6 +252,7 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
   }
   function stopPoll(){pollController?.abort();pollController=null;stopTyping();}
   function expire() {
+    if(state.account)state.account.stale=true;
     state.enabled=false;status='expired';error='微信登录已失效，请重新扫码';stopPoll();stopTask();invalidateQueries();
     try{persist();}catch{}changed();
   }
@@ -487,7 +490,8 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
   function startPoll() {
     stopPoll();if(!state.account||!state.enabled||closed)return;
     queueRecoveryReplies();
-    const controller=new AbortController();pollController=controller;status='connecting';changed();
+    // 新一轮恢复的状态不能继续显示上次扫码或连接失败的错误；实际失败由本轮轮询重新报告。
+    const controller=new AbortController();pollController=controller;status='connecting';error='';changed();
     void (async()=>{
       let failures=0;
       while(!controller.signal.aborted&&state.enabled&&!closed) {
@@ -514,7 +518,7 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
     if(loadError)throw new Error(loadError);
     loginController?.abort();stopPoll();stopTask();invalidateQueries();state.enabled=false;persist();
     const controller=new AbortController();loginController=controller;status='logging-in';error='';qr=null;changed();
-    const data=await api.qr(controller.signal);
+    const data=await api.qr(controller.signal,loginTokens());
     if(controller.signal.aborted)return;
     if(typeof data.qrcode!=='string'||typeof data.qrcode_img_content!=='string'||!data.qrcode||!data.qrcode_img_content||data.qrcode_img_content.length>4096)throw new Error('微信未返回可用二维码');
     const image=await makeQr(data.qrcode_img_content);
@@ -529,13 +533,22 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
           if(controller.signal.aborted)break;
           if(result.status==='confirmed') {
             if(!result.ilink_bot_id||!result.bot_token)throw new Error('微信确认信息缺少账号凭据');
-            const id=String(result.ilink_bot_id),same=state.account?.id===id;
-            validateAccount(id);
-            if(!same){const clients=state.clients;state=fresh();state.clients=clients;invalidateQueries();deliveryError='';failedDeliveryId='';deliveryRetryAt=0;deliveryFailures=0;}
-            state.account={id,token:String(result.bot_token),baseUrl:api.validate(result.baseurl||BASE),owner:String(result.ilink_user_id||'')};
+            const id=String(result.ilink_bot_id),owner=String(result.ilink_user_id||''),previous=state.account;
+            const account={id,token:String(result.bot_token),baseUrl:api.validate(result.baseurl||BASE),owner};
+            // 只有管理器校验为同一微信的续接，才允许新机器人 ID 继承旧授权、会话和历史。
+            const renewal=validateAccount(id,owner)===true,same=previous?.id===id||renewal;
+            if(!same){const clients=state.clients;state=fresh();state.clients=clients;invalidateQueries();}
+            else if(previous.id!==id){
+              // 同一微信换了机器人凭据：保留桌面对话和历史，只迁移路由键，旧游标和上下文不能跨机器人复用。
+              for(const sender of state.allowed){const key=bindingKey(previous.id,sender);if(Object.hasOwn(state.bindings,key)){state.bindings[bindingKey(id,sender)]=state.bindings[key];delete state.bindings[key];}}
+              state.cursor='';state.contexts={};state.seen=[];
+            }
+            state.account=account;
             if(state.account.owner&&!state.allowed.includes(state.account.owner))state.allowed.push(state.account.owner);
+            deliveryError='';failedDeliveryId='';deliveryRetryAt=0;deliveryFailures=0;
             state.enabled=true;persist();qr=null;loginController=null;startPoll();return;
           }
+          if(result.status==='binded_redirect')throw new Error('这个微信已绑定本机的已有连接；请切换到原连接，需要恢复时在原连接重新扫码。');
           if(result.status==='expired')throw new Error('二维码已过期，请点击扫码连接重新获取');
           if(result.status==='scaned_but_redirect'&&result.redirect_host)host=api.validate('https://'+result.redirect_host);
           qr.status=result.status==='scaned'?'已扫码，请在手机确认':'等待扫码';changed();await wait(loginDelay,controller.signal);
@@ -575,8 +588,9 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
       else if(name==='enable') {
         if(typeof value!=='boolean')throw new Error('连接设置无效');
         if(value&&!state.account)throw new Error('请先扫码连接微信');
+        if(value&&state.account.stale)throw new Error('微信登录已失效，请重新扫码恢复连接');
         loginController?.abort();loginController=null;qr=null;
-        state.enabled=value;persist();if(value)startPoll();else{stopPoll();stopTask();invalidateQueries();status='paused';changed();}
+        state.enabled=value;persist();if(value)startPoll();else{stopPoll();stopTask();invalidateQueries();status=state.account?.stale?'expired':'paused';changed();}
       } else if(name==='allow-user') {
         if(!state.pending.includes(value))throw new Error('联系人尚未发来消息');
         state.allowed=[...new Set([...state.allowed,value])];state.pending=state.pending.filter(v=>v!==value);persist();changed();

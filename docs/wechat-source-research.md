@@ -6,6 +6,7 @@
 
 - [Hermes 固定源码](https://github.com/NousResearch/hermes-agent/blob/868b9f244f5aa3ad238e494048046fe4f29c28ba/plugins/platforms/weixin/adapter.py)：通过远端 ref 与本地浅克隆 HEAD 核实提交。当前路径已从旧教程中的 `gateway/platforms/weixin.py` 迁移到插件目录。MIT 许可见本仓库 `licenses/hermes-agent-MIT.txt`。
 - [Hermes 微信配置说明](https://hermes-agent.nousresearch.com/docs/user-guide/messaging/weixin)：扫码建立机器人身份，私聊优先；不能理解为接管扫码人的全部微信聊天。
+- [腾讯 iLink 协议](https://github.com/Tencent/openclaw-weixin/blob/main/docs/protocol_zh_CN.md)与[更新记录](https://github.com/Tencent/openclaw-weixin/blob/main/CHANGELOG.zh_CN.md)：2026-10-25 核对二维码使用 POST、`local_token_list` 与 `binded_redirect` 的处理，避免重复绑定后丢弃新凭据。
 - [Codex 公共 app-server](https://learn.chatgpt.com/docs/app-server)：本机 `0.163.0-alpha.10.2` 生成的 JSON Schema 交叉核实初始化、thread/start、thread/resume、turn/start、turn/interrupt、命令/文件审批结构。
 - [Cursor 无头运行](https://cursor.com/docs/cli/headless) 与 [输出格式](https://cursor.com/docs/cli/reference/output-format)：`--print --output-format json`、Ask 模式和 `--resume`；当前机器没有 Cursor CLI，使用本地协议夹具验证调用形状。
 
@@ -14,13 +15,19 @@
 | 行为 | Hermes 实际位置 | 本项目处理 |
 |---|---|---|
 | 常量及认证请求头 | adapter.py 52、145–154 行 | iLink App ID `bot`，channel `2.2.0`，client version `131584`；Bearer token、AuthorizationType、随机 UIN |
-| 二维码及登录确认 | 576–648 行 | 请求 `get_bot_qrcode?bot_type=3`，编码 `qrcode_img_content`；用独立 `qrcode` 轮询状态，确认后保存机器人 ID、token、base URL、扫码用户 ID |
+| 二维码及登录确认 | 腾讯协议及 `src/auth/login-qr.ts` | POST `get_bot_qrcode?bot_type=3` 携带 `local_token_list`，编码 `qrcode_img_content`；用独立 `qrcode` 轮询状态，确认后保存机器人 ID、token、base URL、扫码用户 ID |
 | 游标与长轮询 | `_get_updates`、`_poll_loop` | POST `getupdates`，保存 `get_updates_buf`；超时继续轮询，网络失败退避，`-14` 停止并提示重扫 |
 | 文本回复 | 299–316、970–1053 行 | POST `sendmessage`，`message_type=2`，text item，带最新 context token 和稳定 client ID；按 Unicode 分段 |
 | 会话令牌 | `ContextTokenStore`、890–892 行 | 按账号/发送者保存最新 context token；消息去重与游标持久化后才执行 |
 | 输入状态 | `_get_config`、`_ensure_typing_ticket`、`_set_typing` | `getconfig` 获取 typing_ticket；`sendtyping` 的 status=1 开始、2 停止。按账号/联系人在内存缓存十分钟，停止时也刷新过期票据；任务运行中每两秒刷新，问答/审批等待时暂停。状态请求串行且有超时，失败不影响任务或结果投递，不发送普通收件回执 |
 
 服务端 base URL 与扫码跳转仅接受微信 HTTPS 域名；HTTP 重定向不会携带认证自动跟随。二维码由本机 `qrcode` 库生成。未移植 Hermes 的附件、语音、CDN、长期记忆、模型管理及群聊能力。发送遇到 `-14` 或 `-2` 配合 `prepare failed` / `unknown error` 时，按 Hermes 的做法沿用相同 client ID 去掉旧 context token 重发一次；仍失败则暂存待投递结果。限流及网络失败采用退避，不重跑模型任务。
+
+恢复已有微信时，二维码请求携带其他连接的 token，排除当前待恢复连接的旧 token，以便重新签发凭据。确认响应的扫码用户必须匹配原用户；旧记录没有用户 ID 时只接受原机器人 ID。身份匹配后允许机器人 ID 更新，保留配置、授权、任务和待投递结果，迁移会话路由键并清除旧机器人通信游标、上下文和去重缓存。`binded_redirect` 不携带新凭据，明确引导用户切换到原连接恢复，不继续等待扫码。隔离测试不能证明真实微信连接已经恢复，仍需在应用中扫码及收发验证。
+
+服务端确认 token 失效后，在原加密账户中保留失效标记；重启仍显示登录失效，“恢复接收”不会继续尝试已失效凭据。重新扫码成功后替换账户凭据并清除标记；主动暂停的有效账户仍可直接恢复接收。
+
+已存在的同号多条连接不会自动合并；需要先核对有效凭据及各自的配置、会话和任务记录，不能将本次重新授权恢复视为重复连接的数据合并。
 
 ## 模块与隔离
 

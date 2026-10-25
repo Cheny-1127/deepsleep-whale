@@ -1,7 +1,7 @@
 'use strict';
 const {randomBytes,randomUUID}=require('node:crypto');
 
-// iLink 协议对照 Hermes 868b9f2 的 plugins/platforms/weixin/adapter.py 核实。
+// 消息协议参考 Hermes 868b9f2；二维码 POST 与重复绑定处理对照腾讯 openclaw-weixin 协议。
 const BASE='https://ilinkai.weixin.qq.com';
 const VERSION='2.2.0',CLIENT_VERSION=131584;
 class WechatError extends Error {
@@ -61,7 +61,7 @@ function incoming(message,accountId) {
 }
 function createWechatApi({fetchImpl=globalThis.fetch,base=BASE}={}) {
   const validate=trustedBase,typingTickets=new WeakMap();
-  async function request(endpoint,{account,body,signal,timeout=40000,host}={}) {
+  async function request(endpoint,{account,body,signal,timeout=40000,host,baseInfo=true}={}) {
     const headers={'iLink-App-Id':'bot','iLink-App-ClientVersion':String(CLIENT_VERSION)};
     if(body) {
       headers['Content-Type']='application/json';headers.AuthorizationType='ilink_bot_token';
@@ -70,7 +70,7 @@ function createWechatApi({fetchImpl=globalThis.fetch,base=BASE}={}) {
     }
     const response=await fetchImpl(validate(host||account?.baseUrl||base)+'/ilink/bot/'+endpoint,{
       method:body?'POST':'GET',headers,redirect:'error',signal:signal?AbortSignal.any([signal,AbortSignal.timeout(timeout)]):AbortSignal.timeout(timeout),
-      ...(body?{body:JSON.stringify({...body,base_info:{channel_version:VERSION}})}:{})
+      ...(body?{body:JSON.stringify({...body,...(baseInfo?{base_info:{channel_version:VERSION}}:{})})}:{})
     });
     if(!response.ok)throw new WechatError(`微信网络请求失败（HTTP ${response.status}）`);
     const text=await response.text();
@@ -80,7 +80,8 @@ function createWechatApi({fetchImpl=globalThis.fetch,base=BASE}={}) {
   }
   return {
     validate,baseUrl:validate(base),
-    qr:signal=>request('get_bot_qrcode?bot_type=3',{signal}),
+    // 本地已有 token 让微信识别重复绑定；二维码接口使用 POST，且不携带普通 Bot API 的 base_info。
+    qr:(signal,tokens=[])=>request('get_bot_qrcode?bot_type=3',{signal,body:{local_token_list:tokens},baseInfo:false}),
     qrStatus:(code,host,signal)=>request('get_qrcode_status?qrcode='+encodeURIComponent(code),{host,signal}),
     updates:(account,cursor,signal)=>request('getupdates',{account,body:{get_updates_buf:cursor||''},signal}),
     async typing(account,to,enabled,context,signal) {

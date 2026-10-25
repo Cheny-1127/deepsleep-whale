@@ -62,9 +62,15 @@ function createWechatManager({store,onChange=()=>{},...options}) {
   function attach(record) {
     // 子网关只读写自己的状态副本；由管理器统一加密落盘，避免覆盖另一账号或删除共享文件。
     const gateway=createWechatGateway({...options,execution:{...execution,acquire:job=>execution.acquire(record.id,job)},
-      validateAccount:id=>{
+      // 恢复当前连接时不提交它的旧 token，确保服务端签发新凭据；其他连接仍参与重复绑定检测。
+      loginTokens:()=>[...new Set(records.filter(other=>other!==record).map(other=>other.state.account?.token).filter(Boolean))].slice(-10),
+      validateAccount:(id,owner)=>{
+        // 已有重复条目不在登录回调中自动合并，避免未经核对就覆盖两边的配置和任务记录。
         if(records.some(other=>other!==record&&other.state.account?.id===id))throw Error('这个微信已接入，请切换到已有连接。');
-        if(record.state.account&&record.state.account.id!==id)throw Error('重新扫码只恢复当前微信；请用“添加微信”接入另一个号。');
+        const previous=record.state.account;
+        // 机器人 ID 可在重新授权后变化；以已保存的扫码用户确认是本人，不能仅凭机器人 ID 继承操作权限。
+        if(previous&&(previous.owner?previous.owner!==owner:previous.id!==id))throw Error('重新扫码只恢复当前微信；请使用原微信扫码，或用“添加微信”接入另一个号。');
+        return Boolean(previous);
       },
       store:{available:()=>store.available(),load:()=>structuredClone(record.state),
         save:value=>{

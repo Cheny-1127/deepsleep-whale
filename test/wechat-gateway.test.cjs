@@ -270,6 +270,42 @@ test('expired QR and cancelled login never install credentials from a late respo
   let confirm;h.api.qrStatus=()=>new Promise(resolve=>{confirm=resolve;});await h.gateway.action('login');await until(()=>confirm);
   await h.gateway.action('cancel-login');confirm({status:'confirmed',ilink_bot_id:'late-bot',bot_token:'late-token'});await tick();assert.equal(h.gateway.snapshot().account,null);assert.equal(h.gateway.snapshot().status,'paused');
 });
+test('resuming after a failed scan clears the old error while the new poll is pending',async t=>{
+  const h=harness(t);await h.login();
+  h.api.qrStatus=async()=>({status:'expired'});await h.gateway.action('login');
+  await until(()=>h.gateway.snapshot().status==='error');
+  assert.match(h.gateway.snapshot().error,/过期/);
+  const resumed=await h.gateway.action('enable',true);
+  assert.equal(resumed.status,'connecting');assert.equal(resumed.error,'');
+});
+test('scanning again replaces an invalid token and restores inbound and outbound communication for the same bot',async t=>{
+  const initial=fresh();initial.enabled=true;initial.account={id:'bot',owner:'owner',token:'invalid-token'};initial.allowed=['owner'];
+  const h=harness(t,initial),updates=h.api.updates,send=h.api.send;
+  h.api.updates=async(account,...args)=>{if(account.token==='invalid-token')throw Object.assign(Error('invalid token'),{code:-14});return updates(account,...args);};
+  h.api.send=async(account,...args)=>{assert.equal(account.token,'renewed-token');return send(account,...args);};
+  h.gateway.start();await until(()=>h.gateway.snapshot().status==='expired');
+  h.api.qrStatus=async()=>({status:'confirmed',ilink_bot_id:'bot',bot_token:'renewed-token',ilink_user_id:'owner'});
+  await h.login();assert.equal(h.saved.account.token,'renewed-token');assert.equal(h.gateway.snapshot().error,'');
+  h.push(h.message('recovered-status','/status'));await until(()=>h.sent.length>0);
+  assert.equal(h.gateway.snapshot().status,'connected');assert.equal(h.saved.enabled,true);
+});
+test('invalid login survives restart and cannot be resumed with the stale token',async t=>{
+  const h=harness(t);await h.login();h.updateError=Object.assign(Error('invalid token'),{code:-14});h.push();
+  await until(()=>h.gateway.snapshot().status==='expired');h.gateway.close();
+  const reboot=harness(t,h.saved);
+  assert.equal(reboot.gateway.snapshot().status,'expired');
+  await assert.rejects(reboot.gateway.action('enable',true),/重新扫码/);
+  assert.equal(reboot.saved.enabled,false);
+  await reboot.login();assert.equal(reboot.gateway.snapshot().status,'connected');
+  assert.equal(reboot.saved.account.stale,undefined);
+});
+test('already-bound QR terminates with recovery guidance instead of polling until timeout',async t=>{
+  const h=harness(t,fresh());let calls=0;
+  h.api.qrStatus=async()=>{calls++;return {status:'binded_redirect'};};
+  await h.gateway.action('login');await tick();
+  assert.equal(h.gateway.snapshot().status,'error');assert.equal(h.gateway.snapshot().qr,null);
+  assert.match(h.gateway.snapshot().error,/已有连接|原连接/);assert.equal(calls,1);
+});
 test('new conversation drops only that sender context and revoked users cannot finish queued work',async t=>{
   const h=harness(t);await h.login();h.push(h.message('1','排查'));await until(()=>h.runs.length===1);h.runs[0].options.onSession('old-thread');h.runs[0].resolve('done');await until(()=>!h.gateway.snapshot().active);
   h.push(h.message('2','/new'));await until(()=>h.saved.bindings[bindingKey('bot','owner')].threadId==='');h.push(h.message('3','继续'));await until(()=>h.runs.length===2);assert.equal(h.runs[1].options.session,undefined);
