@@ -24,7 +24,7 @@ const capture=async(page,name)=>{if(screenshots)await page.screenshot({path:path
   await panel.waitForSelector('.ui-card');
   const controlKeys=['minHeight','fontFamily','fontSize','borderRadius','borderColor','borderWidth'];
   const expectedControl=await appearance(panel,'#quota-group-button',controlKeys);
-  for(const selector of ['#shortcuts-triple','#quota-columns-button','#mail-email','#mail-type','#quota-pet-yellow','#subscriptions-input']) {
+  for(const selector of ['#wechat-add-connection','#shortcuts-triple','#quota-columns-button','#mail-email','#mail-type','#quota-pet-yellow','#subscriptions-input']) {
     assert.deepEqual(await appearance(panel,selector,controlKeys),selector==='#subscriptions-input'?{...expectedControl,fontSize:'14px'}:expectedControl,selector+' shares control appearance');
   }
   const expectedButton=await appearance(panel,'#quota-refresh',controlKeys);
@@ -45,19 +45,37 @@ const capture=async(page,name)=>{if(screenshots)await page.screenshot({path:path
     const box=document.getElementById('quota-group-options');
     const option=document.createElement('button');option.setAttribute('role','option');option.setAttribute('aria-selected','true');option.textContent='测试分组';box.append(option);
     const template=document.getElementById('quota-pet-config-template');document.getElementById('quota-pet-extra-configs').append(template.content.cloneNode(true));
+    // 展开真实结构并加入超长身份标识，避免只检查收起的控件而漏掉系统菜单或溢出。
+    for(const prefix of ['shortcuts']) {
+      const option=document.createElement('button');option.className='ui-menu-item';option.setAttribute('role','option');option.setAttribute('aria-selected','true');
+      const text=document.createElement('span');text.className='ui-select-content';text.textContent='微信 1 · 已连接';
+      const detail=document.createElement('small');detail.className='ui-select-description';detail.textContent='long-account-identity-'.repeat(8)+'@im.wechat';text.append(detail);option.append(text);
+      document.getElementById(prefix+'-options').append(option);
+    }
+    const account=document.createElement('button');account.className='ui-choice';account.setAttribute('aria-pressed','true');account.textContent='long-account-name-'.repeat(12);document.getElementById('wechat-connections').append(account);
   });
   const selectionKeys=['backgroundColor','color','borderRadius'];
   const expectedSelection=await appearance(panel,'#quota-group-options button',selectionKeys);
+  for(const selector of ['#wechat-connections button','#shortcuts-options button'])assert.deepEqual(await appearance(panel,selector,selectionKeys),expectedSelection);
   for(const width of [1060,860]) {
     await app.evaluate(({BrowserWindow},width)=>BrowserWindow.getAllWindows()[0].setSize(width,770),width);
     for(const view of ['home','hooks','wechat','mail','subscriptions','archery','quota','shortcuts']) {
       await panel.evaluate(view=>{
         for(const name of ['home','hooks','wechat','mail','subscriptions','archery','quota','shortcuts'])document.getElementById(name+'-view').hidden=name!==view;
-        for(const id of ['mail-options','wechat-client-options'])document.getElementById(id).open=true;
+        document.getElementById('mail-options').open=true;
         document.getElementById('mail-settings').hidden=false;
       },view);
       await panel.waitForTimeout(30);
       assert.ok(await panel.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`${view} fits ${width}px`);
+      if(view==='wechat') {
+        assert.ok(await panel.locator('#wechat-connections').evaluate(el=>el.scrollWidth<=el.clientWidth),'长账号名称在卡片内换行');
+        await panel.evaluate(()=>document.getElementById('wechat-settings-dialog').showModal());
+        const dialog=await panel.locator('#wechat-settings-dialog').boundingBox();
+        assert.ok(dialog.x>=0&&dialog.x+dialog.width<=width,'微信设置不超出窗口');
+        assert.ok(await panel.locator('#wechat-settings-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),'设置内容不横向溢出');
+        await capture(panel,'wechat-settings-'+width);
+        await panel.evaluate(()=>document.getElementById('wechat-settings-dialog').close());
+      }
       await capture(panel,view+'-'+width);
     }
   }

@@ -39,6 +39,7 @@ test('same sender and message IDs remain isolated, tasks run globally in order a
   const h=harness(t,pair());h.manager.start();
   h.push('bot-a','same-message','任务 A');h.push('bot-b','same-message','任务 B');
   await until(()=>h.saved.connections.every(c=>c.state.jobs.length===1));
+  assert.deepEqual(h.manager.snapshot().connections.map(connection=>connection.taskCount),[1,1],'未选中的微信也提供任务数量，不下发任务正文');
   assert.equal(h.runs.length,1);assert.equal(h.runs[0].options.text,'任务 A');
   await h.manager.action('select-connection','b');
   await assert.rejects(h.manager.action('enable',false),/选择/);
@@ -111,4 +112,24 @@ test('interrupted jobs in a paused account cannot fill the queue after restart',
   const h=harness(t,initial);h.manager.start();h.push('bot-b','new-task','新的任务');
   await until(()=>h.saved.connections[1].state.seen.length===2);
   assert.equal(h.runs.length,1,'restart interruption must release global queue capacity');
+});
+
+test('display names persist independently without changing identity, authorization or jobs',async t=>{
+  const h=harness(t,pair());h.manager.start();
+  await h.action('a','rename-connection','工作微信');await h.action('a','rename-user',{sender:'owner',name:'我自己'});
+  await h.action('b','rename-connection','个人微信');await h.action('b','rename-user',{sender:'owner',name:'另一个自己'});
+  h.push('bot-a','named-task','测试备注后的任务');await until(()=>h.runs.length===1);
+  assert.equal(h.saved.connections[0].name,'工作微信');assert.equal(h.saved.connections[0].state.account.id,'bot-a');
+  assert.deepEqual(h.saved.connections[0].state.allowed,['owner']);
+  h.runs[0].resolve('完成');await until(()=>h.sent.some(x=>x.text==='完成'));
+  h.manager.close();const reboot=harness(t,h.saved);reboot.manager.start();
+  assert.deepEqual(reboot.manager.snapshot().connections.map(c=>c.name),['工作微信','个人微信']);
+  assert.equal(reboot.manager.snapshot().contactNames.owner,'我自己');
+  await reboot.manager.action('select-connection','b');assert.equal(reboot.manager.snapshot().contactNames.owner,'另一个自己');
+  const before=structuredClone(reboot.saved);
+  await assert.rejects(reboot.action('b','rename-user',{sender:'stranger',name:'陌生人'}),/联系人/);
+  await assert.rejects(reboot.action('b','rename-connection','a'.repeat(41)),/40/);
+  assert.deepEqual(reboot.saved,before);
+  const malformed=pair();malformed.connections[0].contactNames=[];const invalid=harness(t,malformed);
+  await assert.rejects(invalid.manager.action('add-connection'),/备注格式/);assert.deepEqual(invalid.saved,malformed);
 });
