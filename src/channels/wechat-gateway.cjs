@@ -419,9 +419,13 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
     const {sender,text}=message,entry=menu.settings,value=text.trim();
     if(sender!==state.account.owner){delete menu.settings;reply(sender,'仅扫码账号本人可以修改用户信息。');return;}
     if(Date.now()>=entry.expiresAt){delete menu.settings;reply(sender,'设置已超时，未修改用户信息。请重新发送 /settings。');return;}
+    if(value==='0'&&entry.stage==='avatar') {
+      entry.stage='profile';entry.id=randomUUID();delete entry.avatarViewed;
+      reply(sender,profileMenu(sender));return;
+    }
     if(['0','取消','退出'].includes(value)){delete menu.settings;reply(sender,'已退出设置。');return;}
     let current=entry.stage;
-    if(current==='profile'&&entry.avatarViewed&&(message.images?.length||value==='清空')) {
+    if(current==='profile'&&entry.avatarViewed&&(message.images?.length||['清空','删除'].includes(value))) {
       // 看过头像后可直接换图；复用编辑校验，并作废未送达的旧预览。
       current='avatar';entry.stage=current;entry.id=randomUUID();delete entry.avatarViewed;
     }
@@ -443,19 +447,20 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
       if(!field){reply(sender,'请回复 1 修改昵称、2 修改备注名、3 修改头像'+(userInfo.read(sender).avatar?'、4 查看头像':'')+'，或回复 0 退出。');return;}
       // 开始修改即作废之前的查看请求，避免保存后回到菜单时补发旧头像。
       entry.stage=field;entry.id=randomUUID();delete entry.avatarViewed;
-      reply(sender,field==='avatar'?'请发送一张头像图片（PNG/JPEG，最大 4 MB）。发送“清空”移除头像，回复 0 取消。':`请输入${field==='nickname'?'昵称':'备注名'}（40 字以内的单行文字）。发送“清空”恢复默认，回复 0 取消。`);return;
+      reply(sender,field==='avatar'?'1. 替换头像，直接发送要设置的头像图片（PNG/JPEG，最大 4 MB）\n2. 删除头像，回复 “删除”\n3. 回复 0 返回上一级':`请输入${field==='nickname'?'昵称':'备注名'}（40 字以内的单行文字）。发送“清空”恢复默认，回复 0 取消。`);return;
     }
-    let updated=value==='清空'?'':value;
-    if(current==='avatar'&&value!=='清空') {
-      if(message.images?.length!==1||text){reply(sender,'请单独发送一张头像图片，或回复 0 取消。');return;}
+    const clearing=value==='清空'||(current==='avatar'&&value==='删除');
+    let updated=clearing?'':value;
+    if(current==='avatar'&&!clearing) {
+      if(message.images?.length!==1||text){reply(sender,'请单独发送一张头像图片，回复“删除”移除头像，或回复 0 返回上一级。');return;}
       try {
         const bytes=await api.image(message.images[0],queryContext(bindingKey(state.account.id,sender)).signal);
         // 暂停、解绑或退出设置后，迟到的下载结果不能再覆盖用户资料。
         if(!valid()||menu.settings!==entry)return;
         if(Date.now()>=entry.expiresAt){delete menu.settings;reply(sender,'设置已超时，未修改头像。请重新发送 /settings。');return;}
         updated=normalizeAvatar(bytes);
-      }catch{if(valid()&&menu.settings===entry)reply(sender,'头像读取失败，请发送 4 MB 以内的 PNG/JPEG 图片重试，或回复 0 取消。原头像已保留。');return;}
-    } else if(message.images?.length||(!updated&&value!=='清空')){reply(sender,'请发送文字，或回复 0 取消。');return;}
+      }catch{if(valid()&&menu.settings===entry)reply(sender,'头像读取失败，请发送 4 MB 以内的 PNG/JPEG 图片重试，或回复 0 返回上一级。原头像已保留。');return;}
+    } else if(message.images?.length||(!updated&&!clearing)){reply(sender,'请发送文字，或回复 0 取消。');return;}
     // 仅在持久化成功后返回资料菜单；保存失败沿用停收策略，不能回报修改成功。
     userInfo.update(sender,current,updated);entry.stage='profile';
     reply(sender,profileMenu(sender,`${{nickname:'昵称',remark:'备注名',avatar:'头像'}[current]}已${updated?'保存':'清空'}。`));
