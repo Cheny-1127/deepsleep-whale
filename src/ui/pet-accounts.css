@@ -2,7 +2,6 @@
 
 html, body { height: 100%; overflow: hidden; }
 .ranking-card { height: 100%; display: flex; flex-direction: column; }
-#hint { margin: 5px 0 10px; color: var(--ui-text-subtle); font-size: var(--ui-font-caption); }
 #accounts { --ui-menu-item-padding: 9px 7px; overflow-y: auto; min-height: 0; }
 #accounts button { justify-content: flex-start; gap: 9px; }
 .account-check { width: 15px; flex-shrink: 0; color: var(--ui-accent); }

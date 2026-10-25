@@ -51,7 +51,13 @@ createQuotaView();
 createGroupUsageView();
 createKeyUsageView();
 createPetQuotaSettingsView();
-createPetQuotaView();
+createPetQuotaView({say:text=>{
+  $('speech').textContent=text;
+  speechUntil=Date.now()+3600;
+  $('speech').hidden=false;
+  $('speech').classList.remove('quiet');
+  $('speech').classList.add('quota-feedback');
+}});
 const shortcutsView=createShortcutsView();
 if ($('special-actions')) {
   for (const [id, clip] of Object.entries(SPECIAL_ACTIONS)) {
@@ -100,6 +106,7 @@ function render(data) {
   if (visualKey!==nextKey) {
     visualKey=nextKey;
     const words=copy[current] || copy.idle;
+    $('speech').classList.remove('quota-feedback');
     $('speech').textContent=words[1+(phrase++%(words.length-1))];
     speechUntil=Date.now()+3600;
     // 用播放版本区分 URL，让重复摸头等同名动作也能从第一帧重新播放。

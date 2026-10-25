@@ -8,6 +8,8 @@ button,input{-webkit-app-region:no-drag}.studio{display:flex;background:var(--ui
 /* Let the native GIF movements carry the character; keep idle chrome quiet. */
 .floating .speech{transition:opacity .25s}.floating .speech.quiet{opacity:0;pointer-events:none}
 .speech.attention{border-color:#d1a668;background:#fff9eb;color:#8d612c}
+#speech.quota-feedback{background:#fff7d6;border-color:#e6d496;color:#79632d}
+#speech.quota-feedback:after{background:#fff7d6;border-color:#e6d496}
 .floating .pet-controls{opacity:0;pointer-events:none;transition:opacity .2s}
 .floating:has(.pet-art:hover) .pet-controls,.floating .pet-controls:hover,.floating:has(.pet-art:focus-visible) .pet-controls,.floating .pet-controls:has(:focus-visible){opacity:1;pointer-events:auto}
 .floating .pet-art{cursor:grab;touch-action:none}.floating .pet-art:active{cursor:grabbing}

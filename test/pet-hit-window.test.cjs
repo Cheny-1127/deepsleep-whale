@@ -59,3 +59,10 @@ test('startup can omit the panel completely while explicit opening still creates
   f.api.showPanel();
   assert.equal(f.windows.length,2);assert.equal(f.api.isPanel(f.windows[1].webContents),true);
 });
+test('account picker skips opening when at most one account is available',async()=>{
+  const f=fixture({showPanelOnStartup:false});
+  for(const accounts of [[],[{id:1,name:'唯一账号'}]]) {
+    assert.equal(await f.api.chooseTrackingAccount(accounts,1),null);
+    assert.equal(f.windows.length,1,'must not create an account picker window');
+  }
+});
