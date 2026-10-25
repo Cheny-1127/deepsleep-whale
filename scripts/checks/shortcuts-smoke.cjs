@@ -46,7 +46,7 @@ let app;
   for(const width of [860,1060]){
     await app.evaluate(({BrowserWindow},value)=>BrowserWindow.getAllWindows().find(win=>win.webContents.getURL().endsWith('/index.html')).setSize(value,770),width);
     await trigger.click();
-    const menu=await panel.locator('#shortcuts-picker .quota-group-menu').boundingBox(),field=await trigger.boundingBox();
+    const menu=await panel.locator('#shortcuts-picker .ui-select-menu').boundingBox(),field=await trigger.boundingBox();
     assert.equal(Math.round(menu.width),Math.round(field.width),'菜单与控件等宽');
     assert.ok(menu.x>=0&&menu.x+menu.width<=width&&menu.y+menu.height<=770,'展开菜单位于窗口内');
     await panel.screenshot({path:`/tmp/whale-shortcuts-menu-${width}.png`});
