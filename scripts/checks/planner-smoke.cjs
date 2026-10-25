@@ -5,7 +5,9 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('n
 const root=path.resolve(__dirname,'../..'),dir=fs.mkdtempSync('/tmp/whale-planner-ui-'),out=path.join(root,'out');
 fs.mkdirSync(out,{recursive:true});
 const bootstrap=path.join(dir,'bootstrap.cjs');
-fs.writeFileSync(bootstrap,`const {Notification}=require('electron');global.plannerNow=+new Date('2026-10-26T10:00:00');global.plannerNotices=[];global.plannerClosed=[];global.plannerChimes=0;
+// 必须先安装窗口策略，再加载应用模块；创建后才 hide 无法阻止启动闪窗。
+fs.writeFileSync(bootstrap,`require(${JSON.stringify(path.join(__dirname,'test-window-policy.cjs'))}).installTestWindowPolicy();
+const {Notification}=require('electron');global.plannerNow=+new Date('2026-10-26T10:00:00');global.plannerNotices=[];global.plannerClosed=[];global.plannerChimes=0;
 Notification.isSupported=()=>true;Notification.prototype.show=function(){global.plannerNotices.push(this.body);};Notification.prototype.close=function(){global.plannerClosed.push(this.body);};
 const presence=require(${JSON.stringify(path.join(root,'src/clients/presence.cjs'))});presence.readClientPresence=async()=>({codex:false,cursor:false});
 const archery=require(${JSON.stringify(path.join(root,'src/channels/archery-pending.cjs'))}),createArchery=archery.createArcheryPending;archery.createArcheryPending=options=>createArchery({...options,readConfig:()=>{throw Object.assign(Error('测试隔离'),{archeryConfig:true});}});
@@ -14,6 +16,17 @@ const windows=require(${JSON.stringify(path.join(root,'src/app/windows.cjs'))}),
 require(${JSON.stringify(path.join(root,'src/main.cjs'))});`);
 let app,panel,pet;
 const errors=[];
+async function assertWindowPolicy() {
+  // 同时检查当前状态和历史事件，曾短暂显示或抢焦点再恢复，也不能算通过。
+  const state=await app.evaluate(({BrowserWindow})=>({...global.testWindowPolicy,
+    windows:BrowserWindow.getAllWindows().map(win=>({url:win.webContents.getURL(),visible:win.isVisible(),focused:win.isFocused(),top:win.isAlwaysOnTop()}))}));
+  assert.ok(state.windows.every(win=>!win.focused&&!win.top),'测试窗口不能抢焦点或置顶');
+  assert.equal(state.events.some(event=>event.type==='focus'),false,'测试全程不能获得焦点');
+  if(state.mode==='hidden') {
+    assert.ok(state.windows.every(win=>!win.visible),'默认隐藏全部测试窗口：'+JSON.stringify(state));
+    assert.equal(state.events.some(event=>event.type==='show'),false,'隐藏测试全程不能展示窗口');
+  }
+}
 async function launch() {
   app=await electron.launch({executablePath:require('electron'),args:[bootstrap],env:{...process.env,CODEX_HOME:dir,WHALE_DATA_DIR:dir,WHALE_QUOTA_TOKEN_FILE:path.join(dir,'missing-token')}});
   app.on('window',page=>page.on('pageerror',error=>errors.push(error.message)));
@@ -25,7 +38,7 @@ async function launch() {
   assert.ok(panel&&pet);
   await panel.waitForFunction(async()=>Boolean((await window.whale.snapshot()).planner));
   for(const page of [panel,pet])await page.evaluate(time=>{Date.now=()=>time;},+new Date('2026-10-26T10:00:00'));
-  await app.evaluate(({BrowserWindow})=>{for(const win of BrowserWindow.getAllWindows())if(win.webContents.getURL().endsWith('/index.html')){win.show();win.focus();}else win.hide();});
+  await assertWindowPolicy();
   await panel.locator('#nav-planner').click();
   await panel.waitForSelector('#planner-add-item');
   await panel.waitForFunction(()=>document.getElementById('planner-work-summary').textContent.includes('10:00'));
@@ -197,7 +210,6 @@ async function addTask(title,deadline) {
   await panel.screenshot({path:path.join(out,'planner-editor.png')});
   await panel.keyboard.press('Escape');await panel.locator('#planner-cancel-item').click();
   await advance('2026-10-26T10:13:00');await pet.waitForFunction(()=>!document.getElementById('planner-bubble').hidden);
-  await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().find(win=>win.webContents.getURL().endsWith('/pet.html')).showInactive());
   await pet.screenshot({path:path.join(out,'planner-pet.png'),omitBackground:true});
   assert.equal(await pet.locator('#planner-bubble').evaluate(el=>Math.round(el.getBoundingClientRect().width)),236);
   await advance('2026-10-26T15:00:00');assert.ok(await app.evaluate(()=>global.plannerChimes)>0);
@@ -223,7 +235,19 @@ async function addTask(title,deadline) {
   await allDayCard.getByRole('button',{name:'开始处理',exact:true}).click();
   await advance('2026-10-27T00:00:00');assert.equal((await snapshot()).active[0].state,'processing');
   await advance('2026-10-27T00:01:00');assert.equal((await snapshot()).reminders.find(item=>item.id===allDayItem.id).run.dueAt,+new Date('2026-10-27T00:03:00'));
-  panel.once('dialog',dialog=>dialog.accept());await allDayCard.getByRole('button',{name:'删除',exact:true}).click();await panel.waitForFunction(()=>document.querySelectorAll('.planner-reminder').length===3);
+  // 原生 confirm 会展示隐藏的父窗口；静默测试拦截确认结果并核对文案与删除行为。
+  if(process.env.WHALE_TEST_WINDOWS!=='inactive') {
+    await panel.evaluate(()=>{window.plannerOriginalConfirm=window.confirm;window.plannerConfirmMessages=[];window.confirm=message=>{window.plannerConfirmMessages.push(message);return false;};});
+    await allDayCard.getByRole('button',{name:'删除',exact:true}).click();
+    assert.equal((await snapshot()).reminders.some(item=>item.id===allDayItem.id),true,'取消删除保留提醒');
+    await panel.evaluate(()=>{window.confirm=message=>{window.plannerConfirmMessages.push(message);return true;};});
+  } else panel.once('dialog',dialog=>dialog.accept()); // 观察模式保留原生确认框，供窗口行为检查。
+  await allDayCard.getByRole('button',{name:'删除',exact:true}).click();await panel.waitForFunction(()=>document.querySelectorAll('.planner-reminder').length===3);
+  if(process.env.WHALE_TEST_WINDOWS!=='inactive') {
+    assert.deepEqual(await panel.evaluate(()=>window.plannerConfirmMessages),['删除提醒「全天休息」？','删除提醒「全天休息」？']);
+    await panel.evaluate(()=>{window.confirm=window.plannerOriginalConfirm;delete window.plannerOriginalConfirm;delete window.plannerConfirmMessages;});
+  }
+  await assertWindowPolicy();
   // 分类是筛选条件；在新建事项中选择类型和个人，保存后跳到对应分类。
   await panel.locator('[data-category="personal"]').click();
   assert.equal(await panel.locator('.planner-reminder').count(),0);assert.equal(await panel.locator('.planner-task').count(),0);
@@ -266,10 +290,10 @@ async function addTask(title,deadline) {
     assert.equal(await panel.locator('#planner-reminders').isVisible(),true);assert.equal(await panel.locator('#planner-tasks').isVisible(),true);
     await panel.locator('#planner-heading').scrollIntoViewIfNeeded();await panel.screenshot({path:path.join(out,`planner-overview-${width}.png`),fullPage:true});
   }
-  const saved=await snapshot();await app.close();app=null;await launch();
+  const saved=await snapshot();await assertWindowPolicy();await app.close();app=null;await launch();
   assert.equal((await snapshot()).reminders.length,4);assert.equal((await snapshot()).tasks.length,5);
   assert.equal(await panel.locator('[data-category="all"]').getAttribute('aria-pressed'),'true');
   await panel.locator('[data-category="personal"]').click();assert.equal(await panel.locator('.planner-reminder').count(),1);assert.equal(await panel.locator('.planner-task').count(),1);
   assert.deepEqual((await snapshot()).tasks,saved.tasks);
-  assert.deepEqual(errors,[]);console.log('Planner Electron smoke OK: scheduling, IPC, notifications, tasks, persistence, failure recovery and layout');
+  await assertWindowPolicy();assert.deepEqual(errors,[]);console.log('Planner Electron smoke OK: scheduling, IPC, notifications, tasks, persistence, failure recovery, layout and window policy');
 }finally{if(app)await app.close();fs.rmSync(dir,{recursive:true,force:true});}})().catch(error=>{console.error(error);process.exitCode=1;});
