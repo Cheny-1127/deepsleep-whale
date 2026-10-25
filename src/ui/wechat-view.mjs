@@ -6,13 +6,16 @@ export function createWechatView() {
   let latest,dirty=false,busy=false,rowsKey='',jobsKey='',selectedChat='',openTask='',detailVersion=0,clientKey='',draft=[];
   const taskDetails=new Map(),taskRows=new Map();
   let discovery=null,discoveryKey='',scanning=false,discoveryError='';
+  let connectionId='',connectionsKey='';const connectionDrafts=new Map();
+  // 发起请求时固定账号，异步返回期间切换页面不会改变该操作的目标。
+  const scoped=(value,id=latest?.selectedConnectionId)=>id?{connectionId:id,value}:value;
   function element(tag,text,className){const node=document.createElement(tag);if(text)node.textContent=text;if(className)node.className=className;return node;}
   async function toggleTask(job) {
     openTask=openTask===job.id?'':job.id;
     if(!openTask||taskDetails.has(job.id)){drawJobs(latest.jobs,job.id);return;}
     const entry={loading:true};taskDetails.set(job.id,entry);drawJobs(latest.jobs,job.id);
     try {
-      const result=await window.whale.wechat('task-detail',job.id);
+      const result=await window.whale.wechat('task-detail',scoped(job.id));
       if(result.error)throw new Error(result.error);
       entry.value=result.value;
     }catch(error){entry.error=error.message||'内容读取失败，请收起后重试。';}
@@ -176,7 +179,7 @@ export function createWechatView() {
     if(name==='discover-clients'){scanning=true;discoveryError='';}
     busy=true;$('feedback').textContent='';render(latest);
     try {
-      const result=await window.whale.wechat(name,value);
+      const result=await window.whale.wechat(name,['select-connection','add-connection'].includes(name)?value:scoped(value));
       if(result.error)throw new Error(result.error);
       if(name==='save-clients'){dirty=false;clientKey='';}
       if(name==='discover-clients'){discovery=result.value;discoveryKey='';}
@@ -191,12 +194,29 @@ export function createWechatView() {
   $('settings').addEventListener('submit',event=>{event.preventDefault();void act('save-clients',readDraft());});
   for(const backend of ['codex','cursor'])$('add-'+backend).addEventListener('click',()=>editClients(list=>[...list,{id:'client-'+crypto.randomUUID(),name:backend==='codex'?'Codex '+(list.length+1):'Cursor CLI',backend,enabled:true,binary:'',configHome:'',profile:''}]));
   for(const name of ['login','retry','cancel-login'])$(name).addEventListener('click',()=>void act(name));
+  $('connection').addEventListener('change',()=>void act('select-connection',$('connection').value));
+  $('add-connection').addEventListener('click',()=>void act('add-connection'));
   $('check').addEventListener('click',()=>void act('discover-clients'));
   $('client-options').addEventListener('toggle',()=>{if($('client-options').open&&latest&&!discovery&&!busy)void act('discover-clients');});
   $('toggle').addEventListener('click',()=>void act('enable',!latest?.enabled));
-  $('forget').addEventListener('click',()=>{if(window.confirm('解绑将清除本机微信凭据、选择记录和待投递结果，并停止任务；客户端自身的聊天历史不受影响。'))void act('forget');});
+  $('forget').addEventListener('click',()=>{if(window.confirm('解绑当前微信将清除它的本机凭据、选择记录和待投递结果，并停止它的任务；其他微信连接和客户端自身的聊天历史不受影响。'))void act('forget');});
   function render(data) {
-    latest=data;if(!data)return;
+    if(!data)return;
+    if(connectionId!==data.selectedConnectionId) {
+      // 每个连接保留自己的客户端草稿；切换账号不覆盖未保存配置或带入上个账号的任务正文。
+      if(connectionId)connectionDrafts.set(connectionId,{draft:readDraft(),dirty});
+      connectionId=data.selectedConnectionId;const saved=connectionDrafts.get(connectionId);
+      dirty=Boolean(saved?.dirty);draft=saved?.draft||data.clients.map(client=>({...client}));clientKey='';
+      rowsKey='';jobsKey='';selectedChat='';openTask='';detailVersion++;taskDetails.clear();taskRows.clear();$('jobs').replaceChildren();
+      discovery=null;discoveryKey='';discoveryError='';drawClients();
+    }
+    latest=data;
+    const connections=data.connections||[],nextConnectionsKey=JSON.stringify(connections);
+    if(connectionsKey!==nextConnectionsKey){
+      connectionsKey=nextConnectionsKey;$('connection').replaceChildren();
+      for(const item of connections){const option=element('option',`${item.name}${item.account?' · '+(item.account.owner||item.account.id):' · 待扫码'} · ${statuses[item.status]||item.status}`);option.value=item.id;$('connection').append(option);}
+    }
+    $('connection').value=data.selectedConnectionId||'';$('connection').disabled=busy;
     const nextClientKey=JSON.stringify(data.clients);
     // 主进程持续广播任务状态，不能因此覆盖用户尚未保存的客户端配置。
     if(!dirty&&nextClientKey!==clientKey){clientKey=nextClientKey;draft=data.clients.map(client=>({...client}));drawClients();}
@@ -211,6 +231,8 @@ export function createWechatView() {
     $('toggle').hidden=!data.account;$('toggle').textContent=data.enabled?'暂停接收':'恢复接收';
     $('forget').hidden=!data.account&&!data.error;
     for(const button of $('view').querySelectorAll('button'))button.disabled=busy||button.dataset.edge==='true';
+    $('add-connection').disabled=busy||!data.storageAvailable||connections.length>=(data.connectionLimit||8);
+    $('login').textContent=data.account?'重新扫码':'扫码连接';
     $('login').disabled=busy||!data.storageAvailable||Boolean(data.qr)||Boolean(data.active);
     const locked=busy||Boolean(data.active)||data.jobs.some(job=>['queued','recovering'].includes(job.state));
     for(const input of $('settings').querySelectorAll('input,select,button'))input.disabled=locked||input.dataset.edge==='true';
