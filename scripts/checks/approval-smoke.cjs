@@ -14,7 +14,13 @@ const hooks=Object.entries(createCodexConfig().hooks).map(([event,groups])=>({ev
 const bin=path.join(dir,'codex-fixture');
 fs.writeFileSync(bin,'#!'+process.execPath+'\n'+`require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(m.id)process.stdout.write(JSON.stringify({id:m.id,result:m.id===1?{}:m.id===3?{config:{}}:m.id===4?{requirements:null}:{data:[{hooks:${JSON.stringify(hooks)},errors:[]}]}})+'\\n');});`,{mode:0o700});
 const bootstrap=path.join(dir,'bootstrap.cjs');
-fs.writeFileSync(bootstrap,`const cp=require('node:child_process'),original=cp.execFile;cp.execFile=function(file,args,options,callback){if(file==='/bin/ps'&&args.join(' ')==='-axo comm='){setImmediate(()=>callback(null,'/Applications/ChatGPT.app/Contents/MacOS/ChatGPT'));return;}return original.apply(this,arguments);};require(${JSON.stringify(path.join(root,'src/main.cjs'))});`);
+// 隐藏窗口，并隔离外部跳转和辅助功能操作；回归测试不能把用户的 Codex 拉到前台。
+fs.writeFileSync(bootstrap,`require(${JSON.stringify(path.join(__dirname,'test-window-policy.cjs'))}).installTestWindowPolicy();
+const {shell}=require('electron');global.openedChatURLs=[];global.latestLocations=[];global.failLatestLocation=false;
+shell.openExternal=async url=>{global.openedChatURLs.push(url);};
+const chats=require(${JSON.stringify(path.join(root,'src/clients/codex-chat.cjs'))}),createChats=chats.createCodexChatOpener;
+chats.createCodexChatOpener=options=>createChats({...options,locateLatest:async value=>{global.latestLocations.push(value);if(global.failLatestLocation)throw Error('测试定位失败，提醒已保留');}});
+const cp=require('node:child_process'),original=cp.execFile;cp.execFile=function(file,args,options,callback){if(file==='/bin/ps'&&args.join(' ')==='-axo comm='){setImmediate(()=>callback(null,'/Applications/ChatGPT.app/Contents/MacOS/ChatGPT'));return;}return original.apply(this,arguments);};require(${JSON.stringify(path.join(root,'src/main.cjs'))});`);
 fs.writeFileSync(path.join(dir,'settings.json'),JSON.stringify({sources:{codex:true},notifications:false,sound:false}));
 const frame=m=>{const b=Buffer.from(JSON.stringify(m)),h=Buffer.alloc(4);h.writeUInt32LE(b.length);return Buffer.concat([h,b]);};
 const clients=new Set(),received=[],revisions=new Map(),watched=new Set(),runtimeStates=new Map(ids.map(id=>[id,true]));let app,panel,pet;
@@ -32,6 +38,17 @@ async function hook(name,id){const before=(await snapshot()).activity.count;awai
  await wait(async()=>{const s=await snapshot();return s.bridge&&s.hookAvailability.codex.state==='checked';});
  for(const id of ids){await hook('PreToolUse',id);await hook('PermissionRequest',id);}
  await wait(async()=>watched.size===2&&(await snapshot()).activity.pending===2&&(await snapshot()).codexApprovalSync.lastSyncedAt>0);
+ // 桌宠点击待处理任务：打开正确聊天后请求定位；定位失败不能消除待处理状态。
+ await pet.getByRole('button',{name:'授权测试 0',exact:true}).click();
+ await wait(async()=>(await app.evaluate(()=>global.latestLocations)).length===1);
+ assert.deepEqual(await app.evaluate(()=>global.latestLocations),[{sessionId:ids[0],title:'授权测试 0'}]);
+ assert.deepEqual(await app.evaluate(()=>global.openedChatURLs),[`codex://threads/${ids[0]}`]);
+ assert.equal((await snapshot()).activity.pending,2);
+ await app.evaluate(()=>{global.failLatestLocation=true;});
+ await pet.getByRole('button',{name:'授权测试 1',exact:true}).click();
+ await pet.waitForFunction(()=>!document.getElementById('completion-error').hidden&&document.getElementById('completion-error').textContent.includes('测试定位失败'));
+ assert.equal((await snapshot()).activity.pending,2);
+ await app.evaluate(()=>{global.failLatestLocation=false;});
  const before=await snapshot();
  sendRuntime(ids[0],false);
  await wait(async()=>{const s=await snapshot();return s.activity.pending===1&&s.activity.working===1;});
@@ -39,6 +56,11 @@ async function hook(name,id){const before=(await snapshot()).activity.count;awai
  assert.equal((await snapshot()).activity.unread,0);
  assert.equal((await snapshot()).activity.count,before.activity.count);
  assert.equal((await snapshot()).nurture.totalWorkSessions,before.nurture.totalWorkSessions);
+ // 恢复执行后仍应定位最新内容，不能把“是否待审批”作为滚动开关。
+ await panel.evaluate(id=>window.whale.action('open-chat',{sessionId:id}),ids[0]);
+ assert.equal((await app.evaluate(()=>global.latestLocations)).length,3);
+ assert.deepEqual((await app.evaluate(()=>global.latestLocations)).at(-1),{sessionId:ids[0],title:'授权测试 0'});
+ assert.equal((await app.evaluate(()=>global.openedChatURLs)).at(-1),`codex://threads/${ids[0]}`);
  // 另一聊天仍待处理；断线后仅收到“执行中”快照不能凭空认定它已经批准。
  runtimeStates.set(ids[1],false);
  for(const c of clients)c.destroy();
@@ -51,10 +73,24 @@ async function hook(name,id){const before=(await snapshot()).activity.count;awai
  await panel.evaluate(()=>window.whale.action('hook-event',{source:'codex',event:'PermissionRequest',enabled:false}));
  await wait(async()=>watched.size===0);
  assert.equal((await snapshot()).activity.working,2,'关闭单项接收只停止状态订阅');
+ // 完成通知同样查看最新聊天；定位失败保留未读，成功后才按原流程标为已读。
+ await hook('Stop',ids[0]);
+ await wait(async()=>(await snapshot()).activity.unread===1);
+ const notice=(await snapshot()).activity.notices[0];
+ await app.evaluate(()=>{global.failLatestLocation=true;});
+ await assert.rejects(panel.evaluate(value=>window.whale.action('open-chat',value),{sessionId:ids[0],noticeId:notice.id}),/测试定位失败/);
+ assert.equal((await snapshot()).activity.unread,1);
+ await app.evaluate(()=>{global.failLatestLocation=false;});
+ await panel.evaluate(value=>window.whale.action('open-chat',value),{sessionId:ids[0],noticeId:notice.id});
+ assert.equal((await snapshot()).activity.unread,0);
+ assert.equal((await app.evaluate(()=>global.latestLocations)).length,5);
+ assert.deepEqual((await app.evaluate(()=>global.latestLocations)).at(-1),{sessionId:ids[0],title:'授权测试 0'});
  await panel.evaluate(()=>window.whale.action('hook-source',{source:'codex',enabled:false}));
  await wait(async()=>watched.size===0&&(await snapshot()).activity.working===0);
  assert.ok(received.filter(m=>m.type==='request').every(m=>m.method==='initialize'));
  assert.ok(received.filter(m=>m.type==='broadcast').every(m=>m.method==='thread-stream-following-changed'));
  assert.deepEqual(errors,[]);
- console.log('PASS: live IPC approval resolution before tool return, parallel pending preserved, no completion/growth/count replay, reconnect, event/source switches, observer sends no approval decisions');
+ const policy=await app.evaluate(({BrowserWindow})=>({events:global.testWindowPolicy.events,windows:BrowserWindow.getAllWindows().map(w=>({visible:w.isVisible(),focused:w.isFocused(),top:w.isAlwaysOnTop()}))}));
+ assert.deepEqual(policy.events,[]);assert.ok(policy.windows.every(w=>!w.visible&&!w.focused&&!w.top));
+ console.log('PASS: pending/working/completed chats locate latest content, failed location retains reminders, live IPC approval resolution, parallel pending preserved, no completion/growth/count replay, reconnect, event/source switches, no approval decisions, hidden windows');
 }finally{if(app)await app.close();for(const c of clients)c.destroy();server.close();fs.rmSync(dir,{recursive:true,force:true});}})().catch(e=>{console.error(e);process.exitCode=1;});

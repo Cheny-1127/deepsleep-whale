@@ -6,13 +6,14 @@ const os = require('node:os');
 const { Activity } = require('../domain/activity.cjs');
 const { Behavior } = require('../domain/behavior.cjs');
 const SPECIAL_ACTIONS = require('../shared/special-actions.js');
-const { createTitleReader, createCursorTitleReader, chatUrl } = require('../clients/chat-metadata.cjs');
+const { createTitleReader, createCursorTitleReader } = require('../clients/chat-metadata.cjs');
 const { startBridge, dataDirectory } = require('../hooks/bridge.cjs');
 const nurture = require('../../vendor/nurture.cjs');
 const {SOURCES,sourceOf,eventName}=require('../shared/hook-events.cjs');
 const {createHookSettings}=require('./hook-settings.cjs');
 const {createWindows}=require('./windows.cjs');
 const {createCursorChatOpener}=require('../clients/cursor-chat.cjs');
+const {createCodexChatOpener}=require('../clients/codex-chat.cjs');
 const {readClientPresence}=require('../clients/presence.cjs');
 const {createCodexRuntime}=require('../clients/codex-runtime.cjs');
 const {createWechatApi}=require('../channels/wechat-api.cjs');
@@ -46,6 +47,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   let eventQueue=Promise.resolve();
   const cursorState=process.env.WHALE_CURSOR_STATE_DB||path.join(os.homedir(),'Library','Application Support','Cursor','User','globalStorage','state.vscdb');
   const cursorChats=createCursorChatOpener({stateFile:cursorState,openExternal:url=>shell.openExternal(url)});
+  const codexChats=createCodexChatOpener({openExternal:url=>shell.openExternal(url)});
   let completionExpanded=false,busyExpanded=false,reminderView=null;
   let bridgeError = '';
   const behavior = new Behavior();
@@ -151,9 +153,8 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
       await cursorChats.open(sessionId);
       if(activity.acknowledgeCursor(sessionId))saveReminders();
     } else {
-      const url=known&&chatUrl(sessionId);
-      if(!url)throw new Error('无法定位这个 Codex 聊天');
-      await shell.openExternal(url);
+      // 桌宠任务入口统一查看最新内容；不能只在待审批时定位，否则执行中和完成通知仍可能回到开头。
+      await codexChats.open(sessionId,{title:titles.title(sessionId)||''});
       if(activity.notices.some(item=>item.id===noticeId&&item.session_id===sessionId)) {
         activity.markRead(noticeId);saveReminders();
       }
