@@ -7,6 +7,38 @@ const path=require('node:path');
 const {createWechatApi,trustedBase,checkResult,incoming,splitText}=require('../src/channels/wechat-api.cjs');
 const {fresh,createWechatStore}=require('../src/channels/wechat-store.cjs');
 
+const previewAvatar='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jvXkAAAAASUVORK5CYII=';
+test('avatar preview uploads encrypted bytes without CDN credentials and sends a single image to the owner',async()=>{
+  const requests=[],bytes=Buffer.from(previewAvatar.split(',')[1],'base64');let upload;
+  const api=createWechatApi({fetchImpl:async(url,options)=>{
+    requests.push({url,...options});
+    if(url.endsWith('/getuploadurl')){upload=JSON.parse(options.body);return {ok:true,text:async()=>JSON.stringify({upload_param:'upload+/='})};}
+    if(url.startsWith('https://novac2c.cdn.weixin.qq.com/c2c/upload?'))return new Response('',{headers:{'x-encrypted-param':'download+/='}});
+    return {ok:true,text:async()=>'{}'};
+  }}),account={id:'bot',token:'private-token'};
+  const image=await api.uploadAvatar(account,'owner',previewAvatar);
+  await api.sendImage(account,'owner',image,'ctx','preview-id');
+  const {createDecipheriv,createHash}=require('node:crypto'),key=Buffer.from(upload.aeskey,'hex'),decipher=createDecipheriv('aes-128-ecb',key,null);
+  assert.deepEqual(Buffer.concat([decipher.update(requests[1].body),decipher.final()]),bytes);
+  assert.equal(upload.rawfilemd5,createHash('md5').update(bytes).digest('hex'));
+  assert.equal(upload.rawsize,bytes.length);assert.equal(upload.filesize,requests[1].body.length);
+  assert.equal(upload.media_type,1);assert.equal(upload.no_need_thumb,true);assert.equal(upload.to_user_id,'owner');
+  assert.equal(new URL(requests[1].url).searchParams.get('encrypted_query_param'),'upload+/=');
+  assert.equal(new URL(requests[1].url).searchParams.get('filekey'),upload.filekey);
+  assert.deepEqual(requests[1].headers,{'Content-Type':'application/octet-stream'});assert.equal(requests[1].redirect,'error');
+  assert.equal(requests[0].headers.Authorization,'Bearer private-token');assert.equal(requests[2].headers.Authorization,'Bearer private-token');
+  assert.deepEqual(JSON.parse(requests[2].body).msg,{from_user_id:'',to_user_id:'owner',client_id:'preview-id',message_type:2,message_state:2,item_list:[{type:2,image_item:{media:{encrypt_query_param:'download+/=',aes_key:Buffer.from(upload.aeskey).toString('base64'),encrypt_type:1},mid_size:upload.filesize}}],context_token:'ctx'});
+});
+test('avatar preview rejects untrusted upload URLs and invalid data before sending image bytes',async()=>{
+  for(const url of ['http://novac2c.cdn.weixin.qq.com/c2c/upload','https://novac2c.cdn.weixin.qq.com.evil.test/c2c/upload','https://user:pass@novac2c.cdn.weixin.qq.com/c2c/upload','https://novac2c.cdn.weixin.qq.com/c2c/download']){
+    let requests=0;const api=createWechatApi({fetchImpl:async()=>{requests++;return {ok:true,text:async()=>JSON.stringify({upload_full_url:url})};}});
+    await assert.rejects(api.uploadAvatar({token:'x'},'owner',previewAvatar),/上传地址/);assert.equal(requests,1);
+  }
+  const api=createWechatApi({fetchImpl:()=>assert.fail('invalid input must not access network')});
+  await assert.rejects(api.uploadAvatar({token:'x'},'owner','https://example.test/avatar'),/头像/);
+  const controller=new AbortController();controller.abort();await assert.rejects(api.uploadAvatar({token:'x'},'owner',previewAvatar,controller.signal),{name:'AbortError'});
+});
+
 test('iLink wire format retains account, cursor, context and stable delivery ID',async()=>{
   const requests=[],api=createWechatApi({fetchImpl:async(url,options)=>{requests.push({url,...options});return {ok:true,text:async()=>'{}'};}});
   const account={token:'private-test-token',baseUrl:'https://ilinkai.weixin.qq.com'};

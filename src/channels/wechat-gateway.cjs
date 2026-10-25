@@ -21,8 +21,8 @@ function wait(ms,signal) {
     const timer=setTimeout(end,ms);timer.unref?.();signal?.addEventListener('abort',end,{once:true});
   });
 }
-const HELP='/projects 查看最近项目（next 下一页）\n/project 编号或绝对路径 选择项目\n/chats [条数] 查看已有 Codex 对话（默认 5，最多 20）\n/chats next [条数] 查看下一页（表格中可回复 0 或 0 10）\n/chat 编号 继续已有对话\n/new [项目编号或绝对路径] 新建对话，下一条文字开始执行\n/clients 查看已启用客户端及优先级\n/client 编号或 auto 选择客户端\n/status 查看当前对话和任务\n/stop 停止任务\n/question 查看当前待回答问题\n/answer 问题编号 答案 回答指定问题\n/allow 编号 同意本次审批\n/deny 编号 拒绝审批\n/retry 重发待投递结果\n/help 查看帮助';
-const COMMANDS=new Set(['/projects','/project','/chats','/chat','/new','/clients','/client','/status','/stop','/question','/answer','/allow','/deny','/retry','/help']);
+const HELP='/projects 查看最近项目（next 下一页）\n/project 编号或绝对路径 选择项目\n/chats [条数] 查看已有 Codex 对话（默认 5，最多 20）\n/chats next [条数] 查看下一页（表格中可回复 0 或 0 10）\n/chat 编号 继续已有对话\n/new [项目编号或绝对路径] 新建对话，下一条文字开始执行\n/clients 查看已启用客户端及优先级\n/client 编号或 auto 选择客户端\n/status 查看当前对话和任务\n/stop 停止任务\n/question 查看当前待回答问题\n/answer 问题编号 答案 回答指定问题\n/allow 编号 同意本次审批\n/deny 编号 拒绝审批\n/retry 重发待投递结果\n/settings 用户信息设置（昵称、备注名、头像）\n/help 查看帮助';
+const COMMANDS=new Set(['/projects','/project','/chats','/chat','/new','/clients','/client','/status','/stop','/question','/answer','/allow','/deny','/retry','/settings','/help']);
 function parseCommand(text) {
   const input=text.trim(),[raw='']=input.split(/\s+/,1);
   // 只规范指令词，保留任务正文、路径和审批编号的原始内容。
@@ -50,7 +50,7 @@ function replyParts(text) {
   // 编号也占消息长度；预留空间后再分段，原文和编号一同持久化以供断点重投。
   return splitText(value,1768).map((part,index,all)=>`【结果 ${index+1}/${all.length}】\n\n${part}`);
 }
-function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThreads=listCodexThreads,readThread=readCodexThread,discoverClients=discoverRunningClients,onChange=()=>{},loginDelay=1000,pollDelay=500,questionTimeoutMs=300000,execution,validateAccount=()=>{},loginTokens=()=>[]}) {
+function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThreads=listCodexThreads,readThread=readCodexThread,discoverClients=discoverRunningClients,onChange=()=>{},loginDelay=1000,pollDelay=500,questionTimeoutMs=300000,execution,validateAccount=()=>{},loginTokens=()=>[],userInfo,normalizeAvatar}) {
   let state,loadError='',status='disconnected',error='',deliveryError='',failedDeliveryId='',deliveryRetryAt=0,deliveryFailures=0,qr=null,loginController,pollController,closed=false,active=null,flushing=false;
   const approvals=new Map(),inputs=new Map();
   const titleReaders=new Map();
@@ -162,6 +162,32 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
     state.outbox.push({id:randomUUID(),sender,parts:Array.isArray(text)?text:replyParts(text),index:0,...(questionId?{questionId}:{}),...(jobId?{jobId}:{})});
     const job=state.jobs.find(job=>job.id===jobId);if(job)job.delivery='pending';persist();
   }
+  function previewActive(item,part) {
+    if(!state.account)return false;
+    const menu=menus.get(bindingKey(state.account.id,item.sender));
+    // 会话标识和编辑阶段必须同时匹配，退出后重开设置也不能复用旧的预览消息。
+    return item.sender===state.account.owner&&menu?.settings?.id===part.session&&menu.settings.stage===(part.stage||'avatar')&&Date.now()<part.expiresAt;
+  }
+  async function sendPart(item,account,controller) {
+    let part=item.parts[item.index];const id=`${item.id}-${item.index}`;
+    if(part?.kind==='avatar-instructions'){if(!previewActive(item,part))return;part=part.text;}
+    if(part?.kind==='avatar-preview') {
+      // 预览只属于当前设置会话；取消、过期和重启后不补发私有头像。
+      if(!previewActive(item,part))return;
+      const signal=AbortSignal.any([controller.signal,queryContext(bindingKey(account.id,item.sender)).signal]);
+      try {
+        if(!part.image){part.image=await api.uploadAvatar(account,item.sender,part.avatar,signal);delete part.avatar;if(!previewActive(item,part)||signal.aborted)return;persist();}
+        if(!previewActive(item,part)||signal.aborted)return;
+        await api.sendImage(account,item.sender,part.image,state.contexts[item.sender],id,signal);return;
+      }catch(error){
+        if(controller.signal.aborted||error.code===-14||error.code==='STORAGE')throw error;
+        if(!previewActive(item,part)||signal.aborted)return;
+        // 查看失败仍允许直接换图，保留原资料，并继续发送后续操作提示。
+        part='头像预览暂时不可用，请稍后回复 4 重试，也可直接发送新头像。';item.parts[item.index]=part;persist();
+      }
+    }
+    await api.send(account,item.sender,part,state.contexts[item.sender],id,controller.signal);
+  }
   async function flush() {
     if(flushing||Date.now()<deliveryRetryAt||!state.enabled||!state.account||!pollController||pollController.signal.aborted)return;
     flushing=true;
@@ -172,7 +198,7 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
         item=state.outbox[0];
         if(!state.allowed.includes(item.sender)){state.outbox.shift();persist();continue;}
         const account=state.account,controller=pollController;
-        await api.send(account,item.sender,item.parts[item.index],state.contexts[item.sender],`${item.id}-${item.index}`,controller.signal);
+        await sendPart(item,account,controller);
         // 停用、解绑或换账号期间结束的旧发送不能改写新账号的数据。
         if(controller!==pollController||account!==state.account||controller.signal.aborted)break;
         if(state.outbox[0]!==item)continue; // 删除记录或联系人撤权可能在发送途中移除当前消息。
@@ -384,9 +410,58 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
     if(failed.length)text+='\n以下实例查询失败（没有执行任务）：'+failed.join('、');
     reply(sender,text);
   }
+  function profileMenu(sender,prefix='') {
+    const profile=userInfo.read(sender);
+    // 资料与操作编号放在同一张表，沿用对话列表的单元格转义，避免昵称破坏表格。
+    return (prefix?prefix+'\n\n':'')+`用户信息\n\n| 编号 | 项目 | 当前值 |\n| --- | --- | --- |\n| 1 | 昵称 | ${tableCell(profile.nickname||'未设置',40)} |\n| 2 | 备注名 | ${tableCell(profile.remark||'未设置',40)} |\n| 3 | 头像 | ${profile.avatar?'已设置':'未设置'} |${profile.avatar?'\n\n4. 查看头像':''}\n\n回复 1/2/3 修改对应项目，回复 0 退出设置。`;
+  }
+  async function editUserInfo(message,menu,valid) {
+    const {sender,text}=message,entry=menu.settings,value=text.trim();
+    if(sender!==state.account.owner){delete menu.settings;reply(sender,'仅扫码账号本人可以修改用户信息。');return;}
+    if(Date.now()>=entry.expiresAt){delete menu.settings;reply(sender,'设置已超时，未修改用户信息。请重新发送 /settings。');return;}
+    if(['0','取消','退出'].includes(value)){delete menu.settings;reply(sender,'已退出设置。');return;}
+    let current=entry.stage;
+    if(current==='profile'&&entry.avatarViewed&&(message.images?.length||value==='清空')) {
+      // 看过头像后可直接换图；复用编辑校验，并作废未送达的旧预览。
+      current='avatar';entry.stage=current;entry.id=randomUUID();delete entry.avatarViewed;
+    }
+    if(current==='menu') {
+      if(value!=='1'){reply(sender,'目前只开放用户信息，请回复 1 进入，或回复 0 退出。');return;}
+      entry.stage='profile';reply(sender,profileMenu(sender));return;
+    }
+    if(current==='profile') {
+      if(value==='4') {
+        const avatar=userInfo.read(sender).avatar;
+        if(!avatar){reply(sender,'尚未设置头像，请回复 3 设置头像，或回复 0 退出。');return;}
+        // 保留编号菜单，同时允许查看后直接发图或清空，不必再选择修改入口。
+        // 只保存在本次菜单内存中；后续选择其他编辑或保存后清除，普通收图不会改头像。
+        entry.avatarViewed=true;
+        const preview={session:entry.id,expiresAt:entry.expiresAt,stage:'profile'};
+        reply(sender,[{kind:'avatar-preview',avatar,...preview},{kind:'avatar-instructions',text:'可直接发送一张新头像图片（PNG/JPEG，最大 4 MB）替换，发送“清空”移除头像。\n也可回复 3 修改头像、1/2 修改昵称或备注名，回复 0 退出设置。',...preview}]);return;
+      }
+      const field={'1':'nickname','2':'remark','3':'avatar'}[value];
+      if(!field){reply(sender,'请回复 1 修改昵称、2 修改备注名、3 修改头像'+(userInfo.read(sender).avatar?'、4 查看头像':'')+'，或回复 0 退出。');return;}
+      // 开始修改即作废之前的查看请求，避免保存后回到菜单时补发旧头像。
+      entry.stage=field;entry.id=randomUUID();delete entry.avatarViewed;
+      reply(sender,field==='avatar'?'请发送一张头像图片（PNG/JPEG，最大 4 MB）。发送“清空”移除头像，回复 0 取消。':`请输入${field==='nickname'?'昵称':'备注名'}（40 字以内的单行文字）。发送“清空”恢复默认，回复 0 取消。`);return;
+    }
+    let updated=value==='清空'?'':value;
+    if(current==='avatar'&&value!=='清空') {
+      if(message.images?.length!==1||text){reply(sender,'请单独发送一张头像图片，或回复 0 取消。');return;}
+      try {
+        const bytes=await api.image(message.images[0],queryContext(bindingKey(state.account.id,sender)).signal);
+        // 暂停、解绑或退出设置后，迟到的下载结果不能再覆盖用户资料。
+        if(!valid()||menu.settings!==entry)return;
+        if(Date.now()>=entry.expiresAt){delete menu.settings;reply(sender,'设置已超时，未修改头像。请重新发送 /settings。');return;}
+        updated=normalizeAvatar(bytes);
+      }catch{if(valid()&&menu.settings===entry)reply(sender,'头像读取失败，请发送 4 MB 以内的 PNG/JPEG 图片重试，或回复 0 取消。原头像已保留。');return;}
+    } else if(message.images?.length||(!updated&&value!=='清空')){reply(sender,'请发送文字，或回复 0 取消。');return;}
+    // 仅在持久化成功后返回资料菜单；保存失败沿用停收策略，不能回报修改成功。
+    userInfo.update(sender,current,updated);entry.stage='profile';
+    reply(sender,profileMenu(sender,`${{nickname:'昵称',remark:'备注名',avatar:'头像'}[current]}已${updated?'保存':'清空'}。`));
+  }
   async function route(message,valid) {
     const {sender,text}=message;
-    if(!text){reply(sender,'当前支持文字消息，请直接发送文字描述。');return;}
     let {command,token}=parseCommand(text);
     const key=bindingKey(state.account.id,sender),binding=state.bindings[key],menu=menuFor(key);
     // 回答优先于聊天/客户端菜单，不能把数字答案解释成切换选择或新任务。
@@ -394,6 +469,17 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
     if(command==='/question'){const entry=currentInput(sender);if(entry)showQuestion(entry,{details:true});else reply(sender,'当前没有等待你回答的问题。');return;}
     // 等待回答时仅保留已知控制指令；绝对路径等以 / 开头的文字仍是答案。
     if(currentInput(sender)&&!COMMANDS.has(command)){answerInput(sender,text);return;}
+    if(command==='/settings') {
+      if(sender!==state.account.owner){reply(sender,'仅扫码账号本人可以修改用户信息。');return;}
+      if(hasWork(sender)){reply(sender,'请先结束或停止当前任务，再修改用户信息。');return;}
+      if(!userInfo){reply(sender,'用户信息设置暂时不可用，请更新并重启应用。');return;}
+      delete menu.choice;menu.settings={id:randomUUID(),stage:'menu',expiresAt:Date.now()+300000};
+      reply(sender,'设置\n\n1. 用户信息\n\n回复 1 查看和修改用户信息，回复 0 退出设置。');return;
+    }
+    // 设置输入与模型任务分流；任何已有控制指令都会退出设置，避免之后的文字被误保存。
+    if(menu.settings&&COMMANDS.has(command))delete menu.settings;
+    if(menu.settings){await editUserInfo(message,menu,valid);return;}
+    if(!text){reply(sender,'当前支持文字消息；设置头像请先发送 /settings。');return;}
     // 0 只在菜单中作为翻页操作；选中会话后清除 choice，数字恢复为原始任务正文。
     if(menu.choice&&menu.choice!=='chat'&&/^0(?:\s|$)/.test(text.trim())){reply(sender,'0 翻页仅用于对话表格。请先发送 /chats。');return;}
     if(menu.choice==='chat'&&/^(?:0|下一页|next)(?:\s|$)/i.test(text.trim())){command='/chats';token=text.trim().replace(/^(?:0|下一页|next)/i,'next');}
@@ -476,12 +562,15 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
     persist();
     const epoch=queryEpoch,account=state.account,key=bindingKey(account.id,message.sender);
     const {command}=parseCommand(message.text);
+    const cancellingSettings=Boolean(menus.get(key)?.settings&&['0','取消','退出'].includes(message.text.trim()));
+    // 取消设置优先于图片下载队列；保留菜单给取消回复，旧下载使用旧上下文，不能迟到写入。
+    if(cancellingSettings){queryContexts.get(key)?.abort();queryContexts.delete(key);commands.delete(key);}
     if(command==='/stop'){queryContexts.get(key)?.abort();queryContexts.delete(key);commands.delete(key);menus.delete(key);}
     const context=queryContext(key);
     const valid=()=>!closed&&state.enabled&&state.account===account&&epoch===queryEpoch&&queryContexts.get(key)===context&&state.allowed.includes(message.sender);
     // 每位发送者按收件顺序处理选择与任务，异步查询不能让下一条文字跑进旧对话。
     // 停止、审批和状态不能被缓慢的目录查询阻塞；停止同时废弃尚未处理的旧消息。
-    const urgent=['/stop','/allow','/deny','/status','/answer','/question'].includes(command)||Boolean(currentInput(message.sender)&&!COMMANDS.has(command));
+    const urgent=cancellingSettings||['/stop','/allow','/deny','/status','/answer','/question'].includes(command)||Boolean(currentInput(message.sender)&&!COMMANDS.has(command));
     const pending=(urgent?Promise.resolve():commands.get(key)||Promise.resolve()).then(()=>{if(valid())return route(message,valid);})
       .catch(e=>{if(valid()&&e.code!=='STORAGE'){try{reply(message.sender,'操作未完成：'+(e.message||'请重试'));}catch{}}})
       .finally(()=>{if(commands.get(key)===pending)commands.delete(key);changed();});

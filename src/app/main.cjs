@@ -1,5 +1,5 @@
 'use strict';
-const { app, ipcMain, Notification, shell, clipboard, net, safeStorage, dialog, powerMonitor, Menu, BrowserWindow } = require('electron');
+const { app, ipcMain, Notification, shell, clipboard, net, safeStorage, dialog, powerMonitor, Menu, BrowserWindow, nativeImage } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
@@ -18,6 +18,7 @@ const {createCodexRuntime}=require('../clients/codex-runtime.cjs');
 const {createWechatApi}=require('../channels/wechat-api.cjs');
 const {createWechatStore}=require('../channels/wechat-store.cjs');
 const {createWechatManager}=require('../channels/wechat-manager.cjs');
+const {avatarFromImage}=require('../channels/wechat-profile.cjs');
 const {createMailReceiver}=require('../channels/imap-mail.cjs');
 const {createMailStore}=require('../channels/mail-store.cjs');
 const {createArcheryPending}=require('../channels/archery-pending.cjs');
@@ -397,6 +398,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     powerMonitor.on('resume',tickPlanner);
     app.once('before-quit',()=>{clearInterval(plannerTimer);powerMonitor.removeListener('resume',tickPlanner);for(const {notice} of plannerNotifications.values())notice.close();plannerNotifications.clear();});
     wechat=createWechatManager({store:createWechatStore({dataDir,safeStorage}),
+      normalizeAvatar:bytes=>avatarFromImage(bytes,nativeImage),
       api:createWechatApi({fetchImpl:(url,options)=>net.fetch(url,options)}),
       makeQr:text=>QRCode.toDataURL(text,{width:256,margin:2,errorCorrectionLevel:'M'}),onChange:broadcast});
     wechat.start();

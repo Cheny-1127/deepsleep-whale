@@ -75,3 +75,13 @@
 | 审批 | thread-follower-command-approval-decision、thread-follower-file-approval-decision / 1 | 只响应本轮仍存在且经微信用户明确决定的请求，不做会话授权 |
 
 公开 [app-server 文档](https://learn.chatgpt.com/docs/app-server) 不等于桌面内部 IPC 的兼容承诺。该实现针对上述已安装版本进行协议检查；后续桌面升级可能需要适配。`/new` 仍是 CLI 创建路径，并记录 transport 防止追问时误切到桌面；这里没有声称已经支持通过桌面创建新聊天。
+
+## 微信用户信息设置（2026-10-25）
+
+`/settings` 仅开放扫码 owner 的用户信息。昵称和头像存于连接容器可选 `profile`，备注名复用连接 `name`；原联系人备注独立保留。旧数据无需重新绑定，资料不影响凭据、权限、会话与任务。菜单按连接和发送者隔离，取消、超时、控制指令及停收会终止编辑；下载期间取消后丢弃迟到结果。保存失败保留原资料，沿用管理器停收策略。
+
+头像接收对照腾讯 [图片下载实现](https://github.com/Tencent/openclaw-weixin/blob/main/src/media/media-download.ts)、[CDN 解密实现](https://github.com/Tencent/openclaw-weixin/blob/main/src/cdn/pic-decrypt.ts)：优先 `image_item.aeskey`，其次媒体 `aes_key` 的 base64 原始密钥/十六进制编码，AES-128-ECB 解密，也兼容无密钥图片。仅在明确修改头像时下载一张图片；限定固定腾讯 CDN `/c2c/download`、禁止跳转且不携带 Bot 凭据，十秒超时、流式限流量 4 MB 加密填充。PNG/JPEG 解码前检查尺寸，最高 8192 边长及 1600 万像素，Electron 裁切为 128×128 PNG 后以受限 data URI 随账号加密保存，保留透明背景。图片不进入任务正文或模型，也不扩展普通附件功能。
+
+隔离测试覆盖真实下载接口结构、密钥编码、解密、Electron 图片解码与缩放及电脑卡片展示；使用模拟微信 CDN 和登录，不代表真实微信图片消息已完成端到端验收。
+
+头像预览对照腾讯 [加密上传](https://github.com/Tencent/openclaw-weixin/blob/main/src/cdn/upload.ts)、[CDN 上传](https://github.com/Tencent/openclaw-weixin/blob/main/src/cdn/cdn-upload.ts)及[图片发送](https://github.com/Tencent/openclaw-weixin/blob/main/src/messaging/send.ts)。仅本人在用户信息菜单主动回复 4 查看头像且已有头像时，将已保存的缩略图在内存 AES 加密上传至固定 `/c2c/upload`，CDN 不带 Bot 凭据并禁止重定向，随后通过独立图片消息预览；表格仅显示头像状态，有头像时另增 `4 查看头像`；查看仍保留资料菜单，下一张图片或“清空”直接进入头像编辑校验，无需再回复 3；选择其他编辑、保存成功或退出后清除此状态，不假设表格能内嵌图片。预览携带设置会话标识与截止时间，取消、过期、暂停或重启后不补发；预览失败保留资料，文字提示后仍可更换或清空。上传与发送均用模拟接口验收，真实手机显示待试用。
