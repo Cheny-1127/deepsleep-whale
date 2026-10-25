@@ -104,6 +104,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--ui-accent); }
 .ui-choice:hover:not(:disabled) { background: var(--ui-hover); }
 .ui-choice[aria-pressed="true"] { border-color: var(--ui-accent); background: var(--ui-selected); color: var(--ui-accent); }
 .ui-choice strong { overflow-wrap: anywhere; font-size: var(--ui-font-control); }
+/* 用户上传头像统一裁成方形；尺寸和圆角由公共样式控制，业务页只负责排列。 */
+.ui-avatar { width: 40px; height: 40px; flex-shrink: 0; object-fit: cover; border-radius: var(--ui-radius-control); }
 .ui-status { display: inline-flex; align-items: center; gap: 6px; color: var(--ui-text-subtle); font-size: var(--ui-font-small); }
 .ui-status::before { content: ""; width: 6px; height: 6px; flex-shrink: 0; border-radius: 50%; background: currentColor; }
 .ui-status[data-state="connected"] { color: var(--ui-accent); }

@@ -186,7 +186,7 @@ export function createWechatView() {
       if(typeof result.value==='string')$('feedback').textContent=result.value;
       else if(name==='save-clients')$('feedback').textContent='客户端已保存。';
       else if(name==='delete-task')$('feedback').textContent='记录已删除。';
-      else if(name==='rename-connection'||name==='rename-user')$('feedback').textContent='备注已保存。';
+      else if(name==='rename-connection'||name==='rename-user')$('feedback').textContent='备注名已保存。';
       const data=await window.whale.snapshot();render(data.wechat);
       if(name==='forget')$('settings-dialog').close();
       return true;
@@ -238,7 +238,7 @@ export function createWechatView() {
   $('toggle').addEventListener('click',()=>void act('enable',!latest?.enabled));
   function forgetConnection(){
     // 未扫码的连接也是完整的可删除对象，不能以“已绑定”作为删除入口的显示条件。
-    const message=latest.account?`移除「${latest.connectionName||'当前微信'}」将清除它的本机凭据、选择记录、备注和待投递结果，并停止它的任务；其他微信连接和客户端自身的聊天历史不受影响。`:`删除尚未扫码的「${latest.connectionName||'当前微信'}」？其他微信连接和配置不受影响。`;
+    const message=latest.account?`移除「${latest.connectionName||'当前微信'}」将清除它的本机凭据、选择记录、备注名和待投递结果，并停止它的任务；其他微信连接和客户端自身的聊天历史不受影响。`:`删除尚未扫码的「${latest.connectionName||'当前微信'}」？其他微信连接和配置不受影响。`;
     if(window.confirm(message))void act('forget');
   }
   $('forget').addEventListener('click',forgetConnection);
@@ -268,7 +268,10 @@ export function createWechatView() {
         const state=item.account&&!item.enabled&&item.status==='disconnected'?'paused':item.status;
         const button=element('button',null,'ui-choice'),name=element('strong',item.name),status=element('small',showStatus?statuses[state]||state:'待扫码');
         const selected=item.id===data.selectedConnectionId;button.type='button';button.dataset.connectionId=item.id;button.setAttribute('aria-pressed',String(selected));status.className='ui-status';status.dataset.state=showStatus?state:'disconnected';if(selected)status.id='wechat-status';
-        button.append(name,status);
+        const identity=element('span',null,'wechat-account-identity'),copy=element('span',null,'wechat-account-copy');
+        if(item.avatar){const avatar=element('img',null,'ui-avatar');avatar.src=item.avatar;avatar.alt='';identity.append(avatar);}
+        copy.append(name);if(item.nickname&&item.nickname!==item.name)copy.append(element('small',item.nickname,'wechat-hint'));
+        identity.append(copy);button.append(identity,status);
         const attention=[item.taskCount?`${item.taskCount} 个任务`:null,item.pendingCount?`${item.pendingCount} 位待授权`:null,item.outboxCount?`${item.outboxCount} 条待投递`:null].filter(Boolean).join(' · ');
         if(attention)button.append(element('small',attention,'wechat-account-attention'));
         button.addEventListener('click',()=>{if(item.id!==latest.selectedConnectionId)void act('select-connection',item.id);});$('connections').append(button);
@@ -330,11 +333,11 @@ export function createWechatView() {
     if(nextKey!==rowsKey){
       rowsKey=nextKey;$('users').replaceChildren();
       for(const [kind,users]of [['allowed',data.allowed],['pending',data.pending]])for(const user of users){
-        const row=element('div',null,'wechat-row wechat-contact'),text=element('div',null,'wechat-contact-copy'),actions=element('div',null,'wechat-contact-actions'),button=element('button',kind==='allowed'?'撤销授权':'授权','outline'),rename=element('button','备注','outline');
+        const row=element('div',null,'wechat-row wechat-contact'),text=element('div',null,'wechat-contact-copy'),actions=element('div',null,'wechat-contact-actions'),button=element('button',kind==='allowed'?'撤销授权':'授权','outline'),rename=element('button','备注名','outline');
         text.append(element('strong',contactName(data,user)),element('small',kind==='allowed'?'已授权操作本机':'待授权，暂不能执行任务'));
         const identity=element('details'),summary=element('summary','查看账号标识');identity.append(summary,element('code',user));text.append(identity);
-        const form=element('form',null,'wechat-inline-form'),input=element('input'),save=element('button','保存备注','outline'),cancel=element('button','取消','outline');
-        form.hidden=true;input.maxLength=40;input.placeholder='例如：我自己';input.setAttribute('aria-label','联系人备注');save.type='submit';cancel.type='button';
+        const form=element('form',null,'wechat-inline-form'),input=element('input'),save=element('button','保存备注名','outline'),cancel=element('button','取消','outline');
+        form.hidden=true;input.maxLength=40;input.placeholder='例如：我自己';input.setAttribute('aria-label','联系人备注名');save.type='submit';cancel.type='button';
         rename.type='button';button.type='button';rename.addEventListener('click',()=>{form.hidden=false;input.value=latest.contactNames?.[user]||'';input.focus();});
         cancel.addEventListener('click',()=>{form.hidden=true;rename.focus();});form.append(input,save,cancel);
         form.addEventListener('submit',async event=>{event.preventDefault();if(await act('rename-user',{sender:user,name:input.value}))form.hidden=true;});

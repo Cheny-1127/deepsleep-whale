@@ -18,7 +18,10 @@ safeStorage.encryptString=s=>Buffer.from(Buffer.from(s).toString('base64'));safe
 global.wechatSmoke={queue:[],sent:[],typing:[],confirmed:false,failSend:false,loginBot:'fixture-bot'};
 require(${JSON.stringify(path.join(root,'src/clients/discovery.cjs'))}).discoverRunningClients=async()=>{if(global.wechatSmoke.failDiscovery)throw Error('检测失败，请重试');return ${JSON.stringify(discovered)};};
 net.fetch=async(url,options)=>{const s=global.wechatSmoke;let data={};
-if(url.includes('get_bot_qrcode'))data={qrcode:'hidden-poll-token',qrcode_img_content:'https://example.test/wechat-test-qr'};
+if(url.startsWith('https://novac2c.cdn.weixin.qq.com/c2c/download?')){if(options.headers)throw Error('CDN must not receive bot credentials');const cipher=require('node:crypto').createCipheriv('aes-128-ecb',Buffer.from('00112233445566778899aabbccddeeff','hex'),null),png=require('node:fs').readFileSync(${JSON.stringify(path.join(root,'assets/icon.png'))});s.imageRequests=(s.imageRequests||0)+1;return new Response(Buffer.concat([cipher.update(png),cipher.final()]));}
+else if(url.endsWith('getuploadurl')){s.avatarUploadRequest=JSON.parse(options.body);data={upload_param:'fixture-preview-upload'};}
+else if(url.startsWith('https://novac2c.cdn.weixin.qq.com/c2c/upload?')){if(options.headers.Authorization||options.redirect!=='error')throw Error('unsafe avatar upload');const decipher=require('node:crypto').createDecipheriv('aes-128-ecb',Buffer.from(s.avatarUploadRequest.aeskey,'hex'),null);s.previewBytes=Buffer.concat([decipher.update(options.body),decipher.final()]).toString('base64');s.previewUploads=(s.previewUploads||0)+1;return new Response('',{headers:{'x-encrypted-param':'fixture-preview-download'}});}
+else if(url.includes('get_bot_qrcode'))data={qrcode:'hidden-poll-token',qrcode_img_content:'https://example.test/wechat-test-qr'};
 else if(url.includes('get_qrcode_status'))data=s.confirmed?{status:'confirmed',ilink_bot_id:s.loginBot,bot_token:s.loginToken||(s.loginBot==='fixture-bot'?'hidden-bot-token':'hidden-bot-token-2'),ilink_user_id:'fixture-owner',baseurl:'https://ilinkai.weixin.qq.com'}:{status:'wait'};
 else if(url.endsWith('getupdates')){s.lastPollToken=options.headers.Authorization;const bot=s.lastPollToken==='Bearer hidden-bot-token-2'?'fixture-bot-2':'fixture-bot';if(s.lastPollToken==='Bearer '+s.invalidToken)data={ret:-14};else{data={msgs:s.queue.filter(m=>m.to_user_id===bot),get_updates_buf:'fixture-cursor'};s.queue=s.queue.filter(m=>m.to_user_id!==bot);}}
 else if(url.endsWith('getconfig'))data={typing_ticket:'fixture-typing-ticket'};
@@ -45,6 +48,38 @@ async function waitSnapshot(panel,check) {
   fs.mkdirSync(path.join(root,'out'),{recursive:true});await panel.screenshot({path:path.join(root,'out/wechat-login.png'),fullPage:true});
   await app.evaluate(()=>{global.wechatSmoke.confirmed=true;});await panel.waitForFunction(()=>document.querySelector('#wechat-status').textContent==='已连接');
   const snapshot=await panel.evaluate(()=>window.whale.snapshot());assert.ok(!JSON.stringify(snapshot).includes('hidden-bot-token'));assert.ok(snapshot.wechat.allowed.includes('fixture-owner'));
+  // 微信本人通过文字菜单修改资料，头像走实际 CDN 解密与 Electron 缩放，电脑端即时同步。
+  let profileMessage=0;
+  async function profileSend(text,image){
+    const count=await app.evaluate(()=>global.wechatSmoke.sent.filter(item=>item.item_list?.[0]?.type===1).length);
+    await app.evaluate((_electron,{text,image,id})=>global.wechatSmoke.queue.push({message_id:id,message_type:1,from_user_id:'fixture-owner',to_user_id:'fixture-bot',context_token:'fixture-context',item_list:[{type:1,text_item:{text}},...(image?[{type:2,image_item:image}]:[])]}),{text,image,id:'profile-'+(++profileMessage)});
+    for(let i=0;i<200;i++){if(await app.evaluate((_electron,count)=>global.wechatSmoke.sent.filter(item=>item.item_list?.[0]?.type===1).length>count,count))return;await panel.waitForTimeout(25);}
+    assert.fail('profile reply timed out');
+  }
+  await profileSend('/settings');await profileSend('1');await profileSend('1');await profileSend('小鲸');
+  await profileSend('2');await profileSend('我的工作微信');await profileSend('3');
+  await profileSend('',{aeskey:'00112233445566778899aabbccddeeff',media:{encrypt_query_param:'fixture-avatar',encrypt_type:1}});
+  const profileSnapshot=await waitSnapshot(panel,s=>s.wechat.profile?.avatar&&s.wechat.connectionName==='我的工作微信');
+  const storedProfile=await app.evaluate(({safeStorage},encrypted)=>JSON.parse(safeStorage.decryptString(Buffer.from(encrypted,'base64'))).connections[0].profile,fs.readFileSync(path.join(dir,'wechat.enc')).toString('base64'));
+  assert.deepEqual(storedProfile,profileSnapshot.wechat.profile);
+  assert.equal(profileSnapshot.wechat.profile.nickname,'小鲸');assert.match(profileSnapshot.wechat.profile.avatar,/^data:image\/png;base64,/);
+  const avatar=panel.locator('#wechat-connections .ui-avatar');await avatar.waitFor();
+  await panel.waitForFunction(()=>document.querySelector('#wechat-connections .ui-avatar').naturalWidth>0);
+  assert.deepEqual(await avatar.evaluate(image=>[image.naturalWidth,image.naturalHeight]),[128,128]);
+  assert.match(await panel.locator('#wechat-connections').textContent(),/我的工作微信[\s\S]*小鲸/);
+  const previousViewport=panel.viewportSize()||{width:1060,height:770};
+  for(const width of [1060,860]){await panel.setViewportSize({width,height:770});assert.ok(await panel.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await panel.locator('.wechat-account-card').screenshot({path:path.join(root,`out/wechat-user-profile-${width}.png`)});}
+  await panel.setViewportSize(previousViewport);
+  assert.equal(await app.evaluate(()=>global.wechatSmoke.imageRequests),1);
+  await profileSend('4');
+  const preview=await app.evaluate(()=>({uploads:global.wechatSmoke.previewUploads,bytes:global.wechatSmoke.previewBytes,message:global.wechatSmoke.sent.find(item=>item.item_list?.[0]?.type===2)}));
+  assert.equal(preview.uploads,1);assert.equal(preview.bytes,profileSnapshot.wechat.profile.avatar.split(',')[1]);
+  assert.equal(preview.message.to_user_id,'fixture-owner');assert.equal(preview.message.item_list[0].image_item.media.encrypt_query_param,'fixture-preview-download');
+  await profileSend('',{aeskey:'00112233445566778899aabbccddeeff',media:{encrypt_query_param:'fixture-avatar',encrypt_type:1}});
+  assert.equal(await app.evaluate(()=>global.wechatSmoke.imageRequests),2);
+  assert.match(await app.evaluate(()=>global.wechatSmoke.sent.at(-1).item_list[0].text_item.text),/头像已保存/);
+  await profileSend('1');await profileSend('清空');await profileSend('2');await profileSend('清空');await profileSend('3');await profileSend('清空');await profileSend('0');
+  await waitSnapshot(panel,s=>s.wechat.connectionName==='微信 1'&&!s.wechat.profile.avatar&&!s.wechat.profile.nickname);
   assert.equal(await panel.locator('#wechat-login').isHidden(),true,'正常连接不突出重新扫码');
   assert.equal(await panel.locator('#wechat-empty').isVisible(),true,'扫码成功后显示第一条任务的操作引导');
   assert.equal(await panel.locator('#wechat-settings-dialog').isVisible(),false);
@@ -101,7 +136,7 @@ async function waitSnapshot(panel,check) {
   await app.evaluate(()=>{const message=(id,text)=>({message_id:id,message_type:1,from_user_id:'fixture-owner',to_user_id:'fixture-bot',context_token:'fixture-context',item_list:[{type:1,text_item:{text}}]});const task=message('one','检查项目');global.wechatSmoke.queue.push(message('projects','／projects\u200b'),message('project','1'),message('chats-sized','/chats 10'),message('chats','/chats'),message('chat','1'),task,task);});
   await panel.waitForFunction(()=>document.querySelector('#wechat-jobs').textContent.includes('已完成'));
   await panel.waitForFunction(()=>document.querySelector('#wechat-outbox').textContent==='待投递 0 条');
-  const sent=await app.evaluate(()=>global.wechatSmoke.sent);assert.ok(sent.some(msg=>msg.item_list[0].text_item.text==='桌面回复😀'));assert.ok(sent.every(msg=>msg.context_token==='fixture-context'));
+  const sent=await app.evaluate(()=>global.wechatSmoke.sent.filter(msg=>msg.item_list[0].type===1));assert.ok(sent.some(msg=>msg.item_list[0].text_item.text==='桌面回复😀'));assert.ok(sent.every(msg=>msg.context_token==='fixture-context'));
   await app.evaluate(async()=>{for(let i=0;i<100;i++){if(global.wechatSmoke.typing.at(-1)?.status===2)return;await new Promise(resolve=>setTimeout(resolve,10));}throw Error('typing stop not sent');});
   const typing=await app.evaluate(()=>global.wechatSmoke.typing);assert.ok(typing.some(x=>x.status===1));assert.ok(typing.every(x=>x.ilink_user_id==='fixture-owner'&&x.typing_ticket==='fixture-typing-ticket'));
   assert.ok(!sent.some(msg=>msg.item_list[0].text_item.text.startsWith('收到，')));
@@ -136,7 +171,7 @@ async function waitSnapshot(panel,check) {
   assert.equal(questionWire.filter(m=>m.method==='thread-follower-start-turn').length,3,'answers must not start another turn');
   const submitted=questionWire.find(m=>m.method==='thread-follower-submit-user-input');assert.deepEqual(submitted.params.response,{answers:{mode:{answers:['修复']}}});
   const steered=questionWire.find(m=>m.method==='thread-follower-steer-turn');assert.ok(steered.params.input[0].text.includes('我的要求：保留现有配置'));assert.match(steered.params.input[0].text,/<send_user_message_question_reply>/);
-  const questionReplies=await app.evaluate(()=>global.wechatSmoke.sent.map(m=>m.item_list[0].text_item.text));assert.ok(questionReplies.some(text=>text.includes('桌面问答已继续：修复')));assert.ok(questionReplies.some(text=>text.includes('桌面异步问答已继续')));
+  const questionReplies=await app.evaluate(()=>global.wechatSmoke.sent.map(m=>(m.item_list[0].text_item?.text||'[图片]')));assert.ok(questionReplies.some(text=>text.includes('桌面问答已继续：修复')));assert.ok(questionReplies.some(text=>text.includes('桌面异步问答已继续')));
   assert.ok(!questionReplies.some(text=>text.includes('已收到答案')));
   await app.evaluate(()=>{for(const [id,text]of [['new','/new'],['two','新的任务']])global.wechatSmoke.queue.push({message_id:id,message_type:1,from_user_id:'fixture-owner',to_user_id:'fixture-bot',context_token:'fixture-context',item_list:[{type:1,text_item:{text}}]});});
   await waitSnapshot(panel,s=>s.wechat.jobs.filter(j=>j.state==='completed').length===4);
@@ -222,14 +257,14 @@ async function waitSnapshot(panel,check) {
   await panel.locator('#wechat-open-settings').click();await panel.locator('#wechat-tab-clients').click();
   assert.equal(await panel.locator('.wechat-client [data-field=name]').first().inputValue(),'第二个微信的未保存配置');
   await panel.locator('#wechat-close-settings').click();await panel.locator('#wechat-rename').click();
-  await panel.locator('#wechat-name').fill('个人微信');await panel.locator('#wechat-name-form').getByRole('button',{name:'保存备注',exact:true}).click();
+  await panel.locator('#wechat-name').fill('个人微信');await panel.locator('#wechat-name-form').getByRole('button',{name:'保存备注名',exact:true}).click();
   await waitSnapshot(panel,s=>s.wechat.connectionName==='个人微信');
   assert.equal(await panel.locator('#wechat-task-scope').textContent(),'个人微信');
   await panel.locator('#wechat-open-settings').click();await panel.locator('#wechat-tab-contacts').click();
   assert.match(await panel.locator('#wechat-users').textContent(),/我自己（扫码账号）/);
-  await panel.locator('#wechat-users').getByRole('button',{name:'备注',exact:true}).click();
+  await panel.locator('#wechat-users').getByRole('button',{name:'备注名',exact:true}).click();
   await panel.locator('#wechat-users input').fill('我自己的另一个号');
-  await panel.locator('#wechat-users').getByRole('button',{name:'保存备注',exact:true}).click();
+  await panel.locator('#wechat-users').getByRole('button',{name:'保存备注名',exact:true}).click();
   await waitSnapshot(panel,s=>s.wechat.contactNames['fixture-owner']==='我自己的另一个号');
   await panel.locator('#wechat-close-settings').click();await panel.locator('#wechat-toggle').click();
   multi=await waitSnapshot(panel,s=>s.wechat.status==='paused');
@@ -266,4 +301,4 @@ async function waitSnapshot(panel,check) {
   await panel.locator('#wechat-toggle').click();await panel.waitForFunction(()=>document.querySelector('#wechat-status').textContent==='已暂停');
   await panel.locator('#nav-hooks').click();assert.ok(await panel.locator('#wechat-view').isHidden());await panel.locator('#nav-home').click();assert.ok(await panel.locator('#hooks-view').isHidden());
   assert.deepEqual(errors,[]);console.log(JSON.stringify({result:'passed',checks:['scan-without-setup','two-independent-scans','connection-switch','per-account-drafts-and-history','pause-one-connection','forget-one-connection','encrypted-multiple-state','visible-connection-cards','delete-unscanned-connection','cancel-draft-deletion','delete-connection-during-scan','multiple-clients','priority','local-QR','scan-confirmation','readable-project-list','number-selection','desktop-owner-forwarding','verbatim-input','no-desktop-resume','native-typing-start-stop','no-receipt-messages','blocking-question-answer','async-question-answer','answers-continue-original-turn','single-chat-inline-history','multiple-chat-list','selected-chat-history','back-to-chat-list','stable-chat-selection','inline-chat-metadata','task-question-and-reply','details-outside-broadcast','delete-failed-task','delete-failed-delivery','preserve-other-task-content','no-task-replay','new-thread','dedup','Codex-result','safe-error-reporting','context','pause','dirty-form','IPC-sender','navigation','no-renderer-errors'],dataDir:dir}));
-})().catch(async error=>{console.error(error);if(app)console.error(JSON.stringify(await app.evaluate(()=>({queue:global.wechatSmoke.queue,sent:global.wechatSmoke.sent.map(m=>m.item_list[0].text_item.text),wire:global.desktopSmoke.wire.map(m=>({method:m.method,input:m.params?.turnStart?.request?.input}))}))));process.exitCode=1;}).finally(async()=>{if(app)await app.close();});
+})().catch(async error=>{console.error(error);if(app)console.error(JSON.stringify(await app.evaluate(()=>({queue:global.wechatSmoke.queue,sent:global.wechatSmoke.sent.map(m=>(m.item_list[0].text_item?.text||'[图片]')),wire:global.desktopSmoke.wire.map(m=>({method:m.method,input:m.params?.turnStart?.request?.input}))}))));process.exitCode=1;}).finally(async()=>{if(app)await app.close();});

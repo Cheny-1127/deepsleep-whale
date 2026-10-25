@@ -2,10 +2,11 @@
 const {randomUUID}=require('node:crypto');
 const {createWechatGateway}=require('./wechat-gateway.cjs');
 const {fresh,migrate}=require('./wechat-store.cjs');
+const {profileText,userProfile}=require('./wechat-profile.cjs');
 const LIMIT=8;
 const liveStates=new Set(['queued','running','approval','question','recovering']);
 function displayName(value='') {
-  if(typeof value!=='string'||Array.from(value.trim()).length>40||/[\u0000-\u001f\u007f]/.test(value))throw Error('备注请使用 40 字以内的单行文字。');
+  if(typeof value!=='string'||Array.from(value.trim()).length>40||/[\u0000-\u001f\u007f]/.test(value))throw Error('备注名请使用 40 字以内的单行文字。');
   return value.trim();
 }
 
@@ -24,8 +25,8 @@ function createWechatManager({store,onChange=()=>{},...options}) {
           if(typeof state.account.id!=='string'||!state.account.id||bots.has(state.account.id))throw Error('微信账号重复或缺失，原文件已保留');
           bots.add(state.account.id);
         }
-        if(item.contactNames!==undefined&&(item.contactNames===null||typeof item.contactNames!=='object'||Array.isArray(item.contactNames)))throw Error('微信联系人备注格式无法识别，原文件已保留');
-        return {id:item.id,state,name:displayName(item.name),contactNames:Object.fromEntries(Object.entries(item.contactNames||{}).map(([sender,name])=>[sender,displayName(name)]))};
+        if(item.contactNames!==undefined&&(item.contactNames===null||typeof item.contactNames!=='object'||Array.isArray(item.contactNames)))throw Error('微信联系人备注名格式无法识别，原文件已保留');
+        return {id:item.id,state,name:displayName(item.name),...(item.profile!==undefined?{profile:userProfile(item.profile)}:{}),contactNames:Object.fromEntries(Object.entries(item.contactNames||{}).map(([sender,name])=>[sender,displayName(name)]))};
       });
       if(!ids.has(value.selectedConnectionId))throw Error('微信选中连接不存在，原文件已保留');
       selected=value.selectedConnectionId;
@@ -34,7 +35,7 @@ function createWechatManager({store,onChange=()=>{},...options}) {
       records=[{id:'wechat-legacy',state:migrate(value)}];selected=records[0].id;
     }
   } catch(error) {loadError=error.message;}
-  function envelope(items=records,selection=selected){return {version:3,selectedConnectionId:selection,connections:items.map(({id,state,name,contactNames})=>({id,state,...(name?{name}:{}),...(contactNames?{contactNames}:{})}))};}
+  function envelope(items=records,selection=selected){return {version:3,selectedConnectionId:selection,connections:items.map(({id,state,name,contactNames,profile})=>({id,state,...(name?{name}:{}),...(contactNames?{contactNames}:{}),...(profile?{profile}:{})}))};}
   function save(items=records,selection=selected) {
     if(loadError||storageError||closed)throw Error(loadError||storageError||'微信接入已关闭');
     try {store.save(envelope(items,selection));}
@@ -60,8 +61,20 @@ function createWechatManager({store,onChange=()=>{},...options}) {
     }
   };
   function attach(record) {
+    const checkOwner=sender=>{
+      if(!records.includes(record)||!record.state.enabled||record.state.account?.stale||record.state.account?.owner!==sender||!record.state.allowed.includes(sender))throw Error('仅扫码账号本人可以修改用户信息。');
+    };
     // 子网关只读写自己的状态副本；由管理器统一加密落盘，避免覆盖另一账号或删除共享文件。
     const gateway=createWechatGateway({...options,execution:{...execution,acquire:job=>execution.acquire(record.id,job)},
+      userInfo:{read:sender=>{checkOwner(sender);return {...userProfile(record.profile),remark:record.name||''};},
+        update:(sender,field,value)=>{
+          checkOwner(sender);let patch;
+          if(field==='remark')patch={name:displayName(value)};
+          else if(field==='nickname'||field==='avatar')patch={profile:userProfile({...userProfile(record.profile),[field]:field==='nickname'?profileText(value):value})};
+          else throw Error('该设置暂未开放。');
+          // 资料只改展示元数据；先安全保存，成功后才更新内存，轮询不会覆盖昵称或头像。
+          save(records.map(item=>item===record?{...item,...patch}:item));Object.assign(record,patch);onChange();
+        }},
       // 恢复当前连接时不提交它的旧 token，确保服务端签发新凭据；其他连接仍参与重复绑定检测。
       loginTokens:()=>[...new Set(records.filter(other=>other!==record).map(other=>other.state.account?.token).filter(Boolean))].slice(-10),
       validateAccount:(id,owner)=>{
@@ -75,7 +88,7 @@ function createWechatManager({store,onChange=()=>{},...options}) {
       store:{available:()=>store.available(),load:()=>structuredClone(record.state),
         save:value=>{
           if(!records.includes(record))return;
-          // 网关保存通信状态时必须保留管理器上的备注，避免下一次轮询把展示元数据抹掉。
+          // 网关保存通信状态时必须保留管理器上的备注名，避免下一次轮询把展示元数据抹掉。
           const state=structuredClone(value),items=records.map(item=>item===record?{...item,state}:item);
           save(items);record.state=state;
         },remove:()=>{throw Error('请通过账号管理解绑指定微信。');}},onChange});
@@ -84,10 +97,10 @@ function createWechatManager({store,onChange=()=>{},...options}) {
   for(const record of records)attach(record);
   function snapshot() {
     const current=gateways.get(selected)?.snapshot()||{status:'error',error:loadError,storageAvailable:store.available(),enabled:false,account:null,qr:null,clients:[],allowed:[],pending:[],jobs:[],active:null,outbox:0};
-    const name=record=>record.name||`微信 ${records.indexOf(record)+1}`,record=records.find(item=>item.id===selected);
-    return {...current,error:loadError||storageError||current.error,selectedConnectionId:selected,connectionLimit:LIMIT,connectionName:record?name(record):'当前微信',contactNames:{...record?.contactNames},
+    const name=record=>record.name||record.profile?.nickname||`微信 ${records.indexOf(record)+1}`,record=records.find(item=>item.id===selected);
+    return {...current,error:loadError||storageError||current.error,selectedConnectionId:selected,connectionLimit:LIMIT,connectionName:record?name(record):'当前微信',profile:userProfile(record?.profile),contactNames:{...record?.contactNames},
       // 只汇总其他微信的任务和待处理数量；正文、联系人身份与配置仍只下发当前账号。
-      connections:records.map(record=>{const value=gateways.get(record.id).snapshot();return {id:record.id,name:name(record),account:value.account,status:value.status,enabled:value.enabled,taskCount:value.jobs.filter(job=>liveStates.has(job.state)).length,pendingCount:value.pending.length,outboxCount:value.outbox};})};
+      connections:records.map(record=>{const value=gateways.get(record.id).snapshot();return {id:record.id,name:name(record),...userProfile(record.profile),account:value.account,status:value.status,enabled:value.enabled,taskCount:value.jobs.filter(job=>liveStates.has(job.state)).length,pendingCount:value.pending.length,outboxCount:value.outbox};})};
   }
   function choose(id) {if(!gateways.has(id))throw Error('微信连接不存在，请重新选择。');save(records,id);selected=id;onChange();}
   return {
@@ -110,7 +123,7 @@ function createWechatManager({store,onChange=()=>{},...options}) {
       const id=scoped?payload.connectionId:selected,value=scoped?payload.value:payload;
       const record=records.find(item=>item.id===id),gateway=gateways.get(id);
       if(!record||!gateway)throw Error('微信连接不存在，请重新选择。');
-      // 备注只改变展示元数据，不写回机器人身份、联系人授权或执行路由。
+      // 备注名只改变展示元数据，不写回机器人身份、联系人授权或执行路由。
       if(name==='rename-connection'||name==='rename-user') {
         let patch;
         if(name==='rename-connection')patch={name:displayName(value)};

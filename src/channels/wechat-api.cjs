@@ -1,5 +1,6 @@
 'use strict';
 const {randomBytes,randomUUID}=require('node:crypto');
+const {downloadWechatImage,uploadWechatAvatar}=require('./wechat-image.cjs');
 
 // 消息协议参考 Hermes 868b9f2；二维码 POST 与重复绑定处理对照腾讯 openclaw-weixin 协议。
 const BASE='https://ilinkai.weixin.qq.com';
@@ -56,8 +57,9 @@ function incoming(message,accountId) {
     message.to_user_id&&message.to_user_id!==accountId)return null;
   if(!message.message_id)return null; // 没有可去重 ID 的消息不能触发本机操作。
   const items=Array.isArray(message.item_list)?message.item_list:[];
+  const images=items.filter(item=>item.type===2&&item.image_item&&typeof item.image_item==='object').slice(0,2).map(item=>item.image_item);
   return {id:String(message.message_id),sender:String(message.from_user_id),context:typeof message.context_token==='string'?message.context_token:'',
-    text:items.filter(item=>item.type===1&&typeof item.text_item?.text==='string').map(item=>item.text_item.text).join('\n').slice(0,16000)};
+    text:items.filter(item=>item.type===1&&typeof item.text_item?.text==='string').map(item=>item.text_item.text).join('\n').slice(0,16000),...(images.length?{images}:{})};
 }
 function createWechatApi({fetchImpl=globalThis.fetch,base=BASE}={}) {
   const validate=trustedBase,typingTickets=new WeakMap();
@@ -78,12 +80,25 @@ function createWechatApi({fetchImpl=globalThis.fetch,base=BASE}={}) {
     let data;try {data=parseResponse(text);}catch {throw new WechatError('微信响应无法解析');}
     return checkResult(data);
   }
+  async function sendItems(account,to,items,context,clientId,signal) {
+    const deliver=token=>request('sendmessage',{account,signal,timeout:20000,body:{msg:{
+      from_user_id:'',to_user_id:to,client_id:clientId,message_type:2,message_state:2,item_list:items,...(token?{context_token:token}:{})
+    }}});
+    try{return await deliver(context);}catch(error){
+      // 图片和文字共用旧会话回退及稳定投递 ID，重试不创建任务，也不改变收件人。
+      if(context&&!signal?.aborted&&(error.code===-14||error.staleSession))return deliver('');
+      throw error;
+    }
+  }
   return {
     validate,baseUrl:validate(base),
     // 本地已有 token 让微信识别重复绑定；二维码接口使用 POST，且不携带普通 Bot API 的 base_info。
     qr:(signal,tokens=[])=>request('get_bot_qrcode?bot_type=3',{signal,body:{local_token_list:tokens},baseInfo:false}),
     qrStatus:(code,host,signal)=>request('get_qrcode_status?qrcode='+encodeURIComponent(code),{host,signal}),
     updates:(account,cursor,signal)=>request('getupdates',{account,body:{get_updates_buf:cursor||''},signal}),
+    image:(item,signal)=>downloadWechatImage(item,{fetchImpl,signal}),
+    uploadAvatar:(account,to,avatar,signal)=>uploadWechatAvatar(avatar,{fetchImpl,signal,getUploadUrl:body=>request('getuploadurl',{account,body:{...body,to_user_id:to},signal,timeout:15000})}),
+    sendImage:(account,to,image,context,clientId=randomUUID(),signal)=>sendItems(account,to,[{type:2,image_item:image}],context,clientId,signal),
     async typing(account,to,enabled,context,signal) {
       signal?.throwIfAborted();
       // 票据按账号对象和联系人隔离，仅在内存缓存十分钟；停止时过期也要重新获取。
@@ -102,15 +117,7 @@ function createWechatApi({fetchImpl=globalThis.fetch,base=BASE}={}) {
       return true;
     },
     async send(account,to,text,context,clientId=randomUUID(),signal) {
-      const deliver=token=>request('sendmessage',{account,signal,timeout:20000,body:{msg:{
-        from_user_id:'',to_user_id:to,client_id:clientId,message_type:2,message_state:2,
-        item_list:[{type:1,text_item:{text}}],...(token?{context_token:token}:{})
-      }}});
-      try{return await deliver(context);}catch(error){
-        // Hermes 的旧会话回退：只重发同一结果一次，不创建新任务或更改收件人。
-        if(context&&!signal?.aborted&&(error.code===-14||error.staleSession))return deliver('');
-        throw error;
-      }
+      return sendItems(account,to,[{type:1,text_item:{text}}],context,clientId,signal);
     }
   };
 }
