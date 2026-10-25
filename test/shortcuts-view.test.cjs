@@ -5,6 +5,7 @@ function fixture() {
   class Element {
     constructor(){this.children=[];this.handlers={};this.attributes={};this.value='';this.textContent='';this.disabled=false;this.hidden=false;}
     append(...children){this.children.push(...children);}
+    replaceChildren(...children){this.children=[...children];}
     addEventListener(name,handler){this.handlers[name]=handler;}
     setAttribute(name,value){this.attributes[name]=value;}
     focus(){}
@@ -13,7 +14,7 @@ function fixture() {
   for(const [,id] of fs.readFileSync(path.join(__dirname,'../src/ui/index.html'),'utf8').matchAll(/id="(shortcuts-[^"]+)"/g))elements.set(id,new Element());
   let save=async tripleClick=>({shortcuts:{tripleClick}});
   const calls=[],document={getElementById:id=>elements.get(id),createElement:()=>new Element(),addEventListener(){}};
-  const source=fs.readFileSync(path.join(__dirname,'../src/ui/shortcuts-view.mjs'),'utf8').replace('export function','function');
+  const source=fs.readFileSync(path.join(__dirname,'../src/ui/select-view.mjs'),'utf8').replace('export function','function')+'\n'+fs.readFileSync(path.join(__dirname,'../src/ui/shortcuts-view.mjs'),'utf8').replace(/^import .*;\n/,'').replace('export function','function');
   const context={document,SHORTCUT_ACTIONS,window:{whale:{shortcuts:value=>{calls.push(value);return save(value);}}}};
   vm.runInNewContext(source+'\nvar view=createShortcutsView();',context);
   const get=id=>elements.get('shortcuts-'+id);

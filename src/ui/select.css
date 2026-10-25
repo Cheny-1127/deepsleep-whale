@@ -1,0 +1,16 @@
+/* 公共下拉结构；色彩、字号和选中态复用 components.css，业务页面只设置宽度和排列。 */
+.ui-select { position: relative; min-width: 0; }
+.ui-select > .ui-select-trigger { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; list-style: none; cursor: pointer; }
+.ui-select-trigger::-webkit-details-marker { display: none; }
+.ui-select-trigger::marker { content: ""; }
+.ui-select-trigger > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-select-trigger > svg, .ui-select-check { flex-shrink: 0; }
+.ui-select[open] > .ui-select-trigger { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+.ui-select[open] > .ui-select-trigger > svg { transform: rotate(180deg); }
+.ui-select-trigger[aria-disabled="true"] { opacity: var(--ui-disabled-opacity); cursor: default; }
+.ui-select-menu { position: absolute; top: calc(100% + 8px); left: 0; z-index: 11; width: 100%; padding: 5px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-menu); background: var(--ui-surface); box-shadow: var(--ui-popup-shadow); }
+.ui-select-options { max-height: min(264px, 40vh); overflow-y: auto; }
+.ui-select-content { display: flex; flex-direction: column; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.ui-select-description { font-size: var(--ui-font-small); color: var(--ui-text-subtle); }
+.ui-select-check { color: var(--ui-accent); visibility: hidden; }
+.ui-select-options [aria-selected="true"] .ui-select-check { visibility: visible; }

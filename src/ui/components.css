@@ -1,5 +1,6 @@
 @import url("tokens.css");
 @import url("quota-picker.css");
+@import url("select.css");
 
 /* 所有窗口引用这一层；业务样式保留排列、宽度和内容专属的颜色。 */
 :root { font-family: var(--ui-font-family); font-size: var(--ui-font-body); color: var(--ui-text-strong); font-synthesis: none; }
@@ -79,6 +80,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--ui-accent); }
 .quota-picker-options button:hover:not(:disabled), .quota-picker-options button:focus-visible { background: var(--ui-hover); }
 .ui-menu-item[aria-selected="true"], .ui-menu-item[aria-checked="true"], .quota-picker-options button[aria-selected="true"] { background: var(--ui-selected); color: var(--ui-accent); }
 .ui-menu-item:focus-visible, .quota-picker-options button:focus-visible { outline-offset: -2px; }
+.ui-danger-action { color: var(--ui-danger); }
+.ui-danger-action:hover:not(:disabled) { background: var(--ui-danger-surface); }
 .ui-alert { padding: 12px; border-radius: var(--ui-radius-control); background: var(--ui-danger-surface); color: var(--ui-danger); font-size: var(--ui-font-small); line-height: 1.7; overflow-wrap: anywhere; }
 
 /* 时长输入组合：数值与公共下拉入口连成一组，保持统一的尺寸和焦点样式。 */
@@ -95,3 +98,16 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--ui-accent); }
 .ui-tabs > [role="tab"] { min-height: var(--ui-control-height); padding: var(--ui-control-padding); border-radius: var(--ui-radius-control); color: var(--ui-text-muted); font-size: var(--ui-font-control); }
 .ui-tabs > [role="tab"]:hover { background: var(--ui-hover); }
 .ui-tabs > [role="tab"][aria-selected="true"] { background: var(--ui-selected); color: var(--ui-accent); }
+
+/* 少量账号直接平铺，沿用公共控件的选中、边框与禁用语义。 */
+.ui-choice { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 14px 16px; border: 1px solid var(--ui-border-control); border-radius: var(--ui-radius-control); background: var(--ui-surface); color: var(--ui-text); text-align: left; }
+.ui-choice:hover:not(:disabled) { background: var(--ui-hover); }
+.ui-choice[aria-pressed="true"] { border-color: var(--ui-accent); background: var(--ui-selected); color: var(--ui-accent); }
+.ui-choice strong { overflow-wrap: anywhere; font-size: var(--ui-font-control); }
+.ui-status { display: inline-flex; align-items: center; gap: 6px; color: var(--ui-text-subtle); font-size: var(--ui-font-small); }
+.ui-status::before { content: ""; width: 6px; height: 6px; flex-shrink: 0; border-radius: 50%; background: currentColor; }
+.ui-status[data-state="connected"] { color: var(--ui-accent); }
+.ui-status[data-state="expired"], .ui-status[data-state="error"] { color: var(--ui-danger); }
+/* 对话框复用公共表面与间距；焦点约束和 Esc 交给浏览器。 */
+.ui-dialog { width: min(740px, calc(100vw - 48px)); max-height: calc(100vh - 48px); overflow-y: auto; margin: auto; padding: var(--ui-card-padding); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-card); color: var(--ui-text); background: var(--ui-surface); }
+.ui-dialog::backdrop { background: rgb(20 40 32 / 30%); }
