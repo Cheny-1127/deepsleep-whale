@@ -69,7 +69,7 @@ test('option 4 lets only its owner replace the avatar directly with the next ima
   assert.match(await settingsReply(h,'friend','/settings',{sender:'friend'}),/仅扫码账号本人/);assert.equal(previews.length,1);
   assert.match(await settingsReply(h,'image-after-view','',{images:[{media:{}}]}),/头像已保存/);assert.equal(h.saved.connections[0].profile.avatar,avatar);assert.equal(downloads,1);
   assert.match(await settingsReply(h,'image-without-view','',{images:[{media:{}}]}),/修改昵称/);assert.equal(downloads,1);
-  assert.match(await settingsReply(h,'edit','3'),/请发送一张头像/);assert.equal(previews.length,1);
+  assert.match(await settingsReply(h,'edit','3'),/1\. 替换头像/);assert.equal(previews.length,1);
   const cleared=await settingsReply(h,'clear','清空');assert.match(cleared,/头像已清空/);assert.ok(!cleared.includes('4. 查看头像'));
   assert.match(await settingsReply(h,'missing','4'),/尚未设置头像/);assert.equal(previews.length,1);assert.equal(h.runs.length,0);
 });
@@ -103,6 +103,17 @@ test('restarting never replays an avatar preview from an earlier settings sessio
   await until(()=>h.manager.snapshot().outbox===0);assert.deepEqual(h.sent,[]);
 });
 async function settingsReply(h,id,text,{sender='owner',images=[]}={}){const replies=()=>h.sent.filter(item=>item.sender===sender&&typeof item.text==='string');const count=replies().length;h.push('bot-a',id,text,sender,images);await until(()=>replies().length>count);return replies().at(-1).text;}
+test('avatar menu describes replacement and deletion and returns to the profile on zero',async t=>{
+  const initial=pair();initial.connections[0].profile={nickname:'小鲸',avatar};
+  const h=harness(t,initial);h.manager.start();
+  await settingsReply(h,'settings','/settings');await settingsReply(h,'profile','1');
+  assert.equal(await settingsReply(h,'avatar','3'),'1. 替换头像，直接发送要设置的头像图片（PNG/JPEG，最大 4 MB）\n2. 删除头像，回复 “删除”\n3. 回复 0 返回上一级');
+  assert.match(await settingsReply(h,'back','0'),/^用户信息/);
+  assert.equal(h.saved.connections[0].profile.avatar,avatar);
+  await settingsReply(h,'edit-again','3');
+  assert.match(await settingsReply(h,'delete','删除'),/头像已清空/);
+  assert.equal(h.saved.connections[0].profile.avatar,'');assert.equal(h.runs.length,0);
+});
 test('avatar updates require the explicit owner edit step; errors retain the old image and clearing persists',async t=>{
   const initial=pair();initial.connections[0].state.allowed.push('friend');
   const h=harness(t,initial,{normalizeAvatar:()=>avatar});h.manager.start();let downloads=0,fail=false;
@@ -154,13 +165,14 @@ test('a status command exits an in-flight avatar edit and late downloads cannot 
   await settingsReply(h,'status','/status');release(Buffer.from('late'));await tick();assert.equal(h.saved.connections[0].profile,undefined);
   h.push('bot-a','normal','正常任务');await until(()=>h.runs.length===1);
 });
-test('zero cancels a downloading avatar immediately and late data cannot save after cancellation',async t=>{
+test('zero returns from a downloading avatar immediately and late data cannot save after returning',async t=>{
   const h=harness(t,connected(),{normalizeAvatar:()=>avatar});h.manager.start();let release,started=false;
   h.api.image=()=>new Promise(resolve=>{started=true;release=resolve;});
   await settingsReply(h,'s','/settings');await settingsReply(h,'p','1');await settingsReply(h,'a','3');
   h.push('bot-a','photo','','owner',[{media:{}}]);await until(()=>started);
-  assert.match(await settingsReply(h,'cancel','0'),/已退出设置/);
+  assert.match(await settingsReply(h,'back','0'),/^用户信息/);
   release(Buffer.from('late'));await tick();assert.equal(h.saved.connections[0].profile,undefined);
+  assert.match(await settingsReply(h,'exit','0'),/已退出设置/);
   h.push('bot-a','normal','正常任务');await until(()=>h.runs.length===1);
 });
 
