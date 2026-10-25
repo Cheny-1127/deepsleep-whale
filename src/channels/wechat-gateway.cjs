@@ -50,7 +50,7 @@ function replyParts(text) {
   // 编号也占消息长度；预留空间后再分段，原文和编号一同持久化以供断点重投。
   return splitText(value,1768).map((part,index,all)=>`【结果 ${index+1}/${all.length}】\n\n${part}`);
 }
-function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThreads=listCodexThreads,readThread=readCodexThread,discoverClients=discoverRunningClients,onChange=()=>{},loginDelay=1000,pollDelay=500,questionTimeoutMs=300000}) {
+function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThreads=listCodexThreads,readThread=readCodexThread,discoverClients=discoverRunningClients,onChange=()=>{},loginDelay=1000,pollDelay=500,questionTimeoutMs=300000,execution,validateAccount=()=>{}}) {
   let state,loadError='',status='disconnected',error='',deliveryError='',failedDeliveryId='',deliveryRetryAt=0,deliveryFailures=0,qr=null,loginController,pollController,closed=false,active=null,flushing=false;
   const approvals=new Map(),inputs=new Map();
   const titleReaders=new Map();
@@ -273,10 +273,13 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
     // 绑定可能已被后续选择替换；只有同一绑定才能继承执行期间新建的会话。
     const session=job.route.threadId||(binding?.id===job.route.bindingId?binding.threadId:'');
     const transport=settings.backend==='codex'&&session?(job.route.transport||(binding?.id===job.route.bindingId?binding.transport:null)||'desktop'):'local';
-    if(session)job.route.threadId=session;
-    if(!recovering){job.state='running';job.startedAt=Date.now();}persist();
-    const current={job,handle:null};active=current;changed();
+    const release=execution?execution.acquire(job):()=>{};if(!release)return;
+    const current={job,handle:null};
     try {
+      // 拿到跨账号执行锁后，保存失败也必须走统一清理，不能遗留锁或启动未落盘的任务。
+      if(session)job.route.threadId=session;
+      if(!recovering){job.state='running';job.startedAt=Date.now();}persist();
+      active=current;changed();
       current.handle=runAgent({settings,text:recovering?undefined:job.text,session:session||undefined,transport,recovering,checkpoint:job.checkpoint,
         ...(recovering?{timeoutMs:Math.max(15000,600000-(Date.now()-job.startedAt))}:{}),
         onCheckpoint:value=>{
@@ -298,9 +301,9 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
         job.failure=failureDetails(cause);job.state=job.failure.code==='CANCELLED'?'cancelled':['RECOVERY_UNKNOWN','TURN_INTERRUPTED'].includes(job.failure.code)?'interrupted':'failed';job.finishedAt=Date.now();delete job.text;
         queueReply(job.sender,job.failure.message+'\n不会自动重新执行，可发送 /status 查看。',undefined,job.id);
       }).catch(()=>{state.enabled=false;status='error';error='任务状态无法保存，已暂停微信执行';stopPoll();})
-        .finally(()=>{if(active===current){denyApprovals();for(const entry of [...inputs.values()])try{finishInput(entry,null,false);}catch{}active=null;try{persist();}catch{}changed();void flush();schedule();}});
+        .finally(()=>{release();if(active===current){denyApprovals();for(const entry of [...inputs.values()])try{finishInput(entry,null,false);}catch{}active=null;try{persist();}catch{}changed();void flush();schedule();}});
     }catch(cause) {
-      job.failure=failureDetails(cause);job.state='failed';job.finishedAt=Date.now();delete job.text;active=null;
+      release();job.failure=failureDetails(cause);job.state='failed';job.finishedAt=Date.now();delete job.text;active=null;
       try{reply(job.sender,job.failure.message+'\n没有切换其他实例或重新执行。',job.id);persist();}catch{}changed();schedule();
     }
   }
@@ -449,11 +452,11 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
     const client=selectedClient(binding);
     if(!client){reply(sender,'所选实例未启用。请发送 /clients，再用 /client 编号或 /client auto 选择；没有切换账号执行。');return;}
     const settings=validateSettings({...client,cwd:binding.cwd});
-    if(state.jobs.filter(j=>['queued','running','approval','question','recovering'].includes(j.state)).length>=5){reply(sender,'任务队列已满，请等待或停止已有任务。');return;}
+    if((execution?execution.count():state.jobs.filter(j=>['queued','running','approval','question','recovering'].includes(j.state)).length)>=5){reply(sender,'任务队列已满，请等待或停止已有任务。');return;}
     delete menu.choice;
     if(!binding.id)binding.id=randomUUID();
     if(!binding.clientId)binding.clientId=client.id;
-    const notifyQueue=active&&!state.jobs.some(job=>job.sender===sender&&job.state==='queued');
+    const notifyQueue=(active||execution?.busy())&&!state.jobs.some(job=>job.sender===sender&&job.state==='queued');
     // 入队时保留原文与路由快照，后续切换项目或客户端不能改变已排队消息的执行目标。
     state.jobs.push({id:randomUUID(),sender,text,exchange:{request:text},state:'queued',startedAt:Date.now(),route:{clientId:client.id,clientName:client.name,settings,threadId:binding.threadId||'',threadName:binding.threadId?binding.threadName||'':'',transport:binding.transport||'',bindingId:binding.id}});
     state.jobs=state.jobs.slice(-50);persist();if(notifyQueue)reply(sender,'消息已排队，前面的任务结束后会继续处理。');schedule();
@@ -527,6 +530,7 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
           if(result.status==='confirmed') {
             if(!result.ilink_bot_id||!result.bot_token)throw new Error('微信确认信息缺少账号凭据');
             const id=String(result.ilink_bot_id),same=state.account?.id===id;
+            validateAccount(id);
             if(!same){const clients=state.clients;state=fresh();state.clients=clients;invalidateQueries();deliveryError='';failedDeliveryId='';deliveryRetryAt=0;deliveryFailures=0;}
             state.account={id,token:String(result.bot_token),baseUrl:api.validate(result.baseurl||BASE),owner:String(result.ilink_user_id||'')};
             if(state.account.owner&&!state.allowed.includes(state.account.owner))state.allowed.push(state.account.owner);
@@ -542,6 +546,9 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
   }
   return {
     snapshot,
+    // 仅供连接管理器调度，避免计算队列时读取历史标题或传递正文与凭据。
+    schedulingState:()=>({enabled:state.enabled,connected:Boolean(state.account),jobs:state.jobs.map(({id,state,startedAt})=>({id,state,startedAt}))}),
+    wake:schedule,
     start(){if(!loadError&&state.enabled&&state.account){try{persist();startPoll();}catch{}}else if(loadError){status='error';changed();}},
     async action(name,value) {
       if(name==='login') {try{await login();}catch(e){status='error';tellError(e.message);throw e;}}

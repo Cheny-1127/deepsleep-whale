@@ -27,7 +27,8 @@ function createWechatStore({dataDir,safeStorage}) {
       if(!available())throw new Error('系统安全存储不可用，无法读取微信连接');
       let value;
       try {value=JSON.parse(safeStorage.decryptString(fs.readFileSync(file)));}catch {throw new Error('微信连接数据无法解密，原文件已保留');}
-      return migrate(value);
+      // 多账号容器由管理器逐连接校验；旧文件继续沿用原来的无损迁移。
+      return value?.version===3?value:migrate(value);
     },
     save(value) {
       if(!available())throw new Error('系统安全存储不可用，微信凭据未保存');

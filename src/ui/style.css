@@ -196,3 +196,5 @@ button,input{-webkit-app-region:no-drag}.studio{display:flex;background:var(--ui
 /* 禁用状态作用于整条账号选项，避免只有圆点变淡、名称仍看起来可选；保留占用原因的悬停提示。 */
 .quota-pet-settings [role="radiogroup"]>label:has(input:disabled){color:var(--ui-text-subtle);opacity:var(--ui-disabled-opacity);cursor:not-allowed}
 .quota-pet-settings [role="radiogroup"]>label input:disabled{opacity:1;accent-color:var(--ui-text-subtle);cursor:not-allowed}
+/* 微信切换只改变管理对象，各连接持续接收；选择器与添加入口在窄窗口可换行。 */
+.wechat-connections{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.wechat-connections select{flex:1;min-width:0;width:auto;margin:0}.wechat-connections button{flex-shrink:0}

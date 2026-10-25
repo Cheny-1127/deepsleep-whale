@@ -9,7 +9,11 @@ export function updateSidebarStatus(id,data) {
     if(!sources.length)status='已暂停';
     else if(sources.every(source=>data.hookAvailability?.[source]?.state==='checked'&&
       !Object.entries(data.hookAvailability[source].events).some(([event,value])=>value.available&&data.settings.events?.[source]?.[event]!==false)))status='未启用';
-  } else if(id==='wechat')status=!data.account?'未连接':data.enabled===false?'已暂停':'';
+  } else if(id==='wechat') {
+    // 正在查看的微信可能暂停或尚未扫码，侧栏须汇总所有已绑定连接。
+    const connections=data.connections||[data],bound=connections.filter(item=>item.account);
+    status=!bound.length?'未连接':bound.every(item=>item.enabled===false)?'已暂停':'';
+  }
   else if(id==='mail')status=!data.config?'未配置':data.enabled===false?'已暂停':'';
   else if(id==='archery')status=data.enabled===false?'已暂停':'';
   // 多账号功能仅在全部账号暂停时置灰；单个账号暂停不代表整个功能停用。

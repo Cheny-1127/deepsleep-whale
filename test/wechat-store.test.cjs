@@ -3,6 +3,7 @@ const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const {fresh,migrate,createWechatStore,bindingKey}=require('../src/channels/wechat-store.cjs');
 const {validateClients}=require('../src/agents/clients.cjs');
+const {createWechatManager}=require('../src/channels/wechat-manager.cjs');
 test('encrypted legacy state migrates the original client and conversation without losing delivery or dedup',t=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'whale-wechat-store-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
   const safeStorage={isEncryptionAvailable:()=>true,getSelectedStorageBackend:()=> 'test',encryptString:s=>Buffer.from(s),decryptString:b=>b.toString()};
@@ -23,4 +24,19 @@ test('multiple clients retain explicit order and enabled states, without requiri
   assert.throws(()=>validateClients([a,a]),/重复/);assert.throws(()=>validateClients([{...a,profile:'bad;command'}]),/profile/);
   assert.throws(()=>validateClients([{...a,binary:'relative'}]),/可执行/);assert.throws(()=>validateClients([{...a,enabled:'yes'}]),/启用/);
   assert.deepEqual(validateClients([]),[]);
+});
+
+test('encrypted multi-account migration round-trips and invalid containers keep the original bytes',async t=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'whale-wechat-multiple-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  const safeStorage={isEncryptionAvailable:()=>true,getSelectedStorageBackend:()=> 'test',encryptString:s=>Buffer.from(Buffer.from(s).toString('base64')),decryptString:b=>Buffer.from(b.toString(),'base64').toString()};
+  const store=createWechatStore({dataDir:dir,safeStorage}),legacy=fresh();
+  legacy.account={id:'original-bot',token:'original-token'};legacy.allowed=['owner'];legacy.seen=['original-message'];store.save(legacy);
+  const manager=createWechatManager({store});t.after(()=>manager.close());
+  await manager.action('add-connection');const restored=store.load();
+  assert.equal(restored.version,3);assert.deepEqual(restored.connections[0].state,legacy);assert.equal(restored.connections.length,2);
+  assert.ok(!fs.readFileSync(path.join(dir,'wechat.enc'),'utf8').includes('original-token'));
+  manager.close();const reboot=createWechatManager({store});t.after(()=>reboot.close());assert.equal(reboot.snapshot().connections[0].account.id,'original-bot');
+  restored.connections[1].id=restored.connections[0].id;store.save(restored);const bytes=fs.readFileSync(path.join(dir,'wechat.enc'));
+  const invalid=createWechatManager({store});t.after(()=>invalid.close());invalid.start();await assert.rejects(invalid.action('add-connection'),/标识/);
+  assert.deepEqual(fs.readFileSync(path.join(dir,'wechat.enc')),bytes);
 });

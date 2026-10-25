@@ -17,7 +17,7 @@ const {readClientPresence}=require('../clients/presence.cjs');
 const {createCodexRuntime}=require('../clients/codex-runtime.cjs');
 const {createWechatApi}=require('../channels/wechat-api.cjs');
 const {createWechatStore}=require('../channels/wechat-store.cjs');
-const {createWechatGateway}=require('../channels/wechat-gateway.cjs');
+const {createWechatManager}=require('../channels/wechat-manager.cjs');
 const {createMailReceiver}=require('../channels/imap-mail.cjs');
 const {createMailStore}=require('../channels/mail-store.cjs');
 const {createArcheryPending}=require('../channels/archery-pending.cjs');
@@ -353,7 +353,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     activity.reconcile(titles.readState());
     if(savedReminders)saveReminders();
     windows.start({showPanelOnStartup:hooks.settings.showPanelOnStartup});
-    wechat=createWechatGateway({store:createWechatStore({dataDir,safeStorage}),
+    wechat=createWechatManager({store:createWechatStore({dataDir,safeStorage}),
       api:createWechatApi({fetchImpl:(url,options)=>net.fetch(url,options)}),
       makeQr:text=>QRCode.toDataURL(text,{width:256,margin:2,errorCorrectionLevel:'M'}),onChange:broadcast});
     wechat.start();
