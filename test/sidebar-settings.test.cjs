@@ -12,12 +12,12 @@ test('menu order and collected items survive restart, including an empty visible
   settings.update(next);assert.deepEqual(f.create().snapshot(),next);
   const all={visible:[],more:[...next.more,...next.visible]};
   settings.update(all);assert.deepEqual(f.create().snapshot(),all);
-  all.more.pop();assert.equal(settings.snapshot().more.length,8);
+  all.more.pop();assert.equal(settings.snapshot().more.length,9);
 });
 test('older layouts retain known ordering and append new entries without duplicates',t=>{
   const f=fixture(t);fs.writeFileSync(f.file,JSON.stringify({visible:['quota','quota','old'],more:['home','quota']}));
   const state=f.create().snapshot();assert.equal(state.visible[0],'quota');assert.deepEqual(state.more,['home']);
-  assert.equal(new Set([...state.visible,...state.more]).size,8);
+  assert.equal(new Set([...state.visible,...state.more]).size,9);
   assert.equal(state.visible.includes('old'),false);
 });
 test('invalid updates and write failures preserve the last good layout',t=>{
@@ -26,5 +26,5 @@ test('invalid updates and write failures preserve the last good layout',t=>{
   fs.mkdirSync(f.file);assert.throws(()=>settings.update({visible:[],more:before.visible}));assert.deepEqual(settings.snapshot(),before);
 });
 test('corrupt config falls back without overwriting user data',t=>{
-  const f=fixture(t);fs.writeFileSync(f.file,'broken');assert.equal(f.create().snapshot().visible.length,8);assert.equal(fs.readFileSync(f.file,'utf8'),'broken');
+  const f=fixture(t);fs.writeFileSync(f.file,'broken');assert.equal(f.create().snapshot().visible.length,9);assert.equal(fs.readFileSync(f.file,'utf8'),'broken');
 });

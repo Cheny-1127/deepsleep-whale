@@ -14,6 +14,7 @@ import { createPetGestures } from './pet-gestures.mjs';
 import { createShortcutsView } from './shortcuts-view.mjs';
 import { createPetQuotaSettingsView } from './pet-quota-settings-view.mjs';
 import { createPetQuotaView } from './pet-quota-view.mjs';
+import { createPlannerView } from './planner-view.mjs';
 
 const $ = id => document.getElementById(id);
 const copy = {
@@ -41,6 +42,7 @@ createPetHitTest();
 createSidebarView();
 const hooksView=createHookSettingsView({render});
 const remindersView=createReminderView({render,action,floating});
+const plannerView=createPlannerView({floating});
 const wechatView=createWechatView();
 createMailView();
 const subscriptionsView=createMessageSubscriptionsView();
@@ -87,6 +89,7 @@ function render(data) {
   if($('pet-visibility-toggle'))$('pet-visibility-toggle').textContent=data.petVisible?'隐藏':'显示';
   hooksView.render(data);
   remindersView.render(data);
+  plannerView.render(data.planner);
   wechatView.render(data.wechat);
   shortcutsView.render(data);
   subscriptionsView?.renderSummary(data.subscriptions);

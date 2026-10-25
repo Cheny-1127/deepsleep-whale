@@ -26,6 +26,7 @@ const {createGroupUsage}=require('../channels/quota-group-usage.cjs');
 const {createKeyUsage}=require('../channels/quota-key-usage.cjs');
 const {createShortcutSettings}=require('./shortcut-settings.cjs');
 const {createSidebarSettings}=require('./sidebar-settings.cjs');
+const {createPlanner}=require('./planner.cjs');
 const {createPetQuotaSettings}=require('./pet-quota-settings.cjs');
 const {createPetQuota}=require('../channels/pet-quota.cjs');
 const {createMessageSubscriptions}=require('../channels/message-subscriptions.cjs');
@@ -39,6 +40,8 @@ app.setPath('userData', dataDir);
 app.setName('鲸鱼娘');
 if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   let bridge,wechat,mail,archery,quota,groupUsage,keyUsage,petQuota,subscriptions;
+  let planner,plannerTimer;
+  const plannerNotifications=new Map();
   let eventQueue=Promise.resolve();
   const cursorState=process.env.WHALE_CURSOR_STATE_DB||path.join(os.homedir(),'Library','Application Support','Cursor','User','globalStorage','state.vscdb');
   const cursorChats=createCursorChatOpener({stateFile:cursorState,openExternal:url=>shell.openExternal(url)});
@@ -81,7 +84,19 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   const windows=createWindows({snapshot,performAction,rankingSnapshot:id=>petQuota.rankingSnapshot(id),rankingRefresh:id=>petQuota.refreshRanking(id),rankingSelect:(groupId,id)=>petQuota.selectRankingGroup(groupId,id),collapseReminders:()=>{
     if(completionExpanded||busyExpanded) { completionExpanded=false;busyExpanded=false;broadcast(); }
   }});
-  const {showPanel,showReminders}=windows;
+  const {showPanel,showReminders,showPlanner}=windows;
+
+  function syncPlannerNotifications() {
+    const summary=planner?.summary();
+    // 时段结束、开始处理或本轮 token 改变后主动撤回旧通知，避免系统通知中心留下失效入口。
+    for(const [id,entry] of plannerNotifications)if(!summary?.notifications||(entry.finished?summary.now>=entry.windowEnd||!planner.isAllowed(entry.reminderId):!summary.active.some(item=>item.id===id&&item.token===entry.token&&item.state==='waiting'))) {
+      entry.notice.close();plannerNotifications.delete(id);
+    }
+  }
+  function tickPlanner() {
+    try{planner?.tick();}catch{/* 保存失败由快照显示，保留上次已落盘状态以便重试。 */}
+    syncPlannerNotifications();broadcast();
+  }
 
   // 客户端退出只隐藏提醒并清理实时任务，重新打开不会重放通知或成长。
   function refreshClients() {
@@ -106,7 +121,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   function snapshot() {
     // 两个窗口共享同一份主进程状态，避免小屋和悬浮桌宠各自计时、各自累计成长。
     const tasks = activity.snapshot();
-    return { subscriptions:subscriptions?.summary()||null,trackingRows:petQuotaSettings.snapshot().trackingConfigs.length, petVisible:windows.isPetVisible(),shortcuts:shortcuts.snapshot(),wechat:wechat?.snapshot()||null,hookAdapters:hooks.adapters,hookAvailability:hooks.availability,sourceStatus,codexApprovalSync:codexRuntime.snapshot(),clientRunning:{...clientRunning},completionExpanded, busyExpanded, reminderView, settings:hooks.settings, nurture: nurture.snapshot(), activity: tasks, ...behavior.snapshot(), bridge: Boolean(bridge), bridgeError, reminderError };
+    return { planner:planner?.summary()||null,subscriptions:subscriptions?.summary()||null,trackingRows:petQuotaSettings.snapshot().trackingConfigs.length, petVisible:windows.isPetVisible(),shortcuts:shortcuts.snapshot(),wechat:wechat?.snapshot()||null,hookAdapters:hooks.adapters,hookAvailability:hooks.availability,sourceStatus,codexApprovalSync:codexRuntime.snapshot(),clientRunning:{...clientRunning},completionExpanded, busyExpanded, reminderView, settings:hooks.settings, nurture: nurture.snapshot(), activity: tasks, ...behavior.snapshot(), bridge: Boolean(bridge), bridgeError, reminderError };
   }
   function canObserveCodexApproval() {
     return hooks.settings.sources.codex&&hooks.settings.events.codex?.PermissionRequest!==false&&clientRunning.codex===true&&
@@ -207,6 +222,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
       } else busyExpanded=false;
     } else if (action === 'close-completions') { completionExpanded=false;busyExpanded=false;reminderView=null; }
     else if (action === 'reminders') showReminders();
+    else if (action === 'planner') showPlanner();
     else if (action === 'read-notice' && typeof value === 'string') { activity.markRead(value);saveReminders(); }
     else if (action === 'open-chat') { await openChat(value?.sessionId,value?.noticeId); }
     else if (action === 'panel') showPanel();
@@ -218,6 +234,15 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     return snapshot();
   }
   ipcMain.handle('action', (_event, action, value) => performAction(action, value));
+  // 完整工作备注仅由小屋读取；桌宠只接收当前提醒及受限的处理动作。
+  ipcMain.handle('planner',(event,name,value)=>{
+    const panel=windows.isPanel(event.sender),pet=windows.isPet(event.sender);
+    if((!panel&&!pet)||event.senderFrame!==event.sender.mainFrame)throw Error('不允许访问日程备忘');
+    if(!planner)return {error:'日程备忘正在初始化'};
+    if(!panel&&!['start','complete'].includes(name))return {error:'仅允许在小屋管理日程备忘'};
+    try{const result=planner.action(name,value);return {value:panel?result:planner.summary()};}
+    catch(error){return {error:error.message};}
+  });
   // 菜单布局仅允许小屋主框架读写，悬浮桌宠与子框架不能修改。
   ipcMain.handle('sidebar-settings',(event,value)=>{
     if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋整理菜单');
@@ -353,6 +378,24 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     activity.reconcile(titles.readState());
     if(savedReminders)saveReminders();
     windows.start({showPanelOnStartup:hooks.settings.showPanelOnStartup});
+    planner=createPlanner({dataDir,onChange:()=>{syncPlannerNotifications();broadcast();},onDue:(item,preferences)=>{
+      if(preferences.notifications&&Notification.isSupported()) {
+        const notice=new Notification({title:'deepsleep · 日程提醒',body:item.title+(item.processMinutes?` · 准备好后开始处理 ${item.processMinutes} 分钟`:' · 完成后再开始下一轮'),silent:true});
+        notice.on('click',showPlanner);plannerNotifications.set(item.id,{notice,token:item.run.token});notice.show();
+      }
+      if(preferences.sound)windows.chime();
+    },onFinished:(item,preferences)=>{
+      if(preferences.notifications&&Notification.isSupported()) {
+        const key=item.id+':finished';plannerNotifications.get(key)?.notice.close();
+        const notice=new Notification({title:'deepsleep · 处理结束',body:`${item.title} · ${item.processMinutes} 分钟处理已结束，下一轮已安排。`,silent:true});
+        notice.on('click',showPlanner);plannerNotifications.set(key,{notice,finished:true,reminderId:item.id,windowEnd:item.run.windowEnd});notice.show();
+      }
+      if(preferences.sound)windows.chime();
+    }});
+    // 计时统一由主进程推进；关闭小屋不影响进度，唤醒时立即按持久化状态补算。
+    tickPlanner();plannerTimer=setInterval(tickPlanner,1000);
+    powerMonitor.on('resume',tickPlanner);
+    app.once('before-quit',()=>{clearInterval(plannerTimer);powerMonitor.removeListener('resume',tickPlanner);for(const {notice} of plannerNotifications.values())notice.close();plannerNotifications.clear();});
     wechat=createWechatManager({store:createWechatStore({dataDir,safeStorage}),
       api:createWechatApi({fetchImpl:(url,options)=>net.fetch(url,options)}),
       makeQr:text=>QRCode.toDataURL(text,{width:256,margin:2,errorCorrectionLevel:'M'}),onChange:broadcast});

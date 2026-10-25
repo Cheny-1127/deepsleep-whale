@@ -36,7 +36,7 @@ async function hold(id) {
     const rect=icon.getBoundingClientRect(),text=label.getBoundingClientRect(),row=button.getBoundingClientRect(),style=getComputedStyle(icon);
     return {width:rect.width,height:rect.height,stroke:style.strokeWidth,textOffset:text.left-row.left,centerOffset:Math.abs(rect.top+rect.height/2-text.top-text.height/2)};
   }));
-  assert.equal(iconMetrics.length,8);
+  assert.equal(iconMetrics.length,9);
   assert.equal(new Set(iconMetrics.map(icon=>`${icon.width}/${icon.height}/${icon.stroke}`)).size,1,'所有功能图标规格一致');
   assert.equal(new Set(iconMetrics.map(icon=>icon.textOffset)).size,1,'所有菜单文字起点一致');
   assert.ok(iconMetrics.every(icon=>icon.centerOffset<1),'图标与文字垂直居中');
