@@ -364,6 +364,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
         // 副配置选择窗只列出可用账号；主配置保留完整选择范围。
         const id=value ?? 'primary',selected=petQuota.accountIdFor(id),accounts=petQuota.availableAccounts(id);
         if(!accounts.length)throw Error(quota.snapshot().accounts.length ? '没有可用的跟踪账号，其他账号已被配置占用' : '暂无可选账号，请先在 API 额度中同步账号');
+        if(accounts.length===1)return {value:petQuota.snapshot(),message:'哎呀，其他账号都在展示啦，暂时没得换咯～'};
         const accountId=await windows.chooseTrackingAccount(accounts,selected);
         return {value:accountId===null?petQuota.snapshot():petQuota.selectAccount(accountId,id)};
       }catch(error){return {error:error.message};}

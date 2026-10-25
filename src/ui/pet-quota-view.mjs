@@ -1,5 +1,5 @@
 // 额度条共用缓存；主条同步配置，副条在桌宠上临时选择账号。
-export function createPetQuotaView() {
+export function createPetQuotaView({say = () => {}} = {}) {
   if (!document.getElementById('pet-quota-controls')) return;
   const bars = new Map();
   const primaryGet = name => document.getElementById('pet-quota-' + name);
@@ -90,7 +90,10 @@ export function createPetQuotaView() {
       try {
         const result = await window.whale.petQuota('choose-account', bar.slot);
         if (result.error) error = result.error;
-        else render(result.value);
+        else {
+          render(result.value);
+          if (result.message) say(result.message);
+        }
       } catch {error = '切换账号失败，请重试';}
       finally {
         switching = false;

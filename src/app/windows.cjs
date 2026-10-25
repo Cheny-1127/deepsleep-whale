@@ -56,6 +56,7 @@ function createWindows({ snapshot, performAction, collapseReminders, rankingSnap
     resolve?.(accountId);
   }
   async function chooseTrackingAccount(accounts, accountId) {
+    if (accounts.length <= 1) return null;
     if (!pet || pet.isDestroyed() || !pet.isVisible() || accountResolve) return null;
     petMenu.close();petRanking.close();
     const request = ++accountSequence;
