@@ -35,6 +35,14 @@ test('typing uses iLink tickets cached per account and peer and refreshes before
   await api.typing(account,'other',true,'ctx-other');await api.typing({...account,token:'another-account-token'},'owner',true,'ctx-account');
   assert.equal(issued,4);assert.equal(requests.at(-1).headers.Authorization,'Bearer another-account-token');
 });
+test('QR creation posts local tokens without bearer credentials or ordinary API metadata',async()=>{
+  const requests=[],api=createWechatApi({fetchImpl:async(url,options)=>{requests.push({url,...options});return {ok:true,text:async()=>'{}'};}});
+  await api.qr(undefined,['another-connection-token']);await api.qr();
+  assert.equal(requests[0].method,'POST');
+  assert.deepEqual(JSON.parse(requests[0].body),{local_token_list:['another-connection-token']});
+  assert.deepEqual(JSON.parse(requests[1].body),{local_token_list:[]});
+  assert.equal(requests[0].headers.Authorization,undefined);
+});
 test('missing typing tickets and cancellation never send a typing-start signal',async()=>{
   const requests=[],api=createWechatApi({fetchImpl:async(url,options)=>{requests.push(url);return {ok:true,text:async()=>'{}'};}});
   assert.equal(await api.typing({token:'test'},'owner',true,'ctx'),false);assert.equal(requests.length,1);

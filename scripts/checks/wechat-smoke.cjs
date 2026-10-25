@@ -19,11 +19,11 @@ global.wechatSmoke={queue:[],sent:[],typing:[],confirmed:false,failSend:false,lo
 require(${JSON.stringify(path.join(root,'src/clients/discovery.cjs'))}).discoverRunningClients=async()=>{if(global.wechatSmoke.failDiscovery)throw Error('检测失败，请重试');return ${JSON.stringify(discovered)};};
 net.fetch=async(url,options)=>{const s=global.wechatSmoke;let data={};
 if(url.includes('get_bot_qrcode'))data={qrcode:'hidden-poll-token',qrcode_img_content:'https://example.test/wechat-test-qr'};
-else if(url.includes('get_qrcode_status'))data=s.confirmed?{status:'confirmed',ilink_bot_id:s.loginBot,bot_token:s.loginBot==='fixture-bot'?'hidden-bot-token':'hidden-bot-token-2',ilink_user_id:'fixture-owner',baseurl:'https://ilinkai.weixin.qq.com'}:{status:'wait'};
-else if(url.endsWith('getupdates')){const bot=options.headers.Authorization==='Bearer hidden-bot-token'?'fixture-bot':'fixture-bot-2';data={msgs:s.queue.filter(m=>m.to_user_id===bot),get_updates_buf:'fixture-cursor'};s.queue=s.queue.filter(m=>m.to_user_id!==bot);}
+else if(url.includes('get_qrcode_status'))data=s.confirmed?{status:'confirmed',ilink_bot_id:s.loginBot,bot_token:s.loginToken||(s.loginBot==='fixture-bot'?'hidden-bot-token':'hidden-bot-token-2'),ilink_user_id:'fixture-owner',baseurl:'https://ilinkai.weixin.qq.com'}:{status:'wait'};
+else if(url.endsWith('getupdates')){s.lastPollToken=options.headers.Authorization;const bot=s.lastPollToken==='Bearer hidden-bot-token-2'?'fixture-bot-2':'fixture-bot';if(s.lastPollToken==='Bearer '+s.invalidToken)data={ret:-14};else{data={msgs:s.queue.filter(m=>m.to_user_id===bot),get_updates_buf:'fixture-cursor'};s.queue=s.queue.filter(m=>m.to_user_id!==bot);}}
 else if(url.endsWith('getconfig'))data={typing_ticket:'fixture-typing-ticket'};
 else if(url.endsWith('sendtyping'))s.typing.push(JSON.parse(options.body));
-else if(url.endsWith('sendmessage')){if(s.failSend)throw Error('fixture offline');s.sent.push(JSON.parse(options.body).msg);}
+else if(url.endsWith('sendmessage')){if(s.failSend)throw Error('fixture offline');s.lastSendToken=options.headers.Authorization;s.sent.push(JSON.parse(options.body).msg);}
 else throw Error('Unexpected network call in fixture');return {ok:true,text:async()=>JSON.stringify(data)};};
 require(${JSON.stringify(path.join(root,'test/fixtures/codex-desktop.cjs'))}).desktopFixture({home:${JSON.stringify(dir)},cwd:require('node:fs').realpathSync(${JSON.stringify(dir)}),autoComplete:true}).then(desktop=>{global.desktopSmoke=desktop;require(${JSON.stringify(path.join(root,'src/main.cjs'))});});`);
 let app;
@@ -248,6 +248,21 @@ async function waitSnapshot(panel,check) {
   panel.once('dialog',dialog=>{assert.match(dialog.message(),/个人微信/);return dialog.accept();});await panel.locator('#wechat-forget').click();
   multi=await waitSnapshot(panel,s=>s.wechat.connections.length===1);
   assert.equal(multi.wechat.selectedConnectionId,firstConnection);assert.equal(multi.wechat.enabled,true);
+  // 模拟测试扫码使旧 token 失效：手机正常确认后，应用须换用新 token，并保留原来的历史记录。
+  const beforeRenewal=multi.wechat.jobs.map(job=>job.id),sentBeforeRenewal=await app.evaluate(()=>global.wechatSmoke.sent.length);
+  await app.evaluate(()=>{global.wechatSmoke.invalidToken='hidden-bot-token';});
+  await waitSnapshot(panel,s=>s.wechat.status==='expired');
+  await panel.waitForFunction(()=>document.querySelector('#wechat-login').textContent==='重新扫码'&&!document.querySelector('#wechat-login').hidden);
+  await app.evaluate(()=>{global.wechatSmoke.loginBot='fixture-bot';global.wechatSmoke.loginToken='renewed-token';});
+  await panel.locator('#wechat-login').click();
+  multi=await waitSnapshot(panel,s=>s.wechat.status==='connected'&&s.wechat.enabled);
+  assert.deepEqual(multi.wechat.jobs.map(job=>job.id),beforeRenewal);
+  assert.equal(await panel.locator('#wechat-error').isHidden(),true);
+  await app.evaluate(()=>global.wechatSmoke.queue.push({message_id:'after-token-renewal',message_type:1,from_user_id:'fixture-owner',to_user_id:'fixture-bot',context_token:'renewed-context',item_list:[{type:1,text_item:{text:'/status'}}]}));
+  for(let i=0;i<100;i++){if(await app.evaluate((_electron,count)=>global.wechatSmoke.sent.length>count,sentBeforeRenewal))break;await new Promise(resolve=>setTimeout(resolve,50));}
+  assert.ok(await app.evaluate((_electron,count)=>global.wechatSmoke.sent.length>count,sentBeforeRenewal));
+  assert.deepEqual(await app.evaluate(()=>[global.wechatSmoke.lastPollToken,global.wechatSmoke.lastSendToken]),['Bearer renewed-token','Bearer renewed-token']);
+  assert.equal((await panel.evaluate(()=>window.whale.snapshot())).wechat.status,'connected');
   await panel.locator('#wechat-toggle').click();await panel.waitForFunction(()=>document.querySelector('#wechat-status').textContent==='已暂停');
   await panel.locator('#nav-hooks').click();assert.ok(await panel.locator('#wechat-view').isHidden());await panel.locator('#nav-home').click();assert.ok(await panel.locator('#hooks-view').isHidden());
   assert.deepEqual(errors,[]);console.log(JSON.stringify({result:'passed',checks:['scan-without-setup','two-independent-scans','connection-switch','per-account-drafts-and-history','pause-one-connection','forget-one-connection','encrypted-multiple-state','visible-connection-cards','delete-unscanned-connection','cancel-draft-deletion','delete-connection-during-scan','multiple-clients','priority','local-QR','scan-confirmation','readable-project-list','number-selection','desktop-owner-forwarding','verbatim-input','no-desktop-resume','native-typing-start-stop','no-receipt-messages','blocking-question-answer','async-question-answer','answers-continue-original-turn','single-chat-inline-history','multiple-chat-list','selected-chat-history','back-to-chat-list','stable-chat-selection','inline-chat-metadata','task-question-and-reply','details-outside-broadcast','delete-failed-task','delete-failed-delivery','preserve-other-task-content','no-task-replay','new-thread','dedup','Codex-result','safe-error-reporting','context','pause','dirty-form','IPC-sender','navigation','no-renderer-errors'],dataDir:dir}));

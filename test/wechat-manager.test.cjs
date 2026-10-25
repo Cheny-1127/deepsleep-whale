@@ -5,16 +5,16 @@ const {fresh,bindingKey}=require('../src/channels/wechat-store.cjs');
 const tick=()=>new Promise(resolve=>setTimeout(resolve,5));
 async function until(check){for(let i=0;i<300;i++){if(check())return;await tick();}assert.fail('multi-account condition timed out');}
 function harness(t,initial){
-  let saved=structuredClone(initial||fresh()),nextBot='bot-b',failStore=false;
-  const queues=new Map(),waiting=new Map(),sent=[],runs=[];
-  const api={validate:value=>value,qr:async()=>({qrcode:'code',qrcode_img_content:'qr'}),qrStatus:async()=>({status:'confirmed',ilink_bot_id:nextBot,bot_token:'secret-'+nextBot,ilink_user_id:'owner',baseurl:'https://ilinkai.weixin.qq.com'}),
+  let saved=structuredClone(initial||fresh()),nextBot='bot-b',nextOwner='owner',failStore=false;
+  const queues=new Map(),waiting=new Map(),sent=[],runs=[],qrTokens=[];
+  const api={validate:value=>value,qr:async(_signal,tokens)=>{qrTokens.push(tokens);return {qrcode:'code',qrcode_img_content:'qr'};},qrStatus:async()=>({status:'confirmed',ilink_bot_id:nextBot,bot_token:'secret-'+nextBot,ilink_user_id:nextOwner,baseurl:'https://ilinkai.weixin.qq.com'}),
     updates:async(account,cursor,signal)=>{const queue=queues.get(account.id)||[];if(queue.length)return {msgs:queue.splice(0),get_updates_buf:'cursor-'+account.id};return new Promise(resolve=>{const done=()=>{waiting.delete(account.id);resolve({});};waiting.set(account.id,done);signal.addEventListener('abort',done,{once:true});});},
     send:async(account,sender,text,context)=>sent.push({account:account.id,sender,text,context})};
   const manager=createWechatManager({store:{available:()=>true,load:()=>structuredClone(saved),save:value=>{if(failStore)throw Error('disk');saved=structuredClone(value);},remove:()=>assert.fail('must not delete shared encrypted storage')},api,makeQr:async()=> 'data:image/png;base64,test',pollDelay:1,loginDelay:1,
     runAgent:options=>{const run={options};run.promise=new Promise((resolve,reject)=>{run.resolve=text=>resolve({text});run.cancel=()=>reject(Error('cancelled'));});runs.push(run);return run;}});
   t.after(()=>manager.close());
   const action=(id,name,value)=>manager.action(name,{connectionId:id,value});
-  return {manager,action,sent,runs,get saved(){return saved;},set failStore(value){failStore=value;},set nextBot(value){nextBot=value;},
+  return {manager,action,sent,runs,qrTokens,get saved(){return saved;},set failStore(value){failStore=value;},set nextBot(value){nextBot=value;},set nextOwner(value){nextOwner=value;},
     push(bot,id,text){if(!queues.has(bot))queues.set(bot,[]);queues.get(bot).push({message_id:id,message_type:1,from_user_id:'owner',to_user_id:bot,context_token:'context-'+bot,item_list:[{type:1,text_item:{text}}]});waiting.get(bot)?.();}};
 }
 function connected(){const value=fresh();value.enabled=true;value.account={id:'bot-a',owner:'owner',token:'secret-a'};value.allowed=['owner'];value.seen=['old'];value.bindings[bindingKey('bot-a','owner')]={id:'a-binding',clientId:value.clients[0].id,cwd:process.cwd(),threadId:'',automatic:true};return value;}
@@ -67,8 +67,43 @@ test('duplicate scans cannot replace or disable an existing connection, and reco
   await until(()=>h.manager.snapshot().error.includes('已接入'));
   assert.equal(h.saved.connections[0].state.account.token,'secret-a');assert.equal(h.saved.connections[0].state.enabled,true);
   assert.equal(h.saved.connections.at(-1).state.account,null);
-  h.nextBot='bot-c';await h.action('a','login');await until(()=>h.manager.snapshot().connections[0].status==='error');
+  h.nextBot='bot-c';h.nextOwner='another-owner';await h.action('a','login');await until(()=>h.manager.snapshot().connections[0].status==='error');
   assert.equal(h.saved.connections[0].state.account.id,'bot-a');
+});
+
+test('renewing the same owner replaces a changed bot identity without losing history or desktop bindings',async t=>{
+  const initial=pair(),first=initial.connections[0];first.name='工作微信';first.contactNames={owner:'本人'};
+  first.state.cursor='old-cursor';first.state.contexts={owner:'old-context'};
+  first.state.bindings[bindingKey('bot-a','owner')].threadId='existing-desktop-thread';
+  first.state.jobs=[{id:'history',sender:'owner',state:'completed',startedAt:1,exchange:{request:'已有任务',response:'已有结果'}}];
+  const h=harness(t,initial),other={...structuredClone(initial.connections[1]),contactNames:{}};
+  h.nextBot='bot-renewed';await h.action('a','login');
+  await until(()=>h.manager.snapshot().connections[0].status!=='logging-in');
+  assert.equal(h.saved.connections[0].state.account.id,'bot-renewed');
+  assert.equal(h.saved.connections[0].state.account.token,'secret-bot-renewed');
+  assert.deepEqual(h.saved.connections[1],other);
+  const renewed=h.saved.connections[0];
+  assert.equal(renewed.name,'工作微信');assert.equal(renewed.contactNames.owner,'本人');
+  assert.deepEqual(renewed.state.allowed,['owner']);assert.deepEqual(renewed.state.jobs,first.state.jobs);
+  assert.deepEqual(renewed.state.clients,first.state.clients);assert.deepEqual(renewed.state.contexts,{});
+  assert.ok(!Object.hasOwn(renewed.state.bindings,bindingKey('bot-a','owner')));
+  assert.equal(renewed.state.bindings[bindingKey('bot-renewed','owner')].threadId,'existing-desktop-thread');
+  assert.deepEqual(h.qrTokens,[['secret-b']],'只带其他连接凭据，当前失效连接应请求新凭据');
+  h.push('bot-renewed','after-renewal','/status');await until(()=>h.sent.length>0);
+  assert.ok(h.sent.every(item=>item.account==='bot-renewed'));
+  h.manager.close();const reboot=harness(t,h.saved);reboot.manager.start();
+  assert.equal(reboot.manager.snapshot().connections[0].account.id,'bot-renewed');
+});
+
+test('a matching bot ID cannot overwrite the owner, and unknown owners cannot replace a changed bot',async t=>{
+  for(const [bot,owner]of [['bot-a','another-owner'],['bot-c','']]){
+    const h=harness(t,connected());h.nextBot=bot;h.nextOwner=owner;
+    const before=structuredClone(h.saved);await h.action(h.manager.snapshot().selectedConnectionId,'login');
+    await until(()=>h.manager.snapshot().status!=='logging-in');
+    assert.equal(h.manager.snapshot().status,'error');
+    assert.deepEqual(h.saved.connections[0].state.account,before.account);
+    assert.deepEqual(h.saved.connections[0].state.bindings,before.bindings);
+  }
 });
 
 test('invalid containers and storage failures preserve the original file and stop further writes',async t=>{
