@@ -14,6 +14,7 @@
     "test:x-reader": "node scripts/checks/x-reader-smoke.cjs",
     "test:styles": "node scripts/checks/styles-smoke.cjs",
     "test:hooks": "node scripts/checks/hooks-smoke.cjs",
+    "test:planner": "node scripts/checks/planner-smoke.cjs",
     "test:reminders": "node scripts/checks/reminder-smoke.cjs",
     "test:presence": "node scripts/checks/client-presence-smoke.cjs",
     "test:actions": "node scripts/checks/actions-smoke.cjs",

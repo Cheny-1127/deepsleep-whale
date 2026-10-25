@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('whale', {
   quotaGroup: (name, value) => ipcRenderer.invoke('quota-group', name, value),
   petQuota: (name, value) => ipcRenderer.invoke('pet-quota', name, value),
   sidebar: value => ipcRenderer.invoke('sidebar-settings', value),
+  planner: (name,value) => ipcRenderer.invoke('planner',name,value),
   shortcuts: value => ipcRenderer.invoke('shortcut-settings', value),
   drag: (phase, point) => ipcRenderer.send('pet-drag', phase, point),
   petInteractive: value => ipcRenderer.send('pet-interactive', value),
@@ -21,5 +22,6 @@ contextBridge.exposeInMainWorld('whale', {
   petPointerChanged: callback => ipcRenderer.on('pet-pointer-changed', callback),
   subscribe: callback => ipcRenderer.on('snapshot', (_event, data) => callback(data)),
   showReminders: callback => ipcRenderer.on('show-reminders', callback),
+  showPlanner: callback => ipcRenderer.on('show-planner',callback),
   chime: callback => ipcRenderer.on('chime', callback)
 });

@@ -1,0 +1,76 @@
+#planner-view { max-width: 1100px; }
+.planner-header-actions,.planner-overview { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; }
+.planner-overview { padding:0 0 20px; border-bottom:1px solid var(--ui-divider); margin-bottom:24px; }
+.planner-overview .planner-muted { margin:0; }
+.planner-modules { display:grid; gap:32px; }
+.planner-module { min-width:0; }
+.planner-module>.planner-toolbar h2 { margin:0; font-size:18px; line-height:1.6; }
+.planner-count { margin-left:6px; color:var(--ui-text-subtle); font-size:13px; font-weight:400; }
+.planner-item-heading { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:8px; }
+.planner-category-badge { display:inline-block; padding:2px 8px; border-radius:var(--ui-radius-control); background:var(--ui-selected); color:var(--ui-accent); font-size:11px; line-height:1.6; }
+.planner-category-badge[data-category-label="personal"] { background:var(--ui-hover); color:var(--ui-text-muted); }
+.planner-toolbar,.planner-card-heading,.planner-card-footer,.planner-dialog-heading,.planner-dialog-actions { display:flex; align-items:center; justify-content:space-between; gap:14px; }
+.planner-toolbar { margin:0 0 18px; flex-wrap:wrap; }
+.planner-toolbar>.primary { flex-shrink:0; }
+.planner-muted,.planner-footnote { color:var(--ui-text-subtle); font-size:var(--ui-font-small); line-height:1.8; overflow-wrap:anywhere; }
+.planner-toolbar>.planner-muted { margin:0; }
+.planner-list { display:grid; gap:14px; }
+.planner-reminder h3,.planner-task h3,.planner-empty h2 { margin:0; font-size:15px; line-height:1.6; overflow-wrap:anywhere; }
+.planner-card-copy,.planner-task-copy { min-width:0; flex:1; }
+.planner-row-actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.planner-card-heading { align-items:flex-start; }
+.planner-card-footer { margin-top:14px; padding-top:12px; border-top:1px solid var(--ui-divider); }
+.planner-delete { color:var(--ui-text-subtle); font-size:var(--ui-font-small); padding:5px 0 5px 8px; flex-shrink:0; }
+.planner-delete:hover { color:var(--ui-danger); }
+#planner-settings-feedback:empty { display:none; }
+.planner-days { margin:0 0 16px; padding:0; border:0; display:flex; flex-wrap:wrap; gap:14px; }
+.planner-days legend { margin-bottom:12px; font-size:var(--ui-font-control); }
+.planner-days label,.planner-notifications label,.planner-follow { display:flex; align-items:center; gap:5px; font-size:var(--ui-font-control); }
+.planner-days .planner-everyday { min-height:28px; padding:3px 10px; }
+.planner-everyday[aria-pressed="true"] { color:var(--ui-accent); background:var(--ui-selected); border-color:var(--ui-accent); }
+.planner-period { display:flex; gap:10px; align-items:center; margin-bottom:10px; }
+.planner-period input { width:125px; min-width:0; font-variant-numeric:tabular-nums; }
+.planner-notifications { display:flex; gap:20px; margin:18px 0; }
+.planner-footnote { margin-top:18px; }
+.planner-empty { padding-top:35px; padding-bottom:35px; }
+.planner-empty .planner-row-actions { margin-top:20px; }
+.planner-type-choice,.planner-category-choice,.planner-item-fields { border:0; padding:0; margin:0; min-width:0; }
+.planner-type-choice { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:20px; }
+.planner-type-choice legend,.planner-category-choice legend { margin-bottom:10px; font-size:var(--ui-font-control); }
+.planner-type-choice label { display:flex; align-items:flex-start; gap:8px; padding:12px; border:1px solid var(--ui-border-control); border-radius:var(--ui-radius-control); cursor:pointer; }
+.planner-type-choice label:has(input:checked),.planner-category-choice label:has(input:checked) { border-color:var(--ui-accent); background:var(--ui-selected); color:var(--ui-accent); }
+.planner-type-choice input { margin:4px 0 0; flex-shrink:0; }
+.planner-type-choice strong { display:block; font-size:var(--ui-font-control); font-weight:550; }
+.planner-type-choice small { display:block; font-size:var(--ui-font-small); line-height:1.6; margin-top:5px; color:var(--ui-text-subtle); }
+.planner-category-choice { display:flex; gap:10px; margin-bottom:20px; }
+.planner-category-choice label { display:flex; align-items:center; gap:6px; padding:7px 16px; border:1px solid var(--ui-border-control); border-radius:var(--ui-radius-control); font-size:var(--ui-font-control); cursor:pointer; }
+.planner-filters { display:flex; flex-wrap:wrap; gap:4px; }
+.planner-filters button { font-size:var(--ui-font-control); color:var(--ui-text-muted); padding:8px 10px; border-radius:var(--ui-radius-control); }
+.planner-filters button[aria-pressed="true"] { background:var(--ui-selected); color:var(--ui-accent); }
+.planner-task { display:flex; align-items:flex-start; gap:14px; }
+.planner-task>input { margin:7px 0 0; width:16px; height:16px; flex-shrink:0; }
+.planner-task-notes { font-size:12px; line-height:1.8; white-space:pre-wrap; overflow-wrap:anywhere; margin:10px 0 0; color:var(--ui-text-muted); }
+.planner-overdue { color:var(--ui-danger); }
+.planner-dialog { max-width:540px; }
+.planner-dialog h2 { margin:0; font-size:18px; }
+.planner-dialog-heading { margin-bottom:24px; }
+.planner-field { display:flex; flex-direction:column; gap:8px; margin-bottom:18px; font-size:var(--ui-font-control); }
+.planner-field input,.planner-field textarea { width:100%; min-width:0; }
+.planner-field small { font-size:var(--ui-font-small); color:var(--ui-text-subtle); line-height:1.7; }
+.planner-follow { margin:20px 0; }
+.planner-dialog-actions { justify-content:flex-end; margin-top:24px; }
+/* 提醒时段可使表单超过窗口高度，滚动编辑时始终保留保存和取消入口。 */
+#planner-item-dialog .planner-dialog-actions { position:sticky; bottom:0; z-index:2; padding:14px 0; background:var(--ui-surface); border-top:1px solid var(--ui-divider); }
+.planner-clock { color:var(--ui-accent); font-variant-numeric:tabular-nums; font-size:12px; white-space:nowrap; }
+.floating.planner-active .speech-stack { height:240px; }
+.floating.planner-active.completions-expanded .speech-stack { height:360px; }
+.floating.planner-active.single-completion .speech-stack { height:300px; }
+.floating.planner-active .speech-stack .planner-pet-bubble { width:236px; max-width:236px; text-align:left; padding:8px 10px; background:var(--ui-surface); border-color:var(--ui-border-control); }
+.planner-pet-rows { max-height:98px; overflow-y:auto; scrollbar-width:thin; }
+.planner-pet-row { display:flex; align-items:center; justify-content:space-between; gap:7px; padding:5px 0; }
+.planner-pet-row strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; font-weight:550; }
+.planner-pet-row .soft { padding:3px 7px; min-height:24px; font-size:10px; line-height:16px; flex-shrink:0; }
+.planner-pet-row .planner-clock { font-size:10px; }
+.planner-pet-open { margin-top:5px; font-size:10px; color:var(--ui-accent); }
+.planner-pet-error { margin:4px 0 0; font-size:10px; color:var(--ui-danger); }
+@media(max-width:930px) { .planner-card-heading { flex-wrap:wrap; }.planner-card-heading .planner-row-actions { width:100%; }.planner-task { flex-wrap:wrap; }.planner-task>.planner-row-actions { margin-left:30px; }.planner-task-copy { flex-basis:calc(100% - 40px); } }
