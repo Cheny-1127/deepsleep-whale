@@ -3,118 +3,196 @@ const statuses={disconnected:'未连接','logging-in':'正在扫码',connecting:
 const jobs={queued:'排队中',running:'排查中',recovering:'恢复跟踪中',approval:'等待审批',question:'等待回答',completed:'已完成',failed:'未完成',interrupted:'已中断',cancelled:'已取消'};
 export function createWechatView() {
   if(!$('view'))return {render(){}};
-  let latest,dirty=false,busy=false,rowsKey='',jobsKey='',selectedChat='',openTask='',detailVersion=0,clientKey='',draft=[];
-  const taskDetails=new Map(),taskRows=new Map();
+  let latest,dirty=false,busy=false,rowsKey='',jobsKey='',selectedChat='',selectedTask='',detailVersion=0,clientKey='',draft=[];
+  const taskDetails=new Map(),taskRows=new Map(),chatRows=new Map(),chatPages=new Map();
+  const pageSize=10,ended=job=>['completed','failed','interrupted','cancelled'].includes(job.state);
   let discovery=null,discoveryKey='',scanning=false,discoveryError='';
   let connectionId='',connectionsKey='',settingsTab='clients';const connectionDrafts=new Map();
   // 发起请求时固定账号，异步返回期间切换页面不会改变该操作的目标。
   const scoped=(value,id=latest?.selectedConnectionId)=>id?{connectionId:id,value}:value;
   function element(tag,text,className){const node=document.createElement(tag);if(text)node.textContent=text;if(className)node.className=className;return node;}
-  async function toggleTask(job) {
-    openTask=openTask===job.id?'':job.id;
-    if(!openTask||taskDetails.has(job.id)){drawJobs(latest.jobs,job.id);return;}
-    const entry={loading:true};taskDetails.set(job.id,entry);drawJobs(latest.jobs,job.id);
+  // 选中只更新现有节点的操作入口，避免重建正文打断滚动和文本选择。
+  function selectTask(id='') {
+    selectedTask=id;
+    for(const [key,row]of taskRows){row.node.dataset.selected=String(key===id);if(row.remove)row.remove.hidden=key!==id;}
+  }
+  $('view').addEventListener('click',event=>{
+    if(event.target.closest('button,a,input,textarea,select'))return;
+    const task=event.target.closest('.wechat-task');
+    // 拖选正文用于复制时不弹出删除操作。
+    if(task&&window.getSelection()?.toString())return;
+    selectTask(task?.dataset.taskId);
+  });
+  $('jobs').addEventListener('keydown',event=>{
+    if(event.key==='Escape'){selectTask();return;}
+    if(event.target.matches('.wechat-task')&&['Enter',' '].includes(event.key)){event.preventDefault();selectTask(event.target.dataset.taskId);}
+  });
+  async function loadTask(job,entry) {
+    const accountId=connectionId;
     try {
       const result=await window.whale.wechat('task-detail',scoped(job.id));
       if(result.error)throw new Error(result.error);
       entry.value=result.value;
-    }catch(error){entry.error=error.message||'内容读取失败，请收起后重试。';}
+    }catch(error){entry.error=error.message||'内容读取失败，请重试。';}
     finally{
-      entry.loading=false;
-      // 删除、解绑或记录淘汰后，迟到的读取结果不能重新显示已清理的正文。
-      if(openTask===job.id&&latest.jobs.some(item=>item.id===job.id)){detailVersion++;drawJobs(latest.jobs,job.id);}
+      entry.loading=false;entry.version++;
+      // 连接 ID 和缓存对象同时匹配才接收结果，防止切换账号、删除记录或结束任务后的旧响应串入正文。
+      if(connectionId===accountId&&taskDetails.get(job.id)===entry&&latest.jobs.some(item=>item.id===job.id)){
+        detailVersion++;drawJobs(latest.jobs);
+      }
     }
   }
-  function drawJobs(records,anchorId) {
+  function drawJobs(records) {
     const ids=new Set(records.map(job=>job.id));for(const id of taskDetails.keys())if(!ids.has(id))taskDetails.delete(id);
-    if(openTask&&!ids.has(openTask))openTask='';
     const groups=new Map();
     for(const job of records){
       const chat=job.chat||{key:job.id,name:'未记录对话',clientName:'',project:''};
       if(!groups.has(chat.key))groups.set(chat.key,{...chat,records:[]});
       groups.get(chat.key).records.push(job);
     }
+    for(const key of chatPages.keys())if(!groups.has(key))chatPages.delete(key);
     if(selectedChat&&!groups.has(selectedChat))selectedChat='';
-    const nextKey=JSON.stringify([records,selectedChat,openTask,detailVersion]);if(nextKey===jobsKey)return;jobsKey=nextKey;
+    const connection=latest.connections?.find(item=>item.id===latest.selectedConnectionId);
+    const nextKey=JSON.stringify([records,selectedChat,[...chatPages],detailVersion,busy,latest.account?.owner,latest.contactNames,latest.profile,latest.connectionName,connection]);if(nextKey===jobsKey)return;jobsKey=nextKey;
     const root=$('jobs');
-    if(!groups.size){root.replaceChildren();taskRows.clear();return;}
-    const time=job=>Number.isFinite(job.startedAt)?new Date(job.startedAt).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}):'时间未记录';
+    if(!groups.size){root.replaceChildren();taskRows.clear();chatRows.clear();return;}
+    const time=value=>Number.isFinite(value)?new Date(value).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}):'时间未记录';
     const description=chat=>[chat.project||'未指定项目',chat.clientName,`${chat.records.length} 次任务`].filter(Boolean).join(' · ');
     const label=job=>[jobs[job.state]||job.state,job.delivery==='failed'?'投递失败':job.delivery==='pending'?'待投递':''].filter(Boolean).join(' · ');
     function identity(chat){const copy=element('span',null,'wechat-chat-copy');copy.title=chat.name+' · '+description(chat);copy.append(element('strong',chat.name),element('span',' · '+description(chat),'wechat-chat-meta'));return copy;}
-    // 单个对话直接展示明细；多个对话必须由用户选中，不把不同 chat 的任务混在一起。
-    const current=groups.size===1?[...groups.values()][0]:groups.get(selectedChat);
-    if(!current){
-      root.replaceChildren();taskRows.clear();
-      root.append(element('p','选择对话查看任务记录。','wechat-hint'));
-      for(const chat of groups.values()){
-        const button=element('button',null,'wechat-chat-button'),last=chat.records[0];
-        button.type='button';button.dataset.chatKey=chat.key;button.disabled=busy;
-        const status=element('span',null,'wechat-chat-status');status.append(element('strong',label(last)),element('small',time(last)));
-        button.append(identity(chat),status);button.addEventListener('click',()=>{selectedChat=chat.key;openTask='';drawJobs(latest.jobs);});root.append(button);
+    // 会话保留在原列表；只读取当前页正文，状态刷新复用消息节点和滚动容器。
+    for(const [key,row]of chatRows)if(!groups.has(key)){row.root.remove();chatRows.delete(key);}
+    for(const [index,chat]of [...groups.values()].entries()){
+      // 快照为倒序；时间相同或缺失时沿用原记录的先后关系。
+      chat.records.reverse();chat.records.sort((a,b)=>(Number.isFinite(a.startedAt)?a.startedAt:0)-(Number.isFinite(b.startedAt)?b.startedAt:0));
+      let row=chatRows.get(chat.key);
+      if(!row){
+        const shell=element('div',null,'wechat-chat-group'),button=element('button',null,'wechat-chat-button');
+        button.type='button';button.dataset.chatKey=chat.key;
+        button.addEventListener('click',()=>{selectedChat=selectedChat===chat.key?'':chat.key;drawJobs(latest.jobs);});
+        const remove=element('button','删除','outline ui-danger-action');remove.type='button';remove.dataset.chatDelete=chat.key;
+        remove.title='删除此会话在 Whale 中的全部任务记录，不删除 Codex 会话。';
+        remove.addEventListener('click',()=>{
+          const current=latest.jobs.filter(job=>job.chat?.key===chat.key);
+          if(window.confirm(`删除「${current[0]?.chat?.name||'此会话'}」的全部本地任务记录？不会删除 Codex 会话或已发送消息。`))void act('delete-chat',chat.key);
+        });
+        const heading=element('div',null,'wechat-chat-summary');heading.append(button,remove);
+        shell.append(heading);row={root:shell,button,remove};chatRows.set(chat.key,row);
       }
-      return;
+      const last=chat.records.at(-1),status=element('span',null,'wechat-chat-status');
+      status.append(element('strong',label(last)),element('small',time(last.startedAt)));
+      row.button.replaceChildren(identity(chat),status);row.button.disabled=busy;
+      row.remove.dataset.edge=String(chat.records.some(job=>!job.canDelete));row.remove.disabled=busy||row.remove.dataset.edge==='true';
+      row.button.setAttribute('aria-expanded',String(selectedChat===chat.key));
+      if(selectedChat===chat.key)row.button.setAttribute('aria-controls',`wechat-chat-history-${index}`);
+      else row.button.removeAttribute('aria-controls');
+      if(root.children[index]!==row.root)root.insertBefore(row.root,root.children[index]||null);
     }
-    let history=root.querySelector('.wechat-task-history'),heading=root.querySelector('.wechat-chat-heading');
-    const sameChat=history?.dataset.chatKey===current.key,pageY=window.scrollY;
-    // 保留滚动容器和任务节点；展开、异步加载和状态广播都不能重建整份列表。
-    const anchor=sameChat?(taskRows.get(anchorId)?.node||[...history.children].find(node=>node.getBoundingClientRect().bottom>history.getBoundingClientRect().top)):null;
+    const current=groups.get(selectedChat);
+    let conversation=root.querySelector('.wechat-conversation');
+    if(!current){conversation?.remove();taskRows.clear();selectedTask='';return;}
+    // 先按完整任务计算分页；删除末页记录后回退到有效页，提问和回答始终一起翻页。
+    const pageCount=Math.ceil(current.records.length/pageSize),page=Math.min(chatPages.get(current.key)||0,pageCount-1);
+    chatPages.set(current.key,page);
+    const sameChat=conversation?.dataset.chatKey===current.key,samePage=sameChat&&conversation.dataset.page===String(page),pageY=window.scrollY;
+    let history=conversation?.querySelector('.wechat-task-history');
+    const anchor=samePage?[...taskRows.values()].find(({node})=>node.getBoundingClientRect().bottom>history.getBoundingClientRect().top)?.node:null;
     const anchorTop=anchor?.getBoundingClientRect().top;
     if(!sameChat){
-      root.replaceChildren();taskRows.clear();heading=element('div',null,'wechat-chat-heading');history=element('div',null,'wechat-task-history');history.dataset.chatKey=current.key;root.append(heading,history);
+      conversation?.remove();taskRows.clear();conversation=element('section',null,'wechat-conversation');conversation.dataset.chatKey=current.key;
+      const pagination=element('nav',null,'wechat-history-pagination'),copy=element('span'),actions=element('span',null,'wechat-page-actions');pagination.setAttribute('aria-label','对话记录分页');
+      for(const [direction,text]of [[-1,'上一页'],[1,'下一页']]){
+        const button=element('button',text,'outline');button.type='button';button.dataset.historyPage=direction===-1?'previous':'next';
+        button.addEventListener('click',()=>{chatPages.set(current.key,(chatPages.get(current.key)||0)+direction);drawJobs(latest.jobs);});actions.append(button);
+      }
+      pagination.append(copy,actions);history=element('div',null,'wechat-task-history');history.tabIndex=0;history.setAttribute('role','region');history.setAttribute('aria-label',`${current.name}的对话记录`);
+      conversation.append(pagination,history);chatRows.get(current.key).root.append(conversation);
     }
-    const copy=identity(current);if(heading.firstChild)heading.firstChild.replaceWith(copy);else heading.append(copy);
-    if(groups.size>1&&!heading.querySelector('[data-chat-back]')){
-      const back=element('button','返回对话列表','outline');back.type='button';back.dataset.chatBack='';back.disabled=busy;
-      back.addEventListener('click',()=>{selectedChat='';openTask='';drawJobs(latest.jobs);});heading.append(back);
+    conversation.id=chatRows.get(current.key).button.getAttribute('aria-controls');conversation.dataset.page=String(page);
+    conversation.querySelector('.wechat-history-pagination > span').textContent=`时间正序 · 第 ${page+1} / ${pageCount} 页 · 共 ${current.records.length} 组问答`;
+    for(const [direction,edge]of [['previous',page===0],['next',page===pageCount-1]]){
+      const button=conversation.querySelector(`[data-history-page="${direction}"]`);button.dataset.edge=String(edge);button.disabled=busy||edge;
     }
-    if(groups.size===1)heading.querySelector('[data-chat-back]')?.remove();
-    const visibleIds=new Set(current.records.map(job=>job.id));
+    const visible=current.records.slice(page*pageSize,(page+1)*pageSize),visibleIds=new Set(visible.map(job=>job.id));
+    if(!visibleIds.has(selectedTask))selectedTask='';
     for(const [id,cached]of taskRows)if(!visibleIds.has(id)){cached.node.remove();taskRows.delete(id);}
-    for(const [index,job]of current.records.entries()){
+    for(const [index,job]of visible.entries()){
+      let entry=taskDetails.get(job.id);
+      // 状态或结束时间变化时重新读取最终回复；普通投递状态更新沿用已加载正文。
+      const stateKey=JSON.stringify([job.state,job.finishedAt]);
+      if(!entry||entry.stateKey!==stateKey){entry={stateKey,loading:true,version:0};taskDetails.set(job.id,entry);void loadTask(job,entry);}
       let cached=taskRows.get(job.id);
       if(!cached){
-        const node=element('div',null,'wechat-task'),row=element('div',null,'wechat-row'),timestamp=element('span'),actions=element('span',null,'wechat-task-actions'),status=element('strong');
-        actions.append(status);row.append(timestamp,actions);node.append(row);cached={node,timestamp,actions,status};taskRows.set(job.id,cached);
+        const node=element('article',null,'wechat-task'),row=element('div',null,'wechat-exchange-meta'),timestamp=element('span'),actions=element('span',null,'wechat-task-actions'),status=element('span');
+        node.dataset.taskId=job.id;node.tabIndex=0;actions.append(status);row.append(timestamp,actions);node.append(row);cached={node,timestamp,actions,status};taskRows.set(job.id,cached);
       }
       const {node:task,timestamp,actions,status}=cached;
-      const stamp=time(job),state=label(job);if(timestamp.textContent!==stamp)timestamp.textContent=stamp;if(status.textContent!==state)status.textContent=state;
-      if(['completed','failed','interrupted','cancelled'].includes(job.state)){
-        if(!cached.view){
-          const view=element('button',null,'outline');view.type='button';view.dataset.taskView=job.id;
-          view.addEventListener('click',()=>{if(taskDetails.get(job.id)?.error)taskDetails.delete(job.id);void toggleTask(job);});actions.append(view);cached.view=view;
-        }
-        const text=openTask===job.id?'收起内容':'查看内容';if(cached.view.textContent!==text)cached.view.textContent=text;
-        cached.view.disabled=busy;cached.view.setAttribute('aria-expanded',String(openTask===job.id));
-      }
+      const stamp=time(job.startedAt),state=label(job);if(timestamp.textContent!==stamp)timestamp.textContent=stamp;
+      // 每组问答共用状态底色；正常时保持透明，中断警示与失败异常分别着色。
+      task.dataset.tone=job.state==='failed'||job.delivery==='failed'?'error':['interrupted','cancelled'].includes(job.state)?'warning':'normal';
+      task.setAttribute('role','group');task.setAttribute('aria-label',`${stamp} · ${state}的问答`);task.dataset.selected=String(selectedTask===job.id);status.className='wechat-exchange-status';
+      // 正常状态只保留时间；已完成但投递失败时仅提示投递异常，不再显示“已完成”。
+      const statusText=task.dataset.tone==='normal'?'':[job.state==='completed'?'':jobs[job.state]||job.state,job.delivery==='failed'?'投递失败':''].filter(Boolean).join(' · ');
+      if(status.textContent!==statusText)status.textContent=statusText;status.hidden=!statusText;
       if(job.canDelete&&!cached.remove){
-        const remove=element('button','删除记录','outline');remove.type='button';remove.dataset.taskDelete=job.id;remove.disabled=busy;
-        remove.title='删除本机记录并停止该任务的后续投递，不影响 Codex 对话或已发送消息。';remove.addEventListener('click',()=>void act('delete-task',job.id));actions.append(remove);cached.remove=remove;
+        const remove=element('button',null,'ui-icon-button ui-danger-action');remove.type='button';remove.dataset.taskDelete=job.id;
+        remove.setAttribute('aria-label','删除这组问答');remove.title='删除这组本机问答记录并停止后续投递，不影响客户端对话或已发送消息。';
+        const icon=document.createElementNS('http://www.w3.org/2000/svg','svg');
+        for(const [key,value]of Object.entries({viewBox:'0 0 20 20',width:'20',height:'20',fill:'none',stroke:'currentColor','stroke-width':'1.5','aria-hidden':'true'}))icon.setAttribute(key,value);
+        const path=document.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('d','M3 5h14M8 5V3h4v2M5 5l1 12h8l1-12M8 8v6m4-6v6');path.setAttribute('stroke-linecap','round');path.setAttribute('stroke-linejoin','round');icon.append(path);remove.append(icon);
+        // 固定任务 ID，垃圾桶只删除这一组问答，不复用整段会话的删除入口。
+        remove.addEventListener('click',()=>void act('delete-task',job.id));actions.append(remove);cached.remove=remove;
       }
+      if(cached.remove){cached.remove.disabled=busy;cached.remove.hidden=selectedTask!==job.id;}
       if(!job.canDelete&&cached.remove){cached.remove.remove();cached.remove=null;}
       if(job.failure){
         if(!cached.failure){cached.failure=element('p',null,'wechat-hint');task.insertBefore(cached.failure,cached.content||null);}
         if(cached.failure.textContent!==job.failure.message)cached.failure.textContent=job.failure.message;
       }else if(cached.failure){cached.failure.remove();cached.failure=null;}
-      const detailKey=openTask===job.id?`${detailVersion}:${job.state}`:'';
-      if(cached.detailKey!==detailKey){
-        cached.content?.remove();cached.content=null;cached.detailKey=detailKey;
-        if(openTask===job.id){
-          const detail=element('div',null,'wechat-task-content'),entry=taskDetails.get(job.id);detail.dataset.taskContent=job.id;
-          if(entry?.loading)detail.append(element('p','正在加载内容…','wechat-hint'));
-          else if(entry?.error)detail.append(element('p',entry.error,'wechat-hint'));
-          else if(entry?.value){
-            for(const [title,value,empty]of [['发送内容',entry.value.request,'旧版记录未保留本次发送内容。'],['回复内容',entry.value.response,job.state==='completed'?'旧版记录未保留本次回复。':'本次任务未产生完成回复。']]){
-              detail.append(element('strong',title));detail.append(element(value===null?'p':'pre',value===null?empty:value,value===null?'wechat-hint':'wechat-task-text'));
-            }
+      if(cached.entry!==entry||cached.detailVersion!==entry.version){
+        cached.content?.remove();cached.entry=entry;cached.detailVersion=entry.version;
+        const detail=element('div',null,'wechat-task-content');detail.dataset.taskContent=job.id;
+        if(entry.loading)detail.append(element('p','正在加载对话…','wechat-hint'));
+        else if(entry.error){
+          detail.append(element('p',entry.error,'wechat-hint'));
+          const retry=element('button','重试','outline');retry.type='button';retry.dataset.taskRetry=job.id;retry.disabled=busy;
+          retry.addEventListener('click',()=>{taskDetails.delete(job.id);detailVersion++;drawJobs(latest.jobs);});detail.append(retry);
+        }else if(entry.value){
+          for(const [role,title,value,empty]of [
+            ['request',null,entry.value.request,'旧版记录未保留本次提问。'],
+            ['response',current.clientName||'助手',entry.value.response,ended(job)?job.state==='completed'?'旧版记录未保留本次回复。':'本次任务未产生完成回复。':`等待回复 · ${jobs[job.state]||job.state}`]
+          ]){
+            const message=element('div',null,`wechat-message wechat-message-${role}`),bubble=element('div',null,'wechat-message-bubble'),avatar=element('span',null,'wechat-message-avatar');message.dataset.messageRole=role;
+            avatar.setAttribute('aria-hidden','true');avatar.append(element('span'));
+            bubble.append(element('span',title,'wechat-message-author'),element(value==null?'p':'pre',value==null?empty:value,value==null?'wechat-hint':'wechat-task-text'));
+            message.append(avatar,bubble);detail.append(message);
           }
-          task.append(detail);cached.content=detail;
+        }
+        task.append(detail);cached.content=detail;
+      }
+      // 资料单独更新，不重建正文，改昵称或头像时保留阅读位置和文本选择。
+      // 只有扫码本人使用当前微信资料，其他联系人优先用各自备注，不能套用本人的头像。
+      const owner=Boolean(job.sender)&&job.sender===latest.account?.owner;
+      const senderName=latest.contactNames?.[job.sender]||(owner?connection?.remark||latest.profile?.nickname||connection?.nickname||connection?.name||latest.connectionName||'我':job.sender?contactName(latest,job.sender):'我');
+      for(const [role,name,source]of [
+        ['request',senderName,owner?(latest.profile?.avatar??connection?.avatar??''):''],
+        ['response',current.clientName||'助手',new URL('../../assets/icon.png',import.meta.url).href]
+      ]){
+        const message=cached.content.querySelector(`[data-message-role="${role}"]`);if(!message)continue;
+        const author=message.querySelector('.wechat-message-author'),avatar=message.querySelector('.wechat-message-avatar');
+        if(author.textContent!==name)author.textContent=name;
+        avatar.firstChild.textContent=Array.from(name)[0]||'?';
+        if(avatar.dataset.source!==source){
+          avatar.dataset.source=source;avatar.querySelector('img')?.remove();
+          if(source){const image=element('img');image.alt='';image.src=source;image.addEventListener('error',()=>image.remove(),{once:true});avatar.append(image);}
         }
       }
       if(history.children[index]!==task)history.insertBefore(task,history.children[index]||null);
     }
-    // 前一条正文收起或上方新增记录时，以当前点击/阅读的任务为锚点补偿高度变化。
-    if(sameChat){if(anchor?.isConnected)history.scrollTop+=anchor.getBoundingClientRect().top-anchorTop;if(window.scrollY!==pageY)window.scrollTo(window.scrollX,pageY);}
+    // 异步正文加载和后台刷新以正在阅读的问答为锚点；翻页从页首开始。
+    if(samePage&&anchor?.isConnected)history.scrollTop+=anchor.getBoundingClientRect().top-anchorTop;
+    if(!samePage)history.scrollTop=0;
+    if(sameChat&&window.scrollY!==pageY)window.scrollTo(window.scrollX,pageY);
   }
   function readDraft(){return [...$('clients').children].filter(row=>row.dataset.clientId).map(row=>({...draft.find(client=>client.id===row.dataset.clientId),
     ...Object.fromEntries([...row.querySelectorAll('[data-field]')].map(input=>[input.dataset.field,input.type==='checkbox'?input.checked:input.value]))}));}
@@ -252,7 +330,7 @@ export function createWechatView() {
       if(connectionId)connectionDrafts.set(connectionId,{draft:readDraft(),dirty});
       connectionId=data.selectedConnectionId;const saved=connectionDrafts.get(connectionId);
       dirty=Boolean(saved?.dirty);draft=saved?.draft||data.clients.map(client=>({...client}));clientKey='';
-      rowsKey='';jobsKey='';selectedChat='';openTask='';detailVersion++;taskDetails.clear();taskRows.clear();$('jobs').replaceChildren();
+      rowsKey='';jobsKey='';selectedChat='';selectedTask='';detailVersion++;taskDetails.clear();taskRows.clear();chatRows.clear();chatPages.clear();$('jobs').replaceChildren();
       discovery=null;discoveryKey='';discoveryError='';drawClients();
     }
     if(switched){$('name-form').hidden=true;$('settings-dialog').close();}

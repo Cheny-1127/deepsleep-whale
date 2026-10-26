@@ -40,3 +40,46 @@
 .wechat-identity { margin-top: 12px; font-size: var(--ui-font-small); color: var(--ui-text-subtle); }
 #wechat-settings-feedback { color: var(--ui-accent); font-size: var(--ui-font-control); }
 @media (max-width: 760px) { .wechat-start-steps { grid-template-columns: 1fr; gap: 20px; } }
+
+.wechat-chat-summary > .wechat-chat-button::before { content: '▸'; color: var(--ui-text-subtle); }
+.wechat-chat-summary > .wechat-chat-button[aria-expanded="true"]::before { content: '▾'; }
+
+.wechat-chat-summary { display: flex; align-items: center; gap: 16px; padding: 0 8px; border-top: 1px solid var(--ui-divider); }
+.wechat-chat-summary:hover, .wechat-chat-summary:focus-within { background: var(--ui-hover); }
+.wechat-chat-summary > .wechat-chat-button { flex: 1; min-width: 0; border: 0; background: transparent; }
+.wechat-chat-summary > .wechat-chat-button:hover { background: transparent; }
+.wechat-chat-summary > [data-chat-delete] { flex-shrink: 0; min-height: 32px; padding: 4px 8px; border: 0; border-radius: 6px; background: transparent; font-size: var(--ui-font-small); }
+.wechat-chat-summary > [data-chat-delete]:hover:not(:disabled) { background: var(--ui-danger-surface); }
+
+/* 一次任务对应一组完整问答，分页不拆分消息。 */
+.wechat-conversation { margin: 0 0 16px; min-width: 0; }
+.wechat-history-pagination { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 0; color: var(--ui-text-subtle); font-size: var(--ui-font-small); }
+.wechat-page-actions { display: flex; gap: 8px; }
+.wechat-page-actions button { min-height: 30px; padding: 4px 10px; font-size: var(--ui-font-small); }
+.wechat-task-history { max-height: min(60vh, 560px); overflow-y: auto; overflow-anchor: none; padding: 0 16px; border: 1px solid var(--ui-divider); border-radius: 12px; background: var(--ui-canvas); scrollbar-gutter: stable; }
+.wechat-task { position: relative; margin: 8px -8px; padding: 0 12px; border-radius: 12px; background: transparent; }
+.wechat-task[data-selected="true"] { box-shadow: inset 0 0 0 1px var(--ui-border-control); }
+.wechat-task:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+.wechat-task[data-tone="warning"] { background: #fff7df; }
+.wechat-task[data-tone="error"] { background: var(--ui-danger-surface); }
+.wechat-task[data-tone="warning"] .wechat-exchange-status, .wechat-task[data-tone="warning"] > .wechat-hint { color: #946615; }
+.wechat-task[data-tone="error"] .wechat-exchange-status, .wechat-task[data-tone="error"] > .wechat-hint { color: var(--ui-danger); }
+.wechat-exchange-meta { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; padding: 20px 0 12px; font-size: var(--ui-font-small); color: var(--ui-text-subtle); }
+.wechat-exchange-meta > .wechat-task-actions { display: contents; }
+.wechat-exchange-meta [data-task-delete] { position: absolute; top: 10px; right: 8px; border: 0; background: transparent; }
+.wechat-exchange-meta [data-task-delete]:hover:not(:disabled) { background: var(--ui-danger-surface); }
+.wechat-task-content { display: grid; gap: 14px; padding-bottom: 20px; font-size: var(--ui-font-control); }
+.wechat-message { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+.wechat-message-request { flex-direction: row-reverse; }
+.wechat-message-bubble { min-width: 0; max-width: min(88%, calc(100% - 46px)); padding: 12px 16px; border: 1px solid var(--ui-border); border-radius: 12px 12px 12px 3px; background: var(--ui-surface); color: var(--ui-text); }
+.wechat-message-request .wechat-message-bubble { border-color: transparent; border-radius: 12px 12px 3px 12px; background: var(--ui-selected); }
+.wechat-message-avatar { position: relative; display: grid; place-items: center; flex: 0 0 36px; width: 36px; height: 36px; overflow: hidden; border-radius: 8px; background: var(--ui-selected); color: var(--ui-accent); font-size: 16px; font-weight: 600; }
+.wechat-message-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.wechat-message-author { display: block; margin-bottom: 6px; font-size: var(--ui-font-small); color: var(--ui-text-subtle); }
+.wechat-message-request .wechat-message-author { color: var(--ui-accent); }
+.wechat-task-text { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.8; margin: 0; color: var(--ui-text); user-select: text; }
+.wechat-task-content .wechat-hint { margin: 0; }
+@media (max-width: 760px) {
+  .wechat-task-history { padding: 0 10px; }
+  .wechat-message-bubble { max-width: calc(100% - 46px); padding: 10px 12px; }
+}

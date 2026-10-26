@@ -128,6 +128,19 @@ test('task details retain exact questions and full replies after delivery and re
   const legacy=fresh();legacy.jobs=[{id:'legacy',state:'completed'}];
   assert.deepEqual(await harness(t,legacy).gateway.action('task-detail','legacy'),{id:'legacy',request:null,response:null});
 });
+test('deleting a chat removes all its records atomically and preserves other chats and bindings',async t=>{
+  const state=fresh(),route={clientId:'fixture',threadId:'one',transport:'desktop',settings:{backend:'codex'}},other={clientId:'fixture',threadId:'two'};
+  state.jobs=[{id:'one-a',state:'completed',route},{id:'one-b',state:'running',route,checkpoint:{messageId:'original-message',turnId:'original-turn',submitted:true}},{id:'two',state:'completed',route:other}];
+  state.bindings={kept:{threadId:'one'}};
+  state.outbox=[{id:'reply-one',jobId:'one-a',parts:['one']},{id:'reply-two',jobId:'two',parts:['two']}];
+  const h=harness(t,state),key=h.gateway.snapshot().jobs.find(job=>job.id==='one-a').chat.key;
+  await assert.rejects(h.gateway.action('delete-chat',key),/任务结束/);assert.equal(h.saved.jobs.length,3);
+  h.gateway.close();const ended=structuredClone(state);ended.jobs[1].state='completed';const next=harness(t,ended);
+  await next.gateway.action('delete-chat',key);
+  assert.deepEqual(next.saved.jobs.map(job=>job.id),['two']);assert.deepEqual(next.saved.outbox.map(item=>item.jobId),['two']);
+  assert.deepEqual(next.saved.bindings,state.bindings);assert.equal(next.runs.length,0);
+  next.gateway.close();assert.deepEqual(harness(t,next.saved).gateway.snapshot().jobs.map(job=>job.id),['two']);
+});
 test('deleting a failed task removes only its record and pending reply and preserves dedup',async t=>{
   const h=harness(t);h.sendError=Error('offline');await h.login();
   const message=h.message('delete-failed','失败问题');h.push(message);await until(()=>h.runs.length===1);
@@ -151,7 +164,9 @@ test('deleting a failed delivery during retry cannot consume or fail the next ta
   h.gateway.start();await until(()=>reject);await h.gateway.action('delete-task','failed-delivery');reject(Error('late offline'));
   await until(()=>h.saved.outbox.length===0);assert.deepEqual(h.sent.map(item=>item.text),['第二答']);assert.equal(h.gateway.snapshot().error,'');
   assert.deepEqual(h.saved.jobs.map(job=>job.id),['kept']);assert.equal(h.saved.jobs[0].delivery,'sent');
-  await assert.rejects(h.gateway.action('delete-task','kept'),/失败/);assert.equal(h.runs.length,0);
+  assert.equal(h.gateway.snapshot().jobs[0].canDelete,true);
+  await h.gateway.action('delete-task','kept');assert.deepEqual(h.saved.jobs,[]);assert.equal(h.runs.length,0);
+  h.gateway.close();assert.deepEqual(harness(t,h.saved).gateway.snapshot().jobs,[]);
 });
 test('a delivery failure whose status cannot be saved pauses safely without an unhandled rejection',async t=>{
   const h=harness(t);await h.login();h.push(h.message('disk-failure','检查'));await until(()=>h.runs.length===1);

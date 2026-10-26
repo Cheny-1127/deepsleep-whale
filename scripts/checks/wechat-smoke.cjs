@@ -12,7 +12,16 @@ const discovered={defaults:{codexBinary:bin,codexHome:dir,cursorBinary:bin},mess
   {key:'unknown',name:'未知 Codex',backend:'codex',binary:'',configHome:'',profile:'',available:false,reason:'无法确定配置目录，请自定义添加'}
 ]};
 // Injection lives only in this isolated test bootstrap. Production has no test URLs or plaintext-storage switch.
-fs.writeFileSync(bootstrap,`const {net,safeStorage}=require('electron');
+fs.writeFileSync(bootstrap,`const electron=require('electron'),{net,safeStorage}=electron;
+process.on('uncaughtException',error=>{console.error(error);electron.app.exit(1);});
+const NativeWindow=electron.BrowserWindow;
+class HiddenWindow extends NativeWindow {
+  constructor(options){super({...options,show:false,focusable:false,alwaysOnTop:false,skipTaskbar:true});}
+  show(){} focus(){} showInactive(){} setAlwaysOnTop(){} setVisibleOnAllWorkspaces(){}
+}
+const Module=require('node:module'),load=Module._load;
+const testElectron=new Proxy(electron,{get(target,key){return key==='BrowserWindow'?HiddenWindow:Reflect.get(target,key);}});
+Module._load=function(id,...args){return id==='electron'?testElectron:load.call(this,id,...args);};
 safeStorage.isEncryptionAvailable=()=>true;safeStorage.getSelectedStorageBackend=()=> 'test';
 safeStorage.encryptString=s=>Buffer.from(Buffer.from(s).toString('base64'));safeStorage.decryptString=b=>Buffer.from(b.toString(),'base64').toString();
 global.wechatSmoke={queue:[],sent:[],typing:[],confirmed:false,failSend:false,loginBot:'fixture-bot'};
@@ -140,17 +149,17 @@ async function waitSnapshot(panel,check) {
   await app.evaluate(async()=>{for(let i=0;i<100;i++){if(global.wechatSmoke.typing.at(-1)?.status===2)return;await new Promise(resolve=>setTimeout(resolve,10));}throw Error('typing stop not sent');});
   const typing=await app.evaluate(()=>global.wechatSmoke.typing);assert.ok(typing.some(x=>x.status===1));assert.ok(typing.every(x=>x.ilink_user_id==='fixture-owner'&&x.typing_ticket==='fixture-typing-ticket'));
   assert.ok(!sent.some(msg=>msg.item_list[0].text_item.text.startsWith('收到，')));
-  assert.equal(await panel.locator('#wechat-jobs .wechat-chat-button').count(),0);
-  assert.equal(await panel.locator('#wechat-jobs .wechat-chat-heading strong').textContent(),'桌面对话');
+  assert.equal(await panel.locator('#wechat-jobs .wechat-chat-button').count(),1);
+  await panel.locator('#wechat-jobs .wechat-chat-button').click();
+  assert.equal(await panel.locator('#wechat-jobs .wechat-chat-button[aria-expanded="true"] .wechat-chat-copy strong').textContent(),'桌面对话');
   assert.equal(await panel.locator('#wechat-jobs .wechat-task').count(),1);
   assert.ok(!(await panel.locator('#wechat-jobs').textContent()).includes('fixture-owner'));
   async function inlineIdentity(selector){const line=panel.locator(selector).first(),title=await line.locator('strong').boundingBox(),meta=await line.locator('.wechat-chat-meta').boundingBox();assert.ok(Math.abs(title.y-meta.y)<5,'chat and metadata must stay on one line');assert.ok(meta.x>=title.x+title.width-1);}
-  await inlineIdentity('#wechat-jobs .wechat-chat-heading .wechat-chat-copy');
-  await panel.locator('#wechat-jobs [data-task-view]').click();
+  await inlineIdentity('#wechat-jobs .wechat-chat-button .wechat-chat-copy');
   await panel.waitForFunction(()=>document.querySelectorAll('#wechat-jobs .wechat-task-text').length===2);
   assert.deepEqual(await panel.locator('#wechat-jobs .wechat-task-text').allTextContents(),['检查项目','桌面回复😀']);
   assert.ok(!JSON.stringify((await panel.evaluate(()=>window.whale.snapshot())).wechat).includes('桌面回复😀'));
-  await panel.locator('#wechat-jobs [data-task-view]').click();assert.equal(await panel.locator('#wechat-jobs [data-task-content]').count(),0);
+  assert.equal(await panel.locator('#wechat-jobs [data-task-view]').count(),0,'问答直接显示，无需逐条点击');
   await panel.locator('#wechat-jobs').locator('..').screenshot({path:path.join(root,'out/wechat-single-chat.png')});
   const projects=sent.map(msg=>msg.item_list[0].text_item.text).find(text=>text.startsWith('最近项目：'));assert.ok(projects?.includes('1. '+path.basename(dir)));assert.match(projects,/回复数字选择项目/);assert.ok(!projects.includes('/allow'));
   const tables=sent.map(msg=>msg.item_list[0].text_item.text).filter(text=>text.startsWith('已有对话'));assert.equal(tables.length,2);assert.match(tables[0],/第 1 页，每页 10 条/);assert.match(tables[1],/第 1 页，每页 5 条/);assert.ok(tables.every(text=>!text.includes('| 0 |')));const chats=tables[0];
@@ -176,7 +185,8 @@ async function waitSnapshot(panel,check) {
   await app.evaluate(()=>{for(const [id,text]of [['new','/new'],['two','新的任务']])global.wechatSmoke.queue.push({message_id:id,message_type:1,from_user_id:'fixture-owner',to_user_id:'fixture-bot',context_token:'fixture-context',item_list:[{type:1,text_item:{text}}]});});
   await waitSnapshot(panel,s=>s.wechat.jobs.filter(j=>j.state==='completed').length===4);
   await panel.waitForFunction(()=>document.querySelectorAll('#wechat-jobs .wechat-chat-button').length===2);
-  assert.equal(await panel.locator('#wechat-jobs .wechat-task-history').count(),0,'multiple chats start with a chat list');
+  assert.equal(await panel.locator('#wechat-jobs .wechat-chat-button[aria-expanded="true"]').count(),1,'原有对话在新增对话后仍保持展开');
+  await panel.locator('#wechat-jobs .wechat-chat-button[aria-expanded="true"]').click();
   await inlineIdentity('#wechat-jobs .wechat-chat-button .wechat-chat-copy');
   await panel.locator('#wechat-jobs').locator('..').screenshot({path:path.join(root,'out/wechat-task-chats.png')});
   await panel.locator('#wechat-jobs .wechat-chat-button').filter({hasText:'桌面对话'}).click();
@@ -184,21 +194,20 @@ async function waitSnapshot(panel,check) {
   wire=fs.readFileSync(path.join(dir,'agent-wire.jsonl'),'utf8').split('\n').filter(Boolean).map(JSON.parse);assert.equal(wire.filter(item=>item.method==='turn/start').length,1);assert.equal(wire.filter(item=>item.method==='thread/start').length,1);
   await app.evaluate(()=>global.wechatSmoke.queue.push({message_id:'failed-turn',message_type:1,from_user_id:'fixture-owner',to_user_id:'fixture-bot',context_token:'fixture-context',item_list:[{type:1,text_item:{text:'turn-rpc-failed'}}]}));
   await waitSnapshot(panel,s=>s.wechat.jobs.some(j=>j.state==='failed'&&j.failure?.rpcCode===-32602));
-  assert.equal(await panel.locator('#wechat-jobs .wechat-chat-heading strong').textContent(),'桌面对话','updates in another chat must not change the open details');
+  assert.equal(await panel.locator('#wechat-jobs .wechat-chat-button[aria-expanded="true"] .wechat-chat-copy strong').textContent(),'桌面对话','updates in another chat must not change the open details');
   assert.ok(!(await panel.locator('#wechat-jobs').textContent()).includes('RPC -32602'));
-  await panel.locator('#wechat-jobs [data-chat-back]').click();
+  await panel.locator('#wechat-jobs .wechat-chat-button[aria-expanded="true"]').click();
   assert.equal(await panel.locator('#wechat-jobs .wechat-chat-button').count(),2);
   assert.equal(await panel.locator('#wechat-jobs .wechat-task-history').count(),0);
   await panel.locator('#wechat-jobs .wechat-chat-button').filter({hasText:'未完成'}).click();
   await panel.waitForFunction(()=>document.querySelector('#wechat-jobs').textContent.includes('启动任务失败')&&document.querySelector('#wechat-jobs').textContent.includes('RPC -32602'));
   assert.equal(await panel.locator('#wechat-jobs .wechat-task').count(),2);
   await panel.locator('#wechat-jobs').locator('..').screenshot({path:path.join(root,'out/wechat-task-details.png')});
-  await panel.locator('#wechat-jobs [data-task-view]').first().click();
-  await panel.waitForFunction(()=>document.querySelector('#wechat-jobs .wechat-task-text')?.textContent==='turn-rpc-failed');
-  await panel.locator('#wechat-jobs [data-task-delete]').click();
+  await panel.waitForFunction(()=>[...document.querySelectorAll('#wechat-jobs [data-message-role="request"] pre')].some(node=>node.textContent==='turn-rpc-failed'));
+  await panel.locator('#wechat-jobs .wechat-task').filter({hasText:'启动任务失败'}).locator('.wechat-exchange-meta').click();
+  await panel.locator('#wechat-jobs .wechat-task').filter({hasText:'启动任务失败'}).locator('[data-task-delete]').click();
   await panel.waitForFunction(()=>document.querySelectorAll('#wechat-jobs .wechat-task').length===1);
-  assert.ok(!(await panel.locator('#wechat-jobs').textContent()).includes('RPC -32602'));assert.equal(await panel.locator('#wechat-jobs [data-task-content]').count(),0);
-  await panel.locator('#wechat-jobs [data-task-view]').click();
+  assert.ok(!(await panel.locator('#wechat-jobs').textContent()).includes('RPC -32602'));assert.equal(await panel.locator('#wechat-jobs [data-task-content]').count(),1);
   await panel.waitForFunction(()=>document.querySelectorAll('#wechat-jobs .wechat-task-text').length===2);
   const keptContents=await panel.locator('#wechat-jobs .wechat-task-text').allTextContents();assert.equal(keptContents[0],'新的任务');assert.ok(keptContents[1].length>0);
   await panel.locator('#wechat-jobs').locator('..').screenshot({path:path.join(root,'out/wechat-task-content.png')});
@@ -209,7 +218,8 @@ async function waitSnapshot(panel,check) {
   await waitSnapshot(panel,s=>s.wechat.jobs.some(job=>job.state==='completed'&&job.delivery==='failed'));
   await panel.waitForFunction(()=>document.querySelector('#wechat-jobs').textContent.includes('投递失败'));
   assert.equal((await panel.evaluate(()=>window.whale.snapshot())).wechat.outbox,1);
-  await panel.locator('#wechat-jobs [data-task-delete]').click();
+  await panel.locator('#wechat-jobs .wechat-task').filter({hasText:'投递失败'}).locator('.wechat-exchange-meta').click();
+  await panel.locator('#wechat-jobs .wechat-task').filter({hasText:'投递失败'}).locator('[data-task-delete]').click();
   await panel.waitForFunction(()=>document.querySelectorAll('#wechat-jobs .wechat-task').length===1&&document.querySelector('#wechat-outbox').textContent==='待投递 0 条');
   assert.equal(await panel.locator('#wechat-jobs [data-task-content]').count(),1,'deleting another task preserves the open successful result');
   assert.equal(await app.evaluate(()=>global.wechatSmoke.sent.length),sentBeforeFailure);
