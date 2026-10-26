@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {createHash} = require('node:crypto');
 const {shanghaiDate} = require('./quota-group-usage.cjs');
+const {DEFAULT_BASE_URL,readQuotaToken} = require('./quota-credentials.cjs');
 const FRESH_MS = 30 * 60 * 1000;
 const validID = id => Number.isSafeInteger(id) && id > 0;
 const userFields = item => {
@@ -11,14 +12,14 @@ const userFields = item => {
 };
 
 // 只读取站内数据，批量统计 Key 今日扣费；完整 Key、token 和管理端原始响应不进入快照或缓存。
-function createKeyUsage({tokenFile, dataDir, baseUrl = 'https://openai.minitvclub.com', fetchImpl = fetch,
+function createKeyUsage({token, tokenFile, dataDir, baseUrl = DEFAULT_BASE_URL, fetchImpl = fetch,
   clock = {now:() => Date.now(), setTimeout, clearTimeout}} = {}) {
   const origin = String(baseUrl).replace(/\/+$/, '');
   const file = dataDir ? path.join(dataDir,'quota-key-usage.json') : null;
   const entries = new Map(), directory = new Map(), flights = new Map(), searches = new Map(), controllers = new Set();
   let selected = null, expanded = true, closed = false, cacheError = '';
   // 缓存绑定站点和凭据指纹，切换管理凭据后不复用上一来源的数据，也不保存凭据原文。
-  const source = () => createHash('sha256').update(JSON.stringify([origin,fs.readFileSync(tokenFile,'utf8').trim()])).digest('hex');
+  const source = () => createHash('sha256').update(JSON.stringify([origin,readQuotaToken({token,tokenFile})])).digest('hex');
   const entryKey = (id, date = shanghaiDate(clock.now())) => `${id}:${date}`;
   const keyFields = item => {
     if (!validID(item?.id) || item.groupId !== null && !validID(item.groupId) || typeof item.name !== 'string' ||
@@ -62,11 +63,9 @@ function createKeyUsage({tokenFile, dataDir, baseUrl = 'https://openai.minitvclu
   }
   async function request(route, signal, body) {
     signal.throwIfAborted();
-    let token;
-    try {token = fs.readFileSync(tokenFile,'utf8').trim();} catch {throw Error('尚未配置 token 文件');}
-    if (!token) throw Error('token 文件是空的');
+    const apiKey = readQuotaToken({token,tokenFile});
     const response = await fetchImpl(`${origin}/api/v1/admin/${route}`,{method:body ? 'POST' : 'GET',
-      headers:{'x-api-key':token,...(body ? {'Content-Type':'application/json'} : {})},signal,...(body ? {body:JSON.stringify(body)} : {})});
+      headers:{'x-api-key':apiKey,...(body ? {'Content-Type':'application/json'} : {})},signal,...(body ? {body:JSON.stringify(body)} : {})});
     if (!response.ok) throw Error(response.status === 401 ? 'token 无效，无法读取 Key 用量' : 'request failed');
     const result = await response.json();signal.throwIfAborted();
     if (result?.code != null && result.code !== 0) throw Error('API error');
@@ -134,7 +133,7 @@ function createKeyUsage({tokenFile, dataDir, baseUrl = 'https://openai.minitvclu
         entries.delete(id);entries.set(id,{userId:user.id,date,keys:projected,checkedAt:clock.now(),attemptedAt,error:''});
       } catch (error) {
         if (closed || date !== shanghaiDate(clock.now())) return;
-        const known = ['尚未配置 token 文件','token 文件是空的','token 无效，无法读取 Key 用量'];
+        const known = ['尚未配置管理 Key，请填写 .env 或配置 token 文件','token 文件是空的','token 无效，无法读取 Key 用量'];
         entries.set(id,{userId:user.id,date,keys:previous?.keys || [],checkedAt:previous?.checkedAt ?? null,attemptedAt,
           error:signal.aborted ? '读取 Key 今日消费超时，请稍后刷新。' : known.includes(error.message) ? error.message : '读取 Key 今日消费失败，请稍后刷新。'});
       } finally {
