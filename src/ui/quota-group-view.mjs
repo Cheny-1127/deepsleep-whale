@@ -89,7 +89,7 @@ export function createGroupUsageView() {
   async function open() {
     if (busy || polling) return;
     busy = true;
-    try {render(await invoke('snapshot'));render(await invoke('open'));}
+    try {render(await invoke('snapshot'));if(document.getElementById('quota-view').dataset.moduleEnabled!=='false')render(await invoke('open'));}
     catch {failure();}
     finally {busy = false;if (latest) render(latest);}
   }
@@ -145,7 +145,7 @@ export function createGroupUsageView() {
     try {
       const data = await invoke('snapshot'), changedDay = latest?.date !== data.date;
       render(data);
-      if (changedDay) render(await invoke('open'));
+      if (changedDay&&document.getElementById('quota-view').dataset.moduleEnabled!=='false') render(await invoke('open'));
     } catch {failure();}
     finally {polling = false;}
   }, 5000);

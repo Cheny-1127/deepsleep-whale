@@ -222,7 +222,10 @@ let app;
   assert.equal(await chats.first().evaluate(el=>getComputedStyle(el).borderTopWidth),'0px');
   await summary.locator('[data-chat-delete]').hover();
   assert.notEqual(await summary.evaluate(el=>getComputedStyle(el).backgroundColor),'rgba(0, 0, 0, 0)','悬停删除区域时整行保持高亮');
-  assert.equal(await summary.locator('[data-chat-delete]').evaluate(el=>getComputedStyle(el).borderTopWidth),'0px','删除使用紧凑文字操作');
+  assert.equal(await summary.locator('[data-chat-delete]').evaluate(el=>getComputedStyle(el).borderTopWidth),'0px','删除使用无边框图标');
+  assert.equal(await summary.locator('[data-chat-delete] svg').count(),1);
+  assert.equal(await summary.locator('[data-chat-delete]').textContent(),'');
+  assert.equal(await summary.locator('[data-chat-delete]').getAttribute('aria-label'),'删除此会话的任务记录');
   await page.locator('#wechat-task-card').screenshot({path:path.join(root,'out/wechat-chat-row-actions.png')});
 
   await chats.nth(0).click();assert.equal(await chats.count(),2,'展开时其他对话仍在原列表');

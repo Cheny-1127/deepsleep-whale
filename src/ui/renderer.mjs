@@ -15,6 +15,7 @@ import { createShortcutsView } from './shortcuts-view.mjs';
 import { createPetQuotaSettingsView } from './pet-quota-settings-view.mjs';
 import { createPetQuotaView } from './pet-quota-view.mjs';
 import { createPlannerView } from './planner-view.mjs';
+import { createModulesView } from './modules-view.mjs';
 
 const $ = id => document.getElementById(id);
 const copy = {
@@ -59,6 +60,7 @@ createPetQuotaView({say:text=>{
   $('speech').classList.add('quota-feedback');
 }});
 const shortcutsView=createShortcutsView();
+const modulesView=createModulesView({render});
 if ($('special-actions')) {
   for (const [id, clip] of Object.entries(SPECIAL_ACTIONS)) {
     const button=document.createElement('button');
@@ -89,6 +91,7 @@ actionTabs.forEach((tab,index)=>{
 });
 function render(data) {
   lastData=data;
+  modulesView.render(data.modules);
   updateSidebarStatus('hooks',data);
   updateSidebarStatus('wechat',data.wechat);
   // 以原生窗口状态为准，托盘或右键隐藏桌宠后，小屋按钮也会同步。
@@ -162,7 +165,7 @@ document.querySelectorAll('[data-action]').forEach(button=>button.addEventListen
 document.querySelectorAll('[data-demo]').forEach(button=>button.addEventListener('click',()=>action('demo',button.dataset.demo)));
 if (floating) {
   createPetGestures({element:$('pet-art'),action,drag:(...args)=>window.whale.drag(...args),
-    enabled:()=>lastData?.shortcuts?.tripleClick!=='none'});
+    enabled:()=>lastData?.modules?.shortcuts!==false&&lastData?.shortcuts?.tripleClick!=='none'});
 } else {
   $('pet-art').addEventListener('click',()=>action('touch'));
   $('pet-art').addEventListener('keydown',event=>{ if(event.key==='Enter'||event.key===' ') { event.preventDefault(); action('touch'); } });
