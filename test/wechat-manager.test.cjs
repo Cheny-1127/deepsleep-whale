@@ -290,6 +290,16 @@ test('interrupted jobs in a paused account cannot fill the queue after restart',
   assert.equal(h.runs.length,1,'restart interruption must release global queue capacity');
 });
 
+test('desktop nickname edits persist separately from remarks and preserve avatar and other accounts',async t=>{
+  const initial=pair();initial.connections[0].name='工作备注';initial.connections[0].profile={nickname:'旧昵称',avatar};
+  const h=harness(t,initial);await h.action('a','rename-nickname','新昵称');
+  assert.equal(h.saved.connections[0].name,'工作备注');assert.deepEqual(h.saved.connections[0].profile,{nickname:'新昵称',avatar});
+  assert.deepEqual(h.saved.connections[1],{...initial.connections[1],contactNames:{}});
+  await h.action('a','rename-connection','新备注');assert.equal(h.manager.snapshot().connections[0].nickname,'新昵称');
+  assert.equal(h.manager.snapshot().connections[0].remark,'新备注');
+  const before=structuredClone(h.saved);await assert.rejects(h.action('a','rename-nickname','字'.repeat(41)),/40/);assert.deepEqual(h.saved,before);
+  h.manager.close();assert.equal(harness(t,h.saved).manager.snapshot().profile.nickname,'新昵称');
+});
 test('display names persist independently without changing identity, authorization or jobs',async t=>{
   const h=harness(t,pair());h.manager.start();
   await h.action('a','rename-connection','工作微信');await h.action('a','rename-user',{sender:'owner',name:'我自己'});

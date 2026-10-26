@@ -7,7 +7,7 @@ export function createWechatView() {
   const taskDetails=new Map(),taskRows=new Map(),chatRows=new Map(),chatPages=new Map();
   const pageSize=10,ended=job=>['completed','failed','interrupted','cancelled'].includes(job.state);
   let discovery=null,discoveryKey='',scanning=false,discoveryError='';
-  let connectionId='',connectionsKey='',settingsTab='clients';const connectionDrafts=new Map();
+  let connectionId='',connectionsKey='',settingsTab='clients',nameField='remark',nameOriginal='';const connectionDrafts=new Map();
   // 发起请求时固定账号，异步返回期间切换页面不会改变该操作的目标。
   const scoped=(value,id=latest?.selectedConnectionId)=>id?{connectionId:id,value}:value;
   function element(tag,text,className){const node=document.createElement(tag);if(text)node.textContent=text;if(className)node.className=className;return node;}
@@ -265,6 +265,7 @@ export function createWechatView() {
       else if(name==='save-clients')$('feedback').textContent='客户端已保存。';
       else if(name==='delete-task')$('feedback').textContent='记录已删除。';
       else if(name==='rename-connection'||name==='rename-user')$('feedback').textContent='备注名已保存。';
+      else if(name==='rename-nickname')$('feedback').textContent='昵称已保存。';
       const data=await window.whale.snapshot();render(data.wechat);
       if(name==='forget')$('settings-dialog').close();
       return true;
@@ -272,7 +273,7 @@ export function createWechatView() {
     finally{
       busy=false;scanning=false;render(latest);
       if(['add-connection','select-connection','forget'].includes(name)){
-        [...$('connections').children].find(button=>button.dataset.connectionId===latest.selectedConnectionId)?.focus();
+        [...$('connections').querySelectorAll('[data-connection-id]')].find(button=>button.dataset.connectionId===latest.selectedConnectionId)?.focus();
       }
     }
   }
@@ -283,9 +284,24 @@ export function createWechatView() {
   $('reconnect').addEventListener('click',()=>{
     if(window.confirm(`重新扫码「${latest.connectionName||'当前微信'}」会暂停它的接收并停止当前任务。继续吗？`)){$('settings-dialog').close();void act('login');}
   });
-  $('rename').addEventListener('click',()=>{$('name-form').hidden=false;$('name').value=latest.connectionName||'';$('name').focus();});
-  $('name-cancel').addEventListener('click',()=>{$('name-form').hidden=true;$('rename').focus();});
-  $('name-form').addEventListener('submit',async event=>{event.preventDefault();if(await act('rename-connection',$('name').value))$('name-form').hidden=true;});
+  function editConnectionName(field){
+    nameField=field;const item=latest.connections.find(item=>item.id===latest.selectedConnectionId),label=field==='nickname'?'昵称':'备注名';
+    $('name-title').textContent='修改'+label;$('name').setAttribute('aria-label',label);$('name').placeholder='请输入'+label;
+    $('name').value=field==='nickname'?item.nickname||'':item.remark??latest.connectionName??'';
+    nameOriginal=$('name').value;$('name-apply').hidden=true;
+    $('name-error').hidden=true;$('name-dialog').showModal();$('name').focus();
+  }
+  const nameDialog=$('name-dialog');let nameOutside=false;
+  // 按下和松开都在弹窗外才关闭，避免从输入框拖选文字到外部时误关。
+  function outsideNameDialog(event){const rect=nameDialog.getBoundingClientRect();return event.target===nameDialog&&(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom);}
+  nameDialog.addEventListener('pointerdown',event=>{nameOutside=outsideNameDialog(event);});
+  nameDialog.addEventListener('click',event=>{if(nameOutside&&outsideNameDialog(event))nameDialog.close();nameOutside=false;});
+  $('name').addEventListener('input',()=>{$('name-apply').hidden=$('name').value.trim()===nameOriginal.trim();$('name-error').hidden=true;});
+  $('name-form').addEventListener('submit',async event=>{
+    event.preventDefault();if($('name').value.trim()===nameOriginal.trim())return;$('name-error').hidden=true;
+    if(await act(nameField==='nickname'?'rename-nickname':'rename-connection',$('name').value))$('name-dialog').close();
+    else{$('name-error').textContent=$('feedback').textContent;$('name-error').hidden=false;}
+  });
   // 配置只针对打开时选中的微信；原生 dialog 负责焦点约束、Esc 与关闭后的焦点恢复。
   function showSettingsTab(tab) {
     settingsTab=tab;
@@ -315,8 +331,9 @@ export function createWechatView() {
   $('check').addEventListener('click',()=>void act('discover-clients'));
   $('toggle').addEventListener('click',()=>void act('enable',!latest?.enabled));
   function forgetConnection(){
-    // 未扫码的连接也是完整的可删除对象，不能以“已绑定”作为删除入口的显示条件。
-    const message=latest.account?`移除「${latest.connectionName||'当前微信'}」将清除它的本机凭据、选择记录、备注名和待投递结果，并停止它的任务；其他微信连接和客户端自身的聊天历史不受影响。`:`删除尚未扫码的「${latest.connectionName||'当前微信'}」？其他微信连接和配置不受影响。`;
+    // 未扫码草稿没有绑定凭据，直接移除；已绑定账号仍确认清理范围。
+    if(!latest.account){void act('forget');return;}
+    const message=`移除「${latest.connectionName||'当前微信'}」将清除它的本机凭据、选择记录、备注名和待投递结果，并停止它的任务；其他微信连接和客户端自身的聊天历史不受影响。`;
     if(window.confirm(message))void act('forget');
   }
   $('forget').addEventListener('click',forgetConnection);
@@ -333,35 +350,54 @@ export function createWechatView() {
       rowsKey='';jobsKey='';selectedChat='';selectedTask='';detailVersion++;taskDetails.clear();taskRows.clear();chatRows.clear();chatPages.clear();$('jobs').replaceChildren();
       discovery=null;discoveryKey='';discoveryError='';drawClients();
     }
-    if(switched){$('name-form').hidden=true;$('settings-dialog').close();}
+    if(switched){$('name-dialog').close();$('settings-dialog').close();}
     latest=data;
     const connections=data.connections||[];
     const nextConnectionsKey=JSON.stringify([connections,data.selectedConnectionId]);
     if(nextConnectionsKey!==connectionsKey){
       // 仅身份、状态或选择变化时重画账号卡，后台广播不能反复抢走键盘焦点。
-      const focused=document.activeElement?.dataset.connectionId;connectionsKey=nextConnectionsKey;$('connections').replaceChildren();
+      const settings=$('account-settings'),toolbar=$('account-toolbar'),active=document.activeElement;
+      const focused=active?.dataset.connectionId,editing=!switched&&(settings.contains(active)||toolbar.contains(active));
+      // 复用管理区节点，先移出再重建卡片，保留二维码、表单内容及操作焦点。
+      settings.remove();toolbar.remove();connectionsKey=nextConnectionsKey;$('connections').replaceChildren();
+      let mounted=false;
       for(const item of connections){
         const showStatus=item.account||['logging-in','error'].includes(item.status);
         // 已绑定且停收的账号在重启后可能尚未启动轮询，展示“已暂停”以匹配下方恢复操作。
         const state=item.account&&!item.enabled&&item.status==='disconnected'?'paused':item.status;
-        const button=element('button',null,'ui-choice'),name=element('strong',item.name),status=element('small',showStatus?statuses[state]||state:'待扫码');
+        const button=element('button',null,'ui-choice'),name=element('strong',null,'wechat-account-field'),status=element('small',showStatus?statuses[state]||state:'待扫码');
         const selected=item.id===data.selectedConnectionId;button.type='button';button.dataset.connectionId=item.id;button.setAttribute('aria-pressed',String(selected));status.className='ui-status';status.dataset.state=showStatus?state:'disconnected';if(selected)status.id='wechat-status';
         const identity=element('span',null,'wechat-account-identity'),copy=element('span',null,'wechat-account-copy');
         if(item.avatar){const avatar=element('img',null,'ui-avatar');avatar.src=item.avatar;avatar.alt='';identity.append(avatar);}
-        copy.append(name);if(item.nickname&&item.nickname!==item.name)copy.append(element('small',item.nickname,'wechat-hint'));
+        const remarkValue=element('span',item.name);remarkValue.dataset.editConnectionName='remark';remarkValue.title='点击修改备注名';
+        name.append(element('span','备注名：','wechat-account-label'),remarkValue);copy.append(name);
+        if(item.nickname){
+          const nickname=element('small',null,'wechat-account-field wechat-hint'),value=element('span',item.nickname);
+          value.dataset.editConnectionName='nickname';value.title='点击修改昵称';
+          nickname.append(element('span','昵　称：','wechat-account-label'),value);copy.append(nickname);
+        }
         identity.append(copy);button.append(identity,status);
         const attention=[item.taskCount?`${item.taskCount} 个任务`:null,item.pendingCount?`${item.pendingCount} 位待授权`:null,item.outboxCount?`${item.outboxCount} 条待投递`:null].filter(Boolean).join(' · ');
         if(attention)button.append(element('small',attention,'wechat-account-attention'));
-        button.addEventListener('click',()=>{if(item.id!==latest.selectedConnectionId)void act('select-connection',item.id);});$('connections').append(button);
+        button.addEventListener('click',async event=>{
+          const edit=event.target.closest('[data-edit-connection-name]')?.dataset.editConnectionName;
+          if(item.id!==latest.selectedConnectionId&&!await act('select-connection',item.id))return;
+          if(edit)editConnectionName(edit);
+        });
+        const card=element('section',null,'ui-card wechat-connection-card'),heading=element('div',null,'wechat-connection-heading');
+        card.dataset.selected=String(selected);card.setAttribute('aria-label',item.name);heading.append(button);card.append(heading);
+        if(selected){heading.append(toolbar);card.append(settings);mounted=true;}
+        $('connections').append(card);
       }
-      if(focused)[...$('connections').children].find(button=>button.dataset.connectionId===focused)?.focus();
+      if(!mounted){settings.prepend(toolbar);$('connections').append(settings);}
+      if(focused)[...$('connections').querySelectorAll('[data-connection-id]')].find(button=>button.dataset.connectionId===focused)?.focus();
+      else if(editing)active.focus({preventScroll:true});
     }
     const nextClientKey=JSON.stringify(data.clients);
     // 主进程持续广播任务状态，不能因此覆盖用户尚未保存的客户端配置。
     if(!dirty&&nextClientKey!==clientKey){clientKey=nextClientKey;draft=data.clients.map(client=>({...client}));drawClients();}
     const enabled=data.clients.filter(client=>client.enabled);
     const connectionName=data.connectionName||connections.find(item=>item.id===data.selectedConnectionId)?.name||'当前微信';
-    $('account-heading').textContent=`管理：${connectionName}`;
     $('settings-scope').textContent=`当前管理：${connectionName}。此处配置只影响这个微信。`;
     $('open-settings').textContent=data.pending.length?`微信设置 · ${data.pending.length} 位待授权`:'微信设置';
     $('client-summary').textContent=enabled.length?`新对话默认使用 ${enabled[0].name}`:'未启用客户端，暂不能执行任务';
@@ -382,12 +418,12 @@ export function createWechatView() {
     $('connection-panel').hidden=!$('connection-state').textContent;
     $('qr-box').hidden=!data.qr;
     if(data.qr){if($('qr').src!==data.qr.image)$('qr').src=data.qr.image;$('qr-status').textContent=data.qr.status;}else $('qr').removeAttribute('src');
-    $('toggle').hidden=!bound||data.status==='expired'||loggingIn;$('toggle').textContent=data.enabled?'暂停接收':'恢复接收';
-    // 恢复和暂停使用同一入口；提示区不再另放一个重复按钮。
-    $('toggle').classList.toggle('primary',!data.enabled);$('toggle').classList.toggle('outline',data.enabled);
+    $('toggle').hidden=!bound||data.status==='expired'||loggingIn;$('toggle').setAttribute('aria-checked',String(Boolean(data.enabled)));
+    $('toggle').title=data.enabled?'关闭后暂停接收消息':'打开后恢复接收消息';
+
     $('remove-draft').hidden=bound||connections.length<2;
     $('setup-client').hidden=!bound||enabled.length>0||loggingIn;
-    $('forget').textContent=bound?'移除此微信':'删除此微信';
+    $('forget').textContent='删除';
     $('forget').hidden=!bound;
     $('identity').hidden=!bound;
     for(const button of $('view').querySelectorAll('button'))button.disabled=busy||button.dataset.edge==='true';

@@ -4,6 +4,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('whale', {
   snapshot: () => ipcRenderer.invoke('snapshot'),
   action: (name, value) => ipcRenderer.invoke('action', name, value),
+  openChat: value => ipcRenderer.invoke('open-chat', value),
   wechat: (name, value) => ipcRenderer.invoke('wechat', name, value),
   // 仅转发固定邮箱通道，调用者身份与实际操作在主进程校验。
   mail: (name, value) => ipcRenderer.invoke('mail', name, value),
