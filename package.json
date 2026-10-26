@@ -24,7 +24,8 @@
     "hooks:config": "node scripts/hooks/codex-config.cjs",
     "hooks:cursor-config": "node scripts/hooks/cursor-config.cjs",
     "hooks:install": "node scripts/hooks/install.cjs",
-    "test:archery": "node scripts/checks/archery-smoke.cjs"
+    "test:archery": "node scripts/checks/archery-smoke.cjs",
+    "test:modules": "node scripts/checks/modules-smoke.cjs"
   },
   "devDependencies": {
     "electron": "44.7.2"

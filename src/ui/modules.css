@@ -1,0 +1,15 @@
+.module-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 16px; flex-wrap: wrap; }
+.module-toggle { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; flex-shrink: 0; color: var(--ui-text-muted); }
+.module-toggle-track { position: relative; width: 42px; height: 24px; border-radius: 999px; background: var(--ui-border-control); }
+.module-toggle-track::after { content: ''; position: absolute; left: 3px; top: 3px; width: 18px; height: 18px; border-radius: 50%; background: var(--ui-surface); transition: transform .15s; }
+.module-toggle[aria-checked="true"] .module-toggle-track { background: var(--ui-accent); }
+.module-toggle[aria-checked="true"] .module-toggle-track::after { transform: translateX(18px); }
+/* 整个功能区禁用，不逐个覆盖按钮状态，重新开启仍沿用模块自己的可用条件。 */
+[data-module-enabled="false"] > .module-content,
+[data-module-enabled="false"] > header .module-header-actions > [inert] { filter: grayscale(1); opacity: .48; }
+.sidebar .nav-item[data-module-enabled="false"] { color: #6b746c; background: #cfd3cf; }
+.sidebar .nav-item[data-module-enabled="false"] .sidebar-icon,
+.sidebar .nav-item[data-module-enabled="false"].selected .sidebar-icon { color: var(--ui-sidebar-icon-disabled); }
+.sidebar .nav-item[data-module-enabled="false"] .sidebar-icon-accent { fill: var(--ui-sidebar-icon-disabled); }
+.module-error { margin: 0 0 12px; }
+@media (max-width: 760px) { [data-module-enabled] > header { flex-wrap: wrap; gap: 12px; } .module-header-actions { gap: 12px; } }

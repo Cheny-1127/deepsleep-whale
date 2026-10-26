@@ -28,6 +28,8 @@ const {createGroupUsage}=require('../channels/quota-group-usage.cjs');
 const {createKeyUsage}=require('../channels/quota-key-usage.cjs');
 const {createShortcutSettings}=require('./shortcut-settings.cjs');
 const {createSidebarSettings}=require('./sidebar-settings.cjs');
+const {createModuleSettings}=require('./module-settings.cjs');
+const {createModuleRuntime}=require('./module-runtime.cjs');
 const {createPlanner}=require('./planner.cjs');
 const {createPetQuotaSettings}=require('./pet-quota-settings.cjs');
 const {createPetQuota}=require('../channels/pet-quota.cjs');
@@ -51,6 +53,8 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   let completionExpanded=false,busyExpanded=false,reminderView=null;
   let bridgeError = '';
   const behavior = new Behavior();
+  const modules=createModuleSettings({dataDir});
+  const runtime=(id,create,readers)=>createModuleRuntime({create,readers,enabled:modules.enabled(id)});
   const hooks=createHookSettings({dataDir,cwd:path.resolve(__dirname,'../../..'),onChange:broadcast});
   const shortcuts=createShortcutSettings({dataDir});
   const sidebarSettings=createSidebarSettings({dataDir});
@@ -92,12 +96,12 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   function syncPlannerNotifications() {
     const summary=planner?.summary();
     // 时段结束、开始处理或本轮 token 改变后主动撤回旧通知，避免系统通知中心留下失效入口。
-    for(const [id,entry] of plannerNotifications)if(!summary?.notifications||(entry.finished?summary.now>=entry.windowEnd||!planner.isAllowed(entry.reminderId):!summary.active.some(item=>item.id===id&&item.token===entry.token&&item.state==='waiting'))) {
+    for(const [id,entry] of plannerNotifications)if(!modules.enabled('planner')||!summary?.notifications||(entry.finished?summary.now>=entry.windowEnd||!planner.isAllowed(entry.reminderId):!summary.active.some(item=>item.id===id&&item.token===entry.token&&item.state==='waiting'))) {
       entry.notice.close();plannerNotifications.delete(id);
     }
   }
   function tickPlanner() {
-    try{planner?.tick();}catch{/* 保存失败由快照显示，保留上次已落盘状态以便重试。 */}
+    try{if(modules.enabled('planner'))planner?.tick();}catch{/* 保存失败由快照显示，保留上次已落盘状态以便重试。 */}
     syncPlannerNotifications();broadcast();
   }
 
@@ -124,10 +128,10 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   function snapshot() {
     // 两个窗口共享同一份主进程状态，避免小屋和悬浮桌宠各自计时、各自累计成长。
     const tasks = activity.snapshot();
-    return { planner:planner?.summary()||null,subscriptions:subscriptions?.summary()||null,trackingRows:petQuotaSettings.snapshot().trackingConfigs.length, petVisible:windows.isPetVisible(),shortcuts:shortcuts.snapshot(),wechat:wechat?.snapshot()||null,hookAdapters:hooks.adapters,hookAvailability:hooks.availability,sourceStatus,codexApprovalSync:codexRuntime.snapshot(),clientRunning:{...clientRunning},completionExpanded, busyExpanded, reminderView, settings:hooks.settings, nurture: nurture.snapshot(), activity: tasks, ...behavior.snapshot(), bridge: Boolean(bridge), bridgeError, reminderError };
+    return { modules:modules.snapshot(),planner:planner?{...planner.summary(),...(!modules.enabled('planner')?{active:[],notifications:false}:{})}:null,subscriptions:subscriptions?.summary()||null,trackingRows:modules.enabled('quota')?petQuotaSettings.snapshot().trackingConfigs.length:0, petVisible:windows.isPetVisible(),shortcuts:shortcuts.snapshot(),wechat:wechat?.snapshot()||null,hookAdapters:hooks.adapters,hookAvailability:hooks.availability,sourceStatus,codexApprovalSync:codexRuntime.snapshot(),clientRunning:{...clientRunning},completionExpanded, busyExpanded, reminderView, settings:hooks.settings, nurture: nurture.snapshot(), activity: tasks, ...behavior.snapshot(), bridge: Boolean(bridge), bridgeError, reminderError };
   }
   function canObserveCodexApproval() {
-    return hooks.settings.sources.codex&&hooks.settings.events.codex?.PermissionRequest!==false&&clientRunning.codex===true&&
+    return modules.enabled('hooks')&&hooks.settings.sources.codex&&hooks.settings.events.codex?.PermissionRequest!==false&&clientRunning.codex===true&&
       hooks.availability.codex.state==='checked'&&hooks.availability.codex.events.PermissionRequest?.available;
   }
   function broadcast() {
@@ -164,8 +168,10 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   ipcMain.handle('snapshot', () => snapshot());
   // 小屋按钮和右键菜单共用入口，统一动作锁定、成长和窗口同步。
   async function performAction(action, value) {
+    if(['copy-hook-config','refresh-hooks','hook-source','hook-event'].includes(action)&&!modules.enabled('hooks'))throw Error('Hooks 模块已关闭，请先开启');
     // 连击只提交手势，实际动作以主进程已保存的白名单配置为准。
     if(action==='shortcut-triple') {
+      if(!modules.enabled('shortcuts'))return snapshot();
       const target=shortcuts.snapshot().tripleClick;
       return target==='none'?snapshot():performAction(target);
     }
@@ -235,6 +241,37 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     return snapshot();
   }
   ipcMain.handle('action', (_event, action, value) => performAction(action, value));
+  function applyModule(id,enabled){
+    if(id==='quota'){
+      // 先停止依赖额度数据的桌宠跟踪，再释放数据源；恢复时按相反顺序启动。
+      if(!enabled){windows.closeQuotaOverlays();petQuota?.setModuleEnabled(false);}
+      for(const item of [quota,groupUsage,keyUsage])item?.setModuleEnabled(enabled);
+      if(enabled)petQuota?.setModuleEnabled(true);
+    }else if(id==='archery')archery?.setModuleEnabled(enabled);
+    else if(id==='wechat')wechat?.setModuleEnabled(enabled);
+    else if(id==='mail')mail?.setModuleEnabled(enabled);
+    else if(id==='subscriptions')subscriptions?.setModuleEnabled(enabled);
+    else if(id==='planner')tickPlanner();
+    else if(id==='hooks'){
+      if(enabled)for(const source of SOURCES)void hooks.refresh(source);
+      else{
+        for(const source of SOURCES)activity.pauseSource(source);
+        const tasks=activity.snapshot();behavior.task({...tasks,state:tasks.pending||tasks.working?tasks.state:'idle'});
+      }
+    }
+  }
+  // 总开关只由小屋主框架修改；独立持久化，不重写各模块的内部偏好。
+  ipcMain.handle('module-settings',(event,value)=>{
+    if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw Error('仅允许在小屋配置模块');
+    if(value===undefined)return modules.snapshot();
+    const previous=modules.enabled(value?.id);
+    try{
+      // 落盘成功才切换后台；初始化失败时恢复原开关及运行态，避免界面与后台不一致。
+      modules.update(value?.id,value?.enabled);
+      try{applyModule(value.id,value.enabled);}catch(error){modules.update(value.id,previous);applyModule(value.id,previous);throw error;}
+      broadcast();return {value:snapshot()};
+    }catch(error){return {error:error.message||'模块开关保存失败，请重试。'};}
+  });
   ipcMain.handle('open-chat',async(event,value)=>{
     // 仅允许小屋和桌宠的主页面跳转；返回可展示的错误，打开失败不消耗提醒。
     if((!windows.isPanel(event.sender)&&!windows.isPet(event.sender))||event.senderFrame!==event.sender.mainFrame)return {error:'不允许打开聊天'};
@@ -246,6 +283,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     const panel=windows.isPanel(event.sender),pet=windows.isPet(event.sender);
     if((!panel&&!pet)||event.senderFrame!==event.sender.mainFrame)throw Error('不允许访问日程备忘');
     if(!planner)return {error:'日程备忘正在初始化'};
+    if(!modules.enabled('planner')&&name!=='snapshot')return {error:'日程备忘已关闭，请先开启'};
     if(!panel&&!['start','complete'].includes(name))return {error:'仅允许在小屋管理日程备忘'};
     try{const result=planner.action(name,value);return {value:panel?result:planner.summary()};}
     catch(error){return {error:error.message};}
@@ -257,11 +295,13 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   });
   ipcMain.handle('shortcut-settings',(event,value)=>{
     if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋配置快捷操作');
+    if(!modules.enabled('shortcuts'))throw Error('快捷操作已关闭，请先开启');
     shortcuts.update(value);broadcast();return snapshot();
   });
   ipcMain.handle('wechat', async(event,name,value)=>{
     if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋配置微信');
     if(!wechat)throw new Error('微信接入正在初始化');
+    if(!modules.enabled('wechat'))return {error:'微信接入已关闭，请先开启'};
     if(name==='pick-directory') {
       const result=await dialog.showOpenDialog({properties:['openDirectory']});
       return {path:result.canceled?'':result.filePaths[0]};
@@ -273,12 +313,14 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   ipcMain.handle('mail',async(event,name,value)=>{
     if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋读取邮箱');
     if(!mail)return {error:'邮箱接入正在初始化'};
-    try{return {value:await mail.action(name,value)};}catch(error){return {error:error.message};}
+    if(!modules.enabled('mail')&&name!=='snapshot')return {error:'邮箱接收已关闭，请先开启'};
+    try{return {value:name==='snapshot'?mail.snapshot():await mail.action(name,value)};}catch(error){return {error:error.message};}
   });
   // 订阅正文只向小屋主框架开放；远程采集页没有 preload，也不能借用此通道。
   ipcMain.handle('message-subscriptions',async(event,name,value)=>{
     if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw Error('仅允许在小屋查看消息订阅');
     if(!subscriptions)return {error:'消息订阅正在初始化'};
+    if(!modules.enabled('subscriptions')&&name!=='snapshot')return {error:'消息订阅已关闭，请先开启'};
     try {
       let result;
       switch(name) {
@@ -322,17 +364,20 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   ipcMain.handle('archery',async(event,name,value)=>{
     if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋查看 Archery');
     if(!archery)return {error:'Archery 接入正在初始化'};
+    if(!modules.enabled('archery')&&name!=='snapshot')return {error:'Archery 已关闭，请先开启'};
     try{return {value:await archery.action(name,value)};}catch(error){return {error:error.message};}
   });
   // 额度页只读网关已保存的快照，token 不进入渲染进程，也不刷新上游额度。
   ipcMain.handle('quota',async(event,name,value)=>{
     if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋查看额度');
     if(!quota)return {error:'额度页面正在初始化'};
+    if(!modules.enabled('quota')&&name!=='snapshot')return {error:'API 额度已关闭，请先开启'};
     if(!['snapshot','refresh','set-refresh','set-interval','set-list'].includes(name))return {error:'不支持的额度操作'};
     try{return {value:name==='set-interval'?quota.setRefreshInterval(value):name==='set-list'?quota.setListSettings(value):name==='set-refresh'?quota.setRefreshEnabled(value):name==='refresh'?await quota.refresh():quota.snapshot()};}catch(error){return {error:error.message};}
   });
   ipcMain.handle('quota-group',async(event,name,value)=>{
     if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋查看分组用量');
+    if(!modules.enabled('quota')&&!['snapshot','keys-snapshot'].includes(name))return {error:'API 额度已关闭，请先开启'};
     if(['keys-snapshot','keys-open','keys-search','keys-select','keys-refresh','keys-set-expanded'].includes(name)) {
       // Key 消费与用户排行共用受限 IPC 入口，但账号选择、缓存及刷新流程互相独立。
       if(!keyUsage)return {error:'Key 用量正在初始化'};
@@ -348,6 +393,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     const panel=windows.isPanel(event.sender),pet=windows.isPet(event.sender);
     if((!panel&&!pet)||event.senderFrame!==event.sender.mainFrame)throw Error('不允许读取桌宠额度');
     if(!petQuota)return {error:'桌宠额度正在初始化'};
+    if(!modules.enabled('quota'))return name==='snapshot'?{value:{tracking:null,extraTrackings:[]}}:{error:'API 额度已关闭，请先开启'};
     if(['update','update-config','copy-config','delete-config'].includes(name)) {
       if(!panel)throw Error('仅允许在小屋修改流量跟踪配置');
       try {
@@ -404,18 +450,18 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     tickPlanner();plannerTimer=setInterval(tickPlanner,1000);
     powerMonitor.on('resume',tickPlanner);
     app.once('before-quit',()=>{clearInterval(plannerTimer);powerMonitor.removeListener('resume',tickPlanner);for(const {notice} of plannerNotifications.values())notice.close();plannerNotifications.clear();});
-    wechat=createWechatManager({store:createWechatStore({dataDir,safeStorage}),
+    wechat=runtime('wechat',()=>createWechatManager({store:createWechatStore({dataDir,safeStorage}),
       normalizeAvatar:bytes=>avatarFromImage(bytes,nativeImage),
       api:createWechatApi({fetchImpl:(url,options)=>net.fetch(url,options)}),
-      makeQr:text=>QRCode.toDataURL(text,{width:256,margin:2,errorCorrectionLevel:'M'}),onChange:broadcast});
+      makeQr:text=>QRCode.toDataURL(text,{width:256,margin:2,errorCorrectionLevel:'M'}),onChange:broadcast}));
     wechat.start();
     // 邮件提醒只包含数量，正文、主题和发件人不进入系统通知或桌宠广播。
-    mail=createMailReceiver({store:createMailStore({dataDir,safeStorage}),onNew:count=>{
+    mail=runtime('mail',()=>createMailReceiver({store:createMailStore({dataDir,safeStorage}),onNew:count=>{
       if(hooks.settings.notifications&&Notification.isSupported()) {
         const notice=new Notification({title:'deepsleep · 邮箱',body:`收到 ${count} 封新邮件，打开小屋查看。`,silent:!hooks.settings.sound});
         notice.on('click',showPanel);notice.show();
       }
-    }});
+    }}));
     mail.start();
     archery=createArcheryPending({settingsFile:path.join(dataDir,'archery.json'),openExternal:url=>shell.openExternal(url),confirmApproval:async item=>{
       const result=await dialog.showMessageBox({type:'question',title:'确认审核通过',
@@ -424,23 +470,24 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
         buttons:['取消','审核通过'],defaultId:0,cancelId:0,noLink:true});
       return result.response===1;
     }});
+    archery.setModuleEnabled(modules.enabled('archery'));
     archery.start();
-    quota=createQuotaPanel({dataDir,tokenFile:process.env.WHALE_QUOTA_TOKEN_FILE||path.join(__dirname,'../../token'),fetchImpl:(url,options)=>net.fetch(url,options)});
-    groupUsage=createGroupUsage({dataDir,tokenFile:process.env.WHALE_QUOTA_TOKEN_FILE||path.join(__dirname,'../../token'),fetchImpl:(url,options)=>net.fetch(url,options)});
-    keyUsage=createKeyUsage({dataDir,tokenFile:process.env.WHALE_QUOTA_TOKEN_FILE||path.join(__dirname,'../../token'),fetchImpl:(url,options)=>net.fetch(url,options)});
-    petQuota=createPetQuota({settings:petQuotaSettings,quota,groups:groupUsage});petQuota.start();
-    subscriptions=createMessageSubscriptions({dataDir,readPosts:createXSubscriptionReader(),
-      translateText:createSubscriptionTranslator({fetchImpl:(url,options)=>net.fetch(url,options)}),onChange:broadcast});
+    quota=runtime('quota',()=>createQuotaPanel({dataDir,tokenFile:process.env.WHALE_QUOTA_TOKEN_FILE||path.join(__dirname,'../../token'),fetchImpl:(url,options)=>net.fetch(url,options)}));
+    groupUsage=runtime('quota',()=>createGroupUsage({dataDir,tokenFile:process.env.WHALE_QUOTA_TOKEN_FILE||path.join(__dirname,'../../token'),fetchImpl:(url,options)=>net.fetch(url,options)}),['snapshot','dailySnapshot']);
+    keyUsage=runtime('quota',()=>createKeyUsage({dataDir,tokenFile:process.env.WHALE_QUOTA_TOKEN_FILE||path.join(__dirname,'../../token'),fetchImpl:(url,options)=>net.fetch(url,options)}));
+    petQuota=runtime('quota',()=>createPetQuota({settings:petQuotaSettings,quota,groups:groupUsage}));petQuota.start();
+    subscriptions=runtime('subscriptions',()=>createMessageSubscriptions({dataDir,readPosts:createXSubscriptionReader(),
+      translateText:createSubscriptionTranslator({fetchImpl:(url,options)=>net.fetch(url,options)}),onChange:broadcast}),['snapshot','summary']);
     subscriptions.start();
     // 休眠期间不积压轮询；唤醒只补查已到期账号，正常的一小时节奏保持不变。
-    powerMonitor.on('resume',()=>void subscriptions.checkDue());
-    for(const source of SOURCES)void hooks.refresh(source);
+    powerMonitor.on('resume',()=>{if(modules.enabled('subscriptions'))void subscriptions.checkDue();});
+    if(modules.enabled('hooks'))for(const source of SOURCES)void hooks.refresh(source);
     try {
       const acceptEvent = event => {
         // 先校验和去重，再更新动作、成长和通知，防止重复 Stop 产生多次副作用。
         const source=sourceOf(event),status=sourceStatus[source];
         status.lastReceivedAt=Date.now();
-        if(!hooks.settings.sources[source]) {status.ignored++;broadcast();return;}
+        if(!modules.enabled('hooks')||!hooks.settings.sources[source]) {status.ignored++;broadcast();return;}
         if(hooks.settings.events[source]?.[eventName(event)]===false||hooks.availability[source].state!=='checked'||!hooks.availability[source].events[eventName(event)]?.available) {
           status.ignored++;
           // 结束和工具返回仍清理跟踪，避免关闭提醒后卡在工作中；不产生完成、成长或通知。
@@ -484,7 +531,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     setInterval(()=>void refreshClients(),3000);
     setInterval(()=>{
       // Cursor 保存的是上次选中项，不能证明用户看过新结果；这里只同步 Codex 原生已读状态。
-      if(activity.reconcile(titles.readState())) { saveReminders();broadcast(); }
+      if(modules.enabled('hooks')&&activity.reconcile(titles.readState())) { saveReminders();broadcast(); }
     },1000);
     setInterval(() => { nurture.tick(10); broadcast(); }, 10 * 60 * 1000);
   });

@@ -243,7 +243,7 @@ export function createQuotaView() {
         const due = data.nextRefreshAt != null ? Date.now() >= data.nextRefreshAt :
           lastSync == null || Date.now() - lastSync >= (data.refreshIntervalMs ?? 300000);
         const paused = data.accounts?.length > 0 && data.accounts.every(account => account.refreshEnabled === false);
-        if (checkFreshness && !data.busy && due && !paused) await refresh();
+        if (checkFreshness && $('view').dataset.moduleEnabled!=='false' && !data.busy && due && !paused) await refresh();
       }
     } catch {
       if (stamp === sequence) {

@@ -156,6 +156,17 @@ let app;
   }));
   const normal=await appearance('status-completed'),warning=await appearance('status-interrupted'),error=await appearance('status-failed');
   assert.equal(normal.background,'rgba(0, 0, 0, 0)');assert.equal(normal.border,'0px','正常问答不显示组框');
+  const normalGroup=page.locator('[data-task-id="status-completed"]');
+  await normalGroup.locator('.wechat-exchange-meta').click();
+  const selectedBackground=(await appearance('status-completed')).background;
+  assert.equal(selectedBackground,'rgb(237, 242, 247)','正常问答选中后为淡蓝灰');
+  assert.notEqual(await normalGroup.locator('.wechat-message-request .wechat-message-bubble').evaluate(el=>getComputedStyle(el).backgroundColor),selectedBackground,'提问气泡与选中组背景有区分');
+  await normalGroup.press('Escape');
+  assert.equal((await appearance('status-completed')).background,normal.background,'取消选中恢复透明');
+  for(const [id,background] of [['status-interrupted',warning.background],['status-failed',error.background]]){
+    const group=page.locator(`[data-task-id="${id}"]`);await group.locator('.wechat-exchange-meta').click();
+    assert.equal((await appearance(id)).background,background,'选中时保留中断或异常底色');await group.press('Escape');
+  }
   assert.equal(normal.statusHidden,true);assert.equal(warning.statusHidden,false);assert.equal(error.statusHidden,false);
   assert.equal((await appearance('status-running')).statusHidden,true);
   assert.equal((await appearance('status-delivery')).statusText,'投递失败','异常完成记录也不显示已完成字样');

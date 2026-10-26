@@ -18,6 +18,29 @@ function fixture(t,options={}) {
     async fire(){assert.equal(jobs.size,1);const job=[...jobs][0];assert.equal(job.ms,INTERVAL_MS);jobs.delete(job);now+=job.ms;job.fn();await tick();}};
 }
 
+test('module pause aborts reads without changing auto refresh and late responses cannot repopulate items',async t=>{
+  const f=fixture(t);let release;f.setRequest(()=>new Promise(resolve=>release=resolve));
+  const pending=f.receiver.action('refresh');await tick();f.receiver.setModuleEnabled(false);
+  assert.equal(f.calls[0].signal.aborted,true);assert.equal(f.receiver.snapshot().enabled,true);
+  f.receiver.setModuleEnabled(true);release(response());await pending;assert.equal(f.receiver.snapshot().items.length,0);
+  f.receiver.setModuleEnabled(false);assert.equal(f.jobs.size,0);await assert.rejects(f.receiver.action('refresh'),/已关闭/);
+});
+test('module toggle cancels an old confirmation and preserves unknown submitted approvals',async t=>{
+  const f=fixture(t);await f.receiver.action('refresh');let confirm;f.setConfirm(()=>new Promise(resolve=>confirm=resolve));
+  const pending=f.receiver.action('approve',566);await tick();f.receiver.setModuleEnabled(false);f.receiver.setModuleEnabled(true);confirm(true);await pending;
+  assert.equal(f.approvalCalls.length,0,'旧确认不能在重新开启后提交');
+  f.setConfirm(async()=>true);f.setApproval(async()=>{throw Error('unknown');});await f.receiver.action('approve',566);
+  f.receiver.setModuleEnabled(false);f.receiver.setModuleEnabled(true);await tick();
+  await assert.rejects(f.receiver.action('approve',566),/待核实/);assert.equal(f.approvalCalls.length,1,'模块开关不能解除审核防重');
+});
+test('module pause lets a submitted approval settle and retains its unknown-result guard',async t=>{
+  const f=fixture(t);await f.receiver.action('refresh');f.setConfirm(async()=>true);let reject;
+  f.setApproval(()=>new Promise((_,fail)=>reject=fail));const pending=f.receiver.action('approve',566);await tick();
+  f.receiver.setModuleEnabled(false);assert.equal(f.approvalCalls[0].signal.aborted,false,'已发送的审核继续核实结果');
+  reject(Error('disconnected'));await pending;assert.equal(f.jobs.size,0);
+  f.receiver.setModuleEnabled(true);await tick();await assert.rejects(f.receiver.action('approve',566),/待核实/);assert.equal(f.approvalCalls.length,1);
+});
+
 test('startup reads once, background polling runs every five minutes and snapshots never trigger network',async t=>{
   const f=fixture(t);f.receiver.start();await tick();assert.equal(f.calls.length,1);assert.equal(INTERVAL_MS,300000);
   assert.equal((await f.receiver.action('snapshot')).items.length,1);assert.equal(f.calls.length,1);

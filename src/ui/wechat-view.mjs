@@ -11,6 +11,12 @@ export function createWechatView() {
   // 发起请求时固定账号，异步返回期间切换页面不会改变该操作的目标。
   const scoped=(value,id=latest?.selectedConnectionId)=>id?{connectionId:id,value}:value;
   function element(tag,text,className){const node=document.createElement(tag);if(text)node.textContent=text;if(className)node.className=className;return node;}
+  // 会话和单组问答共用垃圾桶图形，删除范围由各按钮的名称和事件明确区分。
+  function deleteIcon(){
+    const icon=document.createElementNS('http://www.w3.org/2000/svg','svg');
+    for(const [key,value]of Object.entries({viewBox:'0 0 20 20',width:'20',height:'20',fill:'none',stroke:'currentColor','stroke-width':'1.5','aria-hidden':'true'}))icon.setAttribute(key,value);
+    const path=document.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('d','M3 5h14M8 5V3h4v2M5 5l1 12h8l1-12M8 8v6m4-6v6');path.setAttribute('stroke-linecap','round');path.setAttribute('stroke-linejoin','round');icon.append(path);return icon;
+  }
   // 选中只更新现有节点的操作入口，避免重建正文打断滚动和文本选择。
   function selectTask(id='') {
     selectedTask=id;
@@ -70,7 +76,8 @@ export function createWechatView() {
         const shell=element('div',null,'wechat-chat-group'),button=element('button',null,'wechat-chat-button');
         button.type='button';button.dataset.chatKey=chat.key;
         button.addEventListener('click',()=>{selectedChat=selectedChat===chat.key?'':chat.key;drawJobs(latest.jobs);});
-        const remove=element('button','删除','outline ui-danger-action');remove.type='button';remove.dataset.chatDelete=chat.key;
+        const remove=element('button',null,'outline ui-danger-action');remove.type='button';remove.dataset.chatDelete=chat.key;
+        remove.setAttribute('aria-label','删除此会话的任务记录');remove.append(deleteIcon());
         remove.title='删除此会话在 Whale 中的全部任务记录，不删除 Codex 会话。';
         remove.addEventListener('click',()=>{
           const current=latest.jobs.filter(job=>job.chat?.key===chat.key);
@@ -137,9 +144,7 @@ export function createWechatView() {
       if(job.canDelete&&!cached.remove){
         const remove=element('button',null,'ui-icon-button ui-danger-action');remove.type='button';remove.dataset.taskDelete=job.id;
         remove.setAttribute('aria-label','删除这组问答');remove.title='删除这组本机问答记录并停止后续投递，不影响客户端对话或已发送消息。';
-        const icon=document.createElementNS('http://www.w3.org/2000/svg','svg');
-        for(const [key,value]of Object.entries({viewBox:'0 0 20 20',width:'20',height:'20',fill:'none',stroke:'currentColor','stroke-width':'1.5','aria-hidden':'true'}))icon.setAttribute(key,value);
-        const path=document.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('d','M3 5h14M8 5V3h4v2M5 5l1 12h8l1-12M8 8v6m4-6v6');path.setAttribute('stroke-linecap','round');path.setAttribute('stroke-linejoin','round');icon.append(path);remove.append(icon);
+        remove.append(deleteIcon());
         // 固定任务 ID，垃圾桶只删除这一组问答，不复用整段会话的删除入口。
         remove.addEventListener('click',()=>void act('delete-task',job.id));actions.append(remove);cached.remove=remove;
       }

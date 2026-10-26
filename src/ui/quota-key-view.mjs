@@ -84,6 +84,7 @@ export function createKeyUsageView() {
     $('list').replaceChildren(...rows);
   }
   async function load(name = 'open', value) {
+    if(document.getElementById('quota-view').dataset.moduleEnabled==='false')name='snapshot';
     // 只接受最后一次操作的结果，防止切换账号后旧请求覆盖新账号的展示。
     const revision = ++sequence;busy = true;
     if (latest) render(name === 'select' ? {...latest,user:null,keys:[],totalCost:0,checkedAt:null,error:''} : latest);
@@ -140,7 +141,7 @@ export function createKeyUsageView() {
       const revision = sequence, data = await invoke('snapshot');
       if (revision !== sequence) return;
       render(data);
-      if (data.user && !data.busy && (data.attemptedAt === null || Date.now()-data.attemptedAt >= 1800000)) await load();
+      if (document.getElementById('quota-view').dataset.moduleEnabled!=='false' && data.user && !data.busy && (data.attemptedAt === null || Date.now()-data.attemptedAt >= 1800000)) await load();
     } catch {/* 快照读取失败时保留当前结果，手动刷新会显示错误。 */}
     finally {polling = false;}
   },5000);

@@ -176,6 +176,7 @@ function createWindows({ snapshot, performAction, collapseReminders, rankingSnap
     isPanel:sender=>sender===panel?.webContents,
     isPet:sender=>sender===pet?.webContents,
     toggleRanking:id=>{petMenu.close();return petRanking.toggle(id);},
+    closeQuotaOverlays:()=>{closeAccountMenu();petRanking.close();},
     start({showPanelOnStartup = true} = {}) {
       if (showPanelOnStartup) createPanel();
       createPet();
