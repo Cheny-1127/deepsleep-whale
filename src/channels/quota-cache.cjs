@@ -1,5 +1,6 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),{createHash}=require('node:crypto');
+const {DEFAULT_BASE_URL,readQuotaToken}=require('./quota-credentials.cjs');
 
 const timestamp=value=>Number.isSafeInteger(value)&&value>=0&&value<=8640000000000000?value:null;
 const text=value=>typeof value==='string'?value:null;
@@ -20,12 +21,13 @@ function cachedAccount(item) {
     subscriptionExpiresAt:expiresAt&&Number.isFinite(Date.parse(expiresAt))?expiresAt:null};
 }
 
-function createQuotaCache({dataDir,tokenFile,baseUrl}) {
+function createQuotaCache({dataDir,token,tokenFile,baseUrl}) {
   const file=dataDir?path.join(dataDir,'quota-cache.json'):null;
   function source() {
-    const origin=String(baseUrl||'https://openai.minitvclub.com').replace(/\/+$/,'');
+    const origin=String(baseUrl||DEFAULT_BASE_URL).replace(/\/+$/,'');
     // 缓存绑定接口地址和账号凭据的摘要，文件内不保存 token 原文。
-    return createHash('sha256').update(JSON.stringify([origin,fs.readFileSync(tokenFile,'utf8').trim()])).digest('hex');
+    // 指纹只取有效 Key，不记录配置来源，同一个 Key 从旧文件迁入 .env 仍可复用缓存。
+    return createHash('sha256').update(JSON.stringify([origin,readQuotaToken({token,tokenFile})])).digest('hex');
   }
   return {
     load() {

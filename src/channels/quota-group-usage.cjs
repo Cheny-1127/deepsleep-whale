@@ -2,6 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const {createHash} = require('node:crypto');
+const {DEFAULT_BASE_URL,readQuotaToken} = require('./quota-credentials.cjs');
 const REFRESH_MS = 30 * 60 * 1000;
 const number = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 const timestamp = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
@@ -32,7 +33,7 @@ function projectUser(item) {
     cache_tokens: number(item.cache_tokens), total_tokens: number(item.total_tokens), actual_cost: number(item.actual_cost)};
 }
 
-function createGroupUsage({tokenFile, dataDir, baseUrl = 'https://openai.minitvclub.com', fetchImpl = fetch,
+function createGroupUsage({token, tokenFile, dataDir, baseUrl = DEFAULT_BASE_URL, fetchImpl = fetch,
   clock = {now: () => Date.now(), setTimeout, clearTimeout}} = {}) {
   const origin = String(baseUrl).replace(/\/+$/, '');
   const file = dataDir ? path.join(dataDir, 'quota-group-usage.json') : null;
@@ -40,7 +41,7 @@ function createGroupUsage({tokenFile, dataDir, baseUrl = 'https://openai.minitvc
   let groupId = 13, period = 'day', expanded = true, groups = [], groupsCheckedAt = null, groupsAttemptedAt = null, groupsError = '';
   let flight = null, passiveFlight = false, flightEntryKey = null, timer, deadline, controller, closed = false, cacheError = '', nextRefreshAt = null;
   const key = (id, date, strategy = 'day') => `${id ?? 'all'}:${strategy}:${date}`;
-  const source = () => createHash('sha256').update(JSON.stringify([origin, fs.readFileSync(tokenFile, 'utf8').trim()])).digest('hex');
+  const source = () => createHash('sha256').update(JSON.stringify([origin, readQuotaToken({token,tokenFile})])).digest('hex');
   const validGroup = id => id === null || Number.isSafeInteger(id) && id > 0;
   const validPeriod = value => ['day', 'week'].includes(value);
   try {
@@ -101,9 +102,8 @@ function createGroupUsage({tokenFile, dataDir, baseUrl = 'https://openai.minitvc
     groupsAttemptedAt = clock.now();
     try {
       // 名称目录独立于排行缓存加载，旧版缓存迁移时也能立即补全 ID 与名称。
-      const token = fs.readFileSync(tokenFile, 'utf8').trim();
-      if (!token) throw Error('missing token');
-      const response = await fetchImpl(`${origin}/api/v1/admin/groups/all`, {headers: {'x-api-key': token}, signal});
+      const apiKey = readQuotaToken({token,tokenFile});
+      const response = await fetchImpl(`${origin}/api/v1/admin/groups/all`, {headers: {'x-api-key': apiKey}, signal});
       if (!response.ok) throw Error('groups unavailable');
       const body = await response.json(), items = body?.data ?? body;
       if ((body?.code != null && body.code !== 0) || !Array.isArray(items) || items.length > 2000) throw Error('invalid groups');
@@ -138,15 +138,13 @@ function createGroupUsage({tokenFile, dataDir, baseUrl = 'https://openai.minitvc
     flight = Promise.resolve().then(async () => {
       if (closed) return;
       try {
-        let token;
-        try { token = fs.readFileSync(tokenFile, 'utf8').trim(); } catch { throw Error('尚未配置 token 文件'); }
-        if (!token) throw Error('token 文件是空的');
+        const apiKey = readQuotaToken({token,tokenFile});
         await loadGroups(signal, Boolean(groupsError));
         signal.throwIfAborted();
         const query = new URLSearchParams({start_date: previous.startDate, end_date: previous.date,
           timezone: 'Asia/Shanghai', sort_by: 'actual_cost', limit: '20'});
         if (id !== null) query.set('group_id', String(id));
-        const response = await fetchImpl(`${origin}/api/v1/admin/dashboard/user-breakdown?${query}`, {headers: {'x-api-key': token}, signal});
+        const response = await fetchImpl(`${origin}/api/v1/admin/dashboard/user-breakdown?${query}`, {headers: {'x-api-key': apiKey}, signal});
         if (!response.ok) throw Error(response.status === 401 ? 'token 无效，无法读取分组用量' : '读取分组用量失败');
         const body = await response.json();
         signal.throwIfAborted();
@@ -158,7 +156,7 @@ function createGroupUsage({tokenFile, dataDir, baseUrl = 'https://openai.minitvc
         entries.set(entryKey, {...attempted, users, checkedAt: clock.now(), failedAt: null, error: ''});
       } catch (error) {
         if (closed) return;
-        const known = ['尚未配置 token 文件', 'token 文件是空的', 'token 无效，无法读取分组用量'];
+        const known = ['尚未配置管理 Key，请填写 .env 或配置 token 文件', 'token 文件是空的', 'token 无效，无法读取分组用量'];
         // 保留本组当天的旧数据和首次失败时间，不向页面透传网络诊断或其他组的数据。
         entries.set(entryKey, {...attempted, failedAt: attempted.failedAt ?? clock.now(), error: signal.aborted ?
           '读取用户排行超时，30 分钟后自动重试。' : known.includes(error.message) ? error.message : '读取用户排行失败，30 分钟后自动重试。'});

@@ -2,6 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const {createQuotaCache}=require('./quota-cache.cjs');
+const {DEFAULT_BASE_URL,readQuotaToken}=require('./quota-credentials.cjs');
 const DEFAULT_REFRESH_INTERVAL = {value:5, unit:'minutes'};
 const INTERVAL_UNITS = {seconds:1000, minutes:60000, hours:3600000};
 function normalizeInterval(value) {
@@ -75,14 +76,11 @@ function projectAccount(item) {
 }
 
 // 只 GET 网关库里的账号快照。不调用 quota 或 quota/refresh，因此不会探测上游。
-async function readAccountData({tokenFile, baseUrl, fetchImpl = fetch, signal}, route) {
-  let token;
-  try { token = fs.readFileSync(tokenFile, 'utf8').trim(); }
-  catch { throw new Error('尚未配置 token 文件'); }
-  if (!token) throw new Error('token 文件是空的');
-  const origin = String(baseUrl || 'https://openai.minitvclub.com').replace(/\/+$/, '');
+async function readAccountData({token, tokenFile, baseUrl, fetchImpl = fetch, signal}, route) {
+  const apiKey = readQuotaToken({token, tokenFile});
+  const origin = String(baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
   signal?.throwIfAborted();
-  const response = await fetchImpl(`${origin}/api/v1/admin/accounts${route}`, {headers: {'x-api-key': token}, signal});
+  const response = await fetchImpl(`${origin}/api/v1/admin/accounts${route}`, {headers: {'x-api-key': apiKey}, signal});
   if (!response.ok) throw new Error(response.status === 401 ? 'token 无效，无法读取账号额度' : '读取账号额度失败');
   const body = await response.json();
   signal?.throwIfAborted();
@@ -106,7 +104,7 @@ async function listAccountQuotas(options = {}) {
 }
 
 // 首次请求后启动轮询；由主进程持有，切换或关闭小屋不影响后续刷新。
-function createQuotaPanel({tokenFile, dataDir, baseUrl, fetchImpl, clock = {now: () => Date.now(), setTimeout, clearTimeout}} = {}) {
+function createQuotaPanel({token, tokenFile, dataDir, baseUrl, fetchImpl, clock = {now: () => Date.now(), setTimeout, clearTimeout}} = {}) {
   let state = {accounts: [], error: '', checkedAt: null, attemptedAt: null, failedAt: null, busy: false};
   let closed = false, flight = null, flightAccountId = null, timer, deadline, controller, nextRefreshAt = null;
   const accountRefreshErrors = new Map();
@@ -115,7 +113,7 @@ function createQuotaPanel({tokenFile, dataDir, baseUrl, fetchImpl, clock = {now:
   let refreshInterval = {...DEFAULT_REFRESH_INTERVAL}, cachedIntervalMs = 300000;
   let rescheduleAfterFlight = false;
   const intervalMs = () => refreshInterval.value * INTERVAL_UNITS[refreshInterval.unit];
-  const cache = createQuotaCache({dataDir, tokenFile, baseUrl});
+  const cache = createQuotaCache({dataDir, token, tokenFile, baseUrl});
   try {
     const saved = cache.load();
     if (saved) {
@@ -190,7 +188,7 @@ function createQuotaPanel({tokenFile, dataDir, baseUrl, fetchImpl, clock = {now:
       deadline = clock.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
       deadline.unref?.();
       try {
-        const options = {tokenFile, baseUrl, fetchImpl, signal};
+        const options = {token, tokenFile, baseUrl, fetchImpl, signal};
         if (accountId !== null) {
           // 只读取并替换目标账号摘要，其他账号继续使用已有缓存。
           const account = projectAccount(await readAccountData(options, `/${accountId}`));
@@ -235,7 +233,7 @@ function createQuotaPanel({tokenFile, dataDir, baseUrl, fetchImpl, clock = {now:
       } catch (error) {
         if (closed) return;
         // 失败保留上次成功数据；不向页面透传网络库可能包含凭据的原始错误。
-        const known = ['尚未配置 token 文件', 'token 文件是空的', 'token 无效，无法读取账号额度', '读取账号额度失败', '账号列表超过读取上限，未完成同步'];
+        const known = ['尚未配置管理 Key，请填写 .env 或配置 token 文件', 'token 文件是空的', 'token 无效，无法读取账号额度', '读取账号额度失败', '账号列表超过读取上限，未完成同步'];
         // 记录本轮连续失败的起点；后续重试失败不推进此时间。
         const message = signal.aborted ? '读取账号额度超时，将按刷新间隔自动重试。' :
           known.includes(error.message) ? error.message : '读取账号额度失败，将按刷新间隔自动重试。';

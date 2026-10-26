@@ -103,7 +103,7 @@ test('missing or rejected token stays in the error', async t => {
   const missingPanel = createQuotaPanel({tokenFile: path.join(os.tmpdir(), 'missing-whale-token'), fetchImpl: async () => { throw new Error('should not fetch'); }});
   t.after(() => missingPanel.close());
   const missing = await missingPanel.refresh();
-  assert.equal(missing.error, '尚未配置 token 文件');
+  assert.equal(missing.error, '尚未配置管理 Key，请填写 .env 或配置 token 文件');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whale-quota-'));
   t.after(() => fs.rmSync(dir, {recursive: true, force: true}));
   const tokenFile = path.join(dir, 'token');

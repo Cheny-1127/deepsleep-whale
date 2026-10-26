@@ -26,6 +26,7 @@ const {createArcheryPending}=require('../channels/archery-pending.cjs');
 const {createQuotaPanel}=require('../channels/quota-accounts.cjs');
 const {createGroupUsage}=require('../channels/quota-group-usage.cjs');
 const {createKeyUsage}=require('../channels/quota-key-usage.cjs');
+const {readQuotaConfig}=require('./quota-config.cjs');
 const {createShortcutSettings}=require('./shortcut-settings.cjs');
 const {createSidebarSettings}=require('./sidebar-settings.cjs');
 const {createModuleSettings}=require('./module-settings.cjs');
@@ -472,9 +473,11 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     }});
     archery.setModuleEnabled(modules.enabled('archery'));
     archery.start();
-    quota=runtime('quota',()=>createQuotaPanel({dataDir,tokenFile:process.env.WHALE_QUOTA_TOKEN_FILE||path.join(__dirname,'../../token'),fetchImpl:(url,options)=>net.fetch(url,options)}));
-    groupUsage=runtime('quota',()=>createGroupUsage({dataDir,tokenFile:process.env.WHALE_QUOTA_TOKEN_FILE||path.join(__dirname,'../../token'),fetchImpl:(url,options)=>net.fetch(url,options)}),['snapshot','dailySnapshot']);
-    keyUsage=runtime('quota',()=>createKeyUsage({dataDir,tokenFile:process.env.WHALE_QUOTA_TOKEN_FILE||path.join(__dirname,'../../token'),fetchImpl:(url,options)=>net.fetch(url,options)}));
+    // 启动时统一读取地址和凭据，三个区块保持同一来源；修改 .env 后需重启。
+    const quotaOptions={...readQuotaConfig(),dataDir,fetchImpl:(url,options)=>net.fetch(url,options)};
+    quota=runtime('quota',()=>createQuotaPanel(quotaOptions));
+    groupUsage=runtime('quota',()=>createGroupUsage(quotaOptions),['snapshot','dailySnapshot']);
+    keyUsage=runtime('quota',()=>createKeyUsage(quotaOptions));
     petQuota=runtime('quota',()=>createPetQuota({settings:petQuotaSettings,quota,groups:groupUsage}));petQuota.start();
     subscriptions=runtime('subscriptions',()=>createMessageSubscriptions({dataDir,readPosts:createXSubscriptionReader(),
       translateText:createSubscriptionTranslator({fetchImpl:(url,options)=>net.fetch(url,options)}),onChange:broadcast}),['snapshot','summary']);

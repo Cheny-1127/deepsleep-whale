@@ -1,6 +1,10 @@
 node_modules/
 .runtime/
 out/
+/superpowers/
 *.log
 token
+.env
+.env.*
+!.env.example
 .DS_Store
