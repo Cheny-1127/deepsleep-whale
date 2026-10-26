@@ -300,6 +300,7 @@ test('display names persist independently without changing identity, authorizati
   h.runs[0].resolve('完成');await until(()=>h.sent.some(x=>x.text==='完成'));
   h.manager.close();const reboot=harness(t,h.saved);reboot.manager.start();
   assert.deepEqual(reboot.manager.snapshot().connections.map(c=>c.name),['工作微信','个人微信']);
+  assert.deepEqual(reboot.manager.snapshot().connections.map(c=>c.remark),['工作微信','个人微信']);
   assert.equal(reboot.manager.snapshot().contactNames.owner,'我自己');
   await reboot.manager.action('select-connection','b');assert.equal(reboot.manager.snapshot().contactNames.owner,'另一个自己');
   const before=structuredClone(reboot.saved);

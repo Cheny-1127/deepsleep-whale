@@ -15,6 +15,7 @@ const original=structuredClone(data),states=new Map([['work',structuredClone(dat
 function select(id){const connections=data.connections;Object.assign(data,{qr:null},structuredClone(states.get(id)),{connections});}
 window.whale={snapshot:async()=>({wechat:data}),wechat:async(name,payload)=>{
   actions.push({name,payload});
+  if(name==='task-detail')return {value:{id:payload.value,request:'提问 '+payload.value,response:'回复 '+payload.value}};
   if(name==='discover-clients')return {value:{clients:[],defaults:{},message:'Fixture'}};
   if(name==='select-connection'){states.set(data.selectedConnectionId,structuredClone(data));select(payload);}
   else if(name==='add-connection'){
@@ -25,6 +26,12 @@ window.whale={snapshot:async()=>({wechat:data}),wechat:async(name,payload)=>{
     if(payload.connectionId!==data.selectedConnectionId)throw Error('wrong scope');
     data.enabled=payload.value;data.status=data.enabled?'connected':'paused';
     Object.assign(data.connections.find(item=>item.id===payload.connectionId),{enabled:data.enabled,status:data.status});
+  }else if(name==='delete-chat'){
+    if(payload.connectionId!==data.selectedConnectionId)throw Error('wrong scope');
+    data.jobs=data.jobs.filter(job=>job.chat.key!==payload.value);
+  }else if(name==='delete-task'){
+    if(payload.connectionId!==data.selectedConnectionId)throw Error('wrong scope');
+    data.jobs=data.jobs.filter(job=>job.id!==payload.value);
   }else if(name==='forget'){
     if(payload.connectionId!==data.selectedConnectionId)throw Error('wrong scope');
     data.connections=data.connections.filter(item=>item.id!==payload.connectionId);states.delete(payload.connectionId);select(data.connections[0].id);
@@ -116,5 +123,47 @@ let app;
   await page.locator('#wechat-tab-clients').focus();await page.keyboard.press('ArrowRight');
   assert.equal(await page.locator('#wechat-tab-contacts').getAttribute('aria-selected'),'true');
   await page.screenshot({path:path.join(root,'out/wechat-settings-contacts.png'),fullPage:true});await page.keyboard.press('Escape');
+  await page.evaluate(()=>window.pageFixture.show({jobs:[
+    {id:'a',state:'completed',canDelete:true,startedAt:1,chat:{key:'a',name:'对话 A',project:'Architecture',clientName:'Ding Codex'}},
+    {id:'b',state:'failed',startedAt:2,chat:{key:'b',name:'对话 B',project:'DD',clientName:'Ding Codex'}}
+  ]}));
+  const chats=page.locator('#wechat-jobs .wechat-chat-button');
+  assert.equal(await chats.count(),2);assert.equal(await page.locator('.wechat-task-history').count(),0);
+  const summary=page.locator('.wechat-chat-summary').first();
+  assert.equal(await summary.evaluate(el=>getComputedStyle(el).borderTopWidth),'1px','分隔线属于整个会话行');
+  assert.equal(await chats.first().evaluate(el=>getComputedStyle(el).borderTopWidth),'0px');
+  await summary.locator('[data-chat-delete]').hover();
+  assert.notEqual(await summary.evaluate(el=>getComputedStyle(el).backgroundColor),'rgba(0, 0, 0, 0)','悬停删除区域时整行保持高亮');
+  assert.equal(await summary.locator('[data-chat-delete]').evaluate(el=>getComputedStyle(el).borderTopWidth),'0px','删除使用紧凑文字操作');
+  await page.locator('#wechat-task-card').screenshot({path:path.join(root,'out/wechat-chat-row-actions.png')});
+
+  await chats.nth(0).click();assert.equal(await chats.count(),2,'展开时其他对话仍在原列表');
+  assert.equal(await chats.nth(0).getAttribute('aria-expanded'),'true');
+  assert.equal(await page.locator('.wechat-chat-group').nth(0).locator('.wechat-task-history .wechat-task').count(),1);
+  await page.evaluate(()=>window.pageFixture.show({jobs:window.pageFixture.data.jobs.map(j=>j.id==='b'?{...j,state:'completed'}:j)}));
+  assert.equal(await chats.nth(0).getAttribute('aria-expanded'),'true','后台更新保留展开状态');
+  await page.screenshot({path:path.join(root,'out/wechat-inline-chats.png'),fullPage:true});
+  await chats.nth(0).click();assert.equal(await page.locator('.wechat-task-history').count(),0);
+  await chats.nth(1).focus();await page.keyboard.press('Enter');
+  assert.equal(await chats.nth(1).getAttribute('aria-expanded'),'true','支持键盘展开');
+  assert.equal(await page.locator('[data-chat-back]').count(),0,'不再进入新列表');
+  await chats.nth(0).click();
+  assert.equal(await page.locator('[data-task-delete="a"]').isHidden(),true,'未选中时隐藏删除图标');
+  await page.locator('[data-task-id="a"] .wechat-exchange-meta').click();
+  assert.equal(await page.locator('[data-task-delete="a"]').isVisible(),true,'选中后提供删除图标');
+  await page.locator('[data-task-delete="a"]').click();
+  await page.waitForFunction(()=>document.querySelectorAll('#wechat-jobs .wechat-chat-button').length===1);
+  assert.deepEqual(await page.evaluate(()=>window.pageFixture.data.jobs.map(j=>j.id)),['b'],'只删除指定任务记录');
+  assert.deepEqual(await page.evaluate(()=>window.pageFixture.actions.at(-1)),{name:'delete-task',payload:{connectionId:'work',value:'a'}});
+  await page.evaluate(()=>{window.pageFixture.confirm(true);window.pageFixture.show({jobs:[
+    {id:'chat-1',state:'completed',canDelete:true,chat:{key:'whole',name:'整个会话'}},
+    {id:'chat-2',state:'completed',canDelete:true,chat:{key:'whole',name:'整个会话'}},
+    {id:'active',state:'running',canDelete:false,chat:{key:'active',name:'进行中的会话'}}
+  ]});});
+  assert.equal(await page.locator('[data-chat-delete="active"]').isDisabled(),true);
+  await page.locator('[data-chat-delete="whole"]').click();
+  await page.waitForFunction(()=>window.pageFixture.data.jobs.length===1);
+  assert.deepEqual(await page.evaluate(()=>window.pageFixture.data.jobs.map(job=>job.id)),['active']);
+  assert.deepEqual(await page.evaluate(()=>window.pageFixture.actions.at(-1)),{name:'delete-chat',payload:{connectionId:'work',value:'whole'}});
   assert.deepEqual(errors,[]);console.log('WeChat page UI OK: visible multi-account states, task-first guidance, settings dialog/focus/tabs, paused/expired/setup states, unscanned draft deletion/cancel/QR flow; 860/1060px');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{if(app)await app.close();});

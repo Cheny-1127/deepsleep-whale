@@ -99,8 +99,9 @@ function createWechatManager({store,onChange=()=>{},...options}) {
     const current=gateways.get(selected)?.snapshot()||{status:'error',error:loadError,storageAvailable:store.available(),enabled:false,account:null,qr:null,clients:[],allowed:[],pending:[],jobs:[],active:null,outbox:0};
     const name=record=>record.name||record.profile?.nickname||`微信 ${records.indexOf(record)+1}`,record=records.find(item=>item.id===selected);
     return {...current,error:loadError||storageError||current.error,selectedConnectionId:selected,connectionLimit:LIMIT,connectionName:record?name(record):'当前微信',profile:userProfile(record?.profile),contactNames:{...record?.contactNames},
-      // 只汇总其他微信的任务和待处理数量；正文、联系人身份与配置仍只下发当前账号。
-      connections:records.map(record=>{const value=gateways.get(record.id).snapshot();return {id:record.id,name:name(record),...userProfile(record.profile),account:value.account,status:value.status,enabled:value.enabled,taskCount:value.jobs.filter(job=>liveStates.has(job.state)).length,pendingCount:value.pending.length,outboxCount:value.outbox};})};
+      // 只汇总其他微信的任务和待处理数量；原始备注单独返回，避免回退后的显示名覆盖昵称优先级。
+      // 正文、联系人身份与配置仍只下发当前账号。
+      connections:records.map(record=>{const value=gateways.get(record.id).snapshot();return {id:record.id,name:name(record),remark:record.name||'',...userProfile(record.profile),account:value.account,status:value.status,enabled:value.enabled,taskCount:value.jobs.filter(job=>liveStates.has(job.state)).length,pendingCount:value.pending.length,outboxCount:value.outbox};})};
   }
   function choose(id) {if(!gateways.has(id))throw Error('微信连接不存在，请重新选择。');save(records,id);selected=id;onChange();}
   return {

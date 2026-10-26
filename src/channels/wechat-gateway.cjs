@@ -108,7 +108,8 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
     }
     if(changedState)persist();
   }
-  function canDeleteJob(job){return active?.job!==job&&(['failed','interrupted','cancelled'].includes(job.state)||(job.state==='completed'&&job.delivery==='failed'));}
+  // 删除仅清理已结束的本机记录；成功任务也可删除，仍在跟踪的任务必须先结束。
+  function canDeleteJob(job){return active?.job!==job&&['completed','failed','interrupted','cancelled'].includes(job.state);}
   function snapshot() {
     const chats=new Map();
     return {status,error:loadError||error||deliveryError,storageAvailable:store.available(),enabled:state.enabled,
@@ -698,13 +699,13 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
         const job=state.jobs.find(job=>job.id===value);if(!job)throw new Error('任务记录不存在或已清理');
         // 正文只响应小屋的主动查看，不进入每 200ms 广播的快照，也不读取客户端其他轮次。
         return {id:job.id,request:job.exchange?.request??job.text??null,response:job.exchange?.response??null};
-      } else if(name==='delete-task') {
-        const job=state.jobs.find(job=>job.id===value);if(!job)throw new Error('任务记录不存在或已清理');
-        if(active?.job===job||['queued','running','approval','question','recovering'].includes(job.state))throw new Error('请等待任务结束后再删除记录');
-        if(!canDeleteJob(job))throw new Error('仅可删除失败、中断或取消的任务记录');
-        // 同时移除该任务尚未发出的结果，保留去重游标与其他任务，避免删除后重发或重跑。
-        const removed=state.outbox.filter(item=>item.jobId===job.id);
-        state.outbox=state.outbox.filter(item=>item.jobId!==job.id);state.jobs=state.jobs.filter(item=>item!==job);
+      } else if(name==='delete-task'||name==='delete-chat') {
+        const cache=new Map(),targets=name==='delete-chat'?state.jobs.filter(job=>jobChat(job,cache).key===value):state.jobs.filter(job=>job.id===value);
+        if(!targets.length)throw new Error('任务记录不存在或已清理');
+        if(targets.some(job=>!canDeleteJob(job)))throw new Error('请等待任务结束后再删除记录');
+        // 整个会话一次性清理；保留绑定和去重游标，不删除客户端会话或重新执行任务。
+        const ids=new Set(targets.map(job=>job.id)),removed=state.outbox.filter(item=>ids.has(item.jobId));
+        state.outbox=state.outbox.filter(item=>!ids.has(item.jobId));state.jobs=state.jobs.filter(job=>!ids.has(job.id));
         if(removed.some(item=>item.id===failedDeliveryId)){deliveryError='';failedDeliveryId='';deliveryRetryAt=0;deliveryFailures=0;}
         persist();changed();void flush();
       } else if(name==='retry'){deliveryError='';deliveryRetryAt=0;void flush();changed();}
