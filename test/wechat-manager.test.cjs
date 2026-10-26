@@ -300,6 +300,27 @@ test('desktop nickname edits persist separately from remarks and preserve avatar
   const before=structuredClone(h.saved);await assert.rejects(h.action('a','rename-nickname','字'.repeat(41)),/40/);assert.deepEqual(h.saved,before);
   h.manager.close();assert.equal(harness(t,h.saved).manager.snapshot().profile.nickname,'新昵称');
 });
+test('desktop avatar updates normalize the original image and preserve identity, names and other accounts',async t=>{
+  const initial=pair();initial.connections[0].name='工作备注';initial.connections[0].profile={nickname:'小鲸',avatar:''};
+  let input;const h=harness(t,initial,{normalizeAvatar:bytes=>{input=bytes;return avatar;}}),other={...structuredClone(h.saved.connections[1]),contactNames:{}};
+  await h.action('a','update-avatar',avatar);
+  assert.deepEqual(input,Buffer.from(avatar.split(',')[1],'base64'));assert.deepEqual(h.saved.connections[0].profile,{nickname:'小鲸',avatar});
+  assert.equal(h.saved.connections[0].name,'工作备注');assert.deepEqual(h.saved.connections[0].state,initial.connections[0].state);assert.deepEqual(h.saved.connections[1],other);
+  h.manager.close();assert.equal(harness(t,h.saved).manager.snapshot().profile.avatar,avatar);
+});
+test('invalid avatar uploads and failed image processing never replace the saved profile',async t=>{
+  const initial=pair();initial.connections[0].profile={nickname:'小鲸',avatar};let calls=0;
+  const h=harness(t,initial,{normalizeAvatar:()=>{calls++;throw Error('图片无法读取');}}),before=structuredClone(h.saved);
+  for(const invalid of ['https://example.com/pic','data:image/svg+xml;base64,PHN2Zy8+','data:image/png;base64,A','data:image/png;base64,'+'A'.repeat(6*1024*1024)])await assert.rejects(h.action('a','update-avatar',invalid));
+  assert.equal(calls,0);await assert.rejects(h.action('a','update-avatar',avatar),/无法读取/);assert.deepEqual(h.saved,before);
+  const fail=harness(t,initial,{normalizeAvatar:()=>avatar});fail.failStore=true;await assert.rejects(fail.action('a','update-avatar',avatar),/保存/);assert.deepEqual(fail.saved,before);
+});
+test('late avatar processing stays on its original account and cannot recreate a removed connection',async t=>{
+  let release;const h=harness(t,pair(),{normalizeAvatar:()=>new Promise(resolve=>release=resolve)});
+  const pending=h.action('a','update-avatar',avatar);await tick();await h.manager.action('select-connection','b');await h.action('a','rename-nickname','最新昵称');release(avatar);await pending;
+  assert.equal(h.saved.connections[0].profile.nickname,'最新昵称');assert.equal(h.saved.connections[0].profile.avatar,avatar);assert.equal(h.saved.connections[1].profile,undefined);
+  const deleted=h.action('a','update-avatar',avatar);await tick();await h.action('a','forget');release(avatar);await assert.rejects(deleted,/不存在/);assert.deepEqual(h.saved.connections.map(c=>c.id),['b']);
+});
 test('display names persist independently without changing identity, authorization or jobs',async t=>{
   const h=harness(t,pair());h.manager.start();
   await h.action('a','rename-connection','工作微信');await h.action('a','rename-user',{sender:'owner',name:'我自己'});

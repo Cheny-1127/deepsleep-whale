@@ -1,3 +1,4 @@
+import {confirmAction} from './confirm-dialog.mjs';
 const $=id=>document.getElementById('wechat-'+id);
 const statuses={disconnected:'未连接','logging-in':'正在扫码',connecting:'连接中',connected:'已连接',reconnecting:'正在重连',paused:'已暂停',expired:'登录失效',error:'连接异常'};
 const jobs={queued:'排队中',running:'排查中',recovering:'恢复跟踪中',approval:'等待审批',question:'等待回答',completed:'已完成',failed:'未完成',interrupted:'已中断',cancelled:'已取消'};
@@ -8,8 +9,15 @@ export function createWechatView() {
   const pageSize=10,ended=job=>['completed','failed','interrupted','cancelled'].includes(job.state);
   let discovery=null,discoveryKey='',scanning=false,discoveryError='';
   let connectionId='',connectionsKey='',settingsTab='clients',nameField='remark',nameOriginal='';const connectionDrafts=new Map();
+  // 每次打开或关闭都更新版本，旧文件读取或上传结果不再更新新预览。
+  let avatarConnectionId='',avatarVersion=0,avatarLoading=false;
   // 发起请求时固定账号，异步返回期间切换页面不会改变该操作的目标。
   const scoped=(value,id=latest?.selectedConnectionId)=>id?{connectionId:id,value}:value;
+  async function confirmWechat(options){
+    const id=latest.selectedConnectionId;
+    // 应用内弹窗等待期间快照仍会刷新；只对打开确认框时的账号执行操作。
+    return !busy&&await confirmAction({owner:$('view'),...options})&&id===latest.selectedConnectionId;
+  }
   function element(tag,text,className){const node=document.createElement(tag);if(text)node.textContent=text;if(className)node.className=className;return node;}
   // 会话和单组问答共用垃圾桶图形，删除范围由各按钮的名称和事件明确区分。
   function deleteIcon(){
@@ -79,9 +87,9 @@ export function createWechatView() {
         const remove=element('button',null,'outline ui-danger-action');remove.type='button';remove.dataset.chatDelete=chat.key;
         remove.setAttribute('aria-label','删除此会话的任务记录');remove.append(deleteIcon());
         remove.title='删除此会话在 Whale 中的全部任务记录，不删除 Codex 会话。';
-        remove.addEventListener('click',()=>{
+        remove.addEventListener('click',async()=>{
           const current=latest.jobs.filter(job=>job.chat?.key===chat.key);
-          if(window.confirm(`删除「${current[0]?.chat?.name||'此会话'}」的全部本地任务记录？不会删除 Codex 会话或已发送消息。`))void act('delete-chat',chat.key);
+          if(await confirmWechat({title:'删除会话记录？',message:`将删除「${current[0]?.chat?.name||'此会话'}」的全部本地任务记录。不会删除 Codex 会话或已发送消息。`,confirmLabel:'删除记录',danger:true}))void act('delete-chat',chat.key);
         });
         const heading=element('div',null,'wechat-chat-summary');heading.append(button,remove);
         shell.append(heading);row={root:shell,button,remove};chatRows.set(chat.key,row);
@@ -271,6 +279,7 @@ export function createWechatView() {
       else if(name==='delete-task')$('feedback').textContent='记录已删除。';
       else if(name==='rename-connection'||name==='rename-user')$('feedback').textContent='备注名已保存。';
       else if(name==='rename-nickname')$('feedback').textContent='昵称已保存。';
+      else if(name==='update-avatar')$('feedback').textContent='头像已更新。';
       const data=await window.whale.snapshot();render(data.wechat);
       if(name==='forget')$('settings-dialog').close();
       return true;
@@ -286,8 +295,11 @@ export function createWechatView() {
   $('settings').addEventListener('submit',event=>{event.preventDefault();void act('save-clients',readDraft());});
   for(const backend of ['codex','cursor'])$('add-'+backend).addEventListener('click',()=>editClients(list=>[...list,{id:'client-'+crypto.randomUUID(),name:backend==='codex'?'Codex '+(list.length+1):'Cursor CLI',backend,enabled:true,binary:'',configHome:'',profile:''}]));
   for(const name of ['login','retry','cancel-login'])$(name).addEventListener('click',()=>void act(name));
-  $('reconnect').addEventListener('click',()=>{
-    if(window.confirm(`重新扫码「${latest.connectionName||'当前微信'}」会暂停它的接收并停止当前任务。继续吗？`)){$('settings-dialog').close();void act('login');}
+  // 重试沿用已保存的登录凭据，只重启接收轮询，不进入扫码流程。
+  $('retry-connection').addEventListener('click',()=>void act('enable',true));
+  $('reconnect').addEventListener('click',async()=>{
+    // 管理器会核对原扫码用户；重新授权不允许把已有连接转交给另一个微信。
+    if(await confirmWechat({title:'重新扫码登录？',message:`将重新扫码恢复「${latest.connectionName||'当前微信'}」，需使用原微信账号，会暂停它的接收并停止当前任务。`,confirmLabel:'继续扫码'})){$('settings-dialog').close();void act('login');}
   });
   function editConnectionName(field){
     nameField=field;const item=latest.connections.find(item=>item.id===latest.selectedConnectionId),label=field==='nickname'?'昵称':'备注名';
@@ -307,10 +319,45 @@ export function createWechatView() {
     if(await act(nameField==='nickname'?'rename-nickname':'rename-connection',$('name').value))$('name-dialog').close();
     else{$('name-error').textContent=$('feedback').textContent;$('name-error').hidden=false;}
   });
+  function renderAvatar(){
+    if(!$('avatar-dialog').open)return;
+    const item=latest?.connections.find(item=>item.id===avatarConnectionId);
+    if(!item){$('avatar-dialog').close();return;}
+    const image=$('avatar-image');image.hidden=!item.avatar;$('avatar-empty').hidden=Boolean(item.avatar);
+    if(item.avatar){if(image.getAttribute('src')!==item.avatar)image.src=item.avatar;}else image.removeAttribute('src');
+    $('avatar-update').disabled=busy||avatarLoading;$('avatar-update').textContent=avatarLoading?'正在更新…':'更新头像';
+  }
+  function showAvatar(id){
+    if(id!==latest?.selectedConnectionId)return;
+    const item=latest.connections.find(item=>item.id===id);if(!item)return;
+    avatarConnectionId=id;avatarVersion++;avatarLoading=false;$('avatar-file').value='';
+    $('avatar-title').textContent=item.name+'的头像';$('avatar-error').hidden=true;$('avatar-feedback').hidden=true;
+    $('avatar-dialog').showModal();renderAvatar();
+  }
+  $('avatar-close').addEventListener('click',()=>$('avatar-dialog').close());
+  $('avatar-dialog').addEventListener('close',()=>{
+    // close 事件异步派发；快速重开时，旧事件不能清除新预览的账号和上传状态。
+    if($('avatar-dialog').open)return;
+    avatarVersion++;avatarConnectionId='';avatarLoading=false;$('avatar-file').value='';
+  });
+  $('avatar-update').addEventListener('click',()=>$('avatar-file').click());
+  $('avatar-file').addEventListener('change',async()=>{
+    const file=$('avatar-file').files?.[0],id=avatarConnectionId,version=avatarVersion;if(!file)return;
+    $('avatar-file').value='';avatarLoading=true;$('avatar-error').hidden=true;$('avatar-feedback').hidden=true;renderAvatar();
+    try{
+      if(file.size>4*1024*1024)throw Error('头像图片不能超过 4 MB。');
+      const data=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(Error('头像图片无法读取，请重试。'));reader.readAsDataURL(file);});
+      // 文件读取结束后再次核对账号和弹窗，切换账号或关闭预览不能把旧图片写到新账号。
+      if(version!==avatarVersion||!$('avatar-dialog').open||latest.selectedConnectionId!==id)return;
+      if(!await act('update-avatar',data))throw Error($('feedback').textContent||'头像未保存，请重试。');
+      if(version===avatarVersion){$('avatar-feedback').textContent='头像已更新。';$('avatar-feedback').hidden=false;}
+    }catch(error){if(version===avatarVersion){$('avatar-error').textContent=error.message||'头像未保存，请重试。';$('avatar-error').hidden=false;}}
+    finally{if(version===avatarVersion){avatarLoading=false;renderAvatar();}}
+  });
   // 配置只针对打开时选中的微信；原生 dialog 负责焦点约束、Esc 与关闭后的焦点恢复。
   function showSettingsTab(tab) {
     settingsTab=tab;
-    // 账号操作常驻列表下方；弹窗只切换客户端、联系人和帮助，不隐藏主页面的账号工具栏。
+    // 日常接收操作留在账号卡片；主动重新扫码仅在设置的折叠区内提供。
     const panels={clients:'client-options',contacts:'contacts',help:'help'};
     for(const [name,id]of Object.entries(panels)){
       $(id).hidden=name!==tab;const button=$('tab-'+name);button.setAttribute('aria-selected',String(name===tab));button.tabIndex=name===tab?0:-1;
@@ -322,7 +369,7 @@ export function createWechatView() {
   $('show-help').addEventListener('click',()=>openSettings('help'));
   $('setup-client').addEventListener('click',()=>openSettings('clients'));
   $('close-settings').addEventListener('click',()=>$('settings-dialog').close());
-  $('settings-dialog').addEventListener('close',()=>render(latest));
+  $('settings-dialog').addEventListener('close',()=>{if($('settings-dialog').open)return;$('account-options').open=false;render(latest);});
   for(const button of $('settings-dialog').querySelectorAll('[data-settings-tab]')){
     button.addEventListener('click',()=>showSettingsTab(button.dataset.settingsTab));
     button.addEventListener('keydown',event=>{
@@ -335,11 +382,11 @@ export function createWechatView() {
   $('add-connection').addEventListener('click',()=>void act('add-connection'));
   $('check').addEventListener('click',()=>void act('discover-clients'));
   $('toggle').addEventListener('click',()=>void act('enable',!latest?.enabled));
-  function forgetConnection(){
+  async function forgetConnection(){
     // 未扫码草稿没有绑定凭据，直接移除；已绑定账号仍确认清理范围。
     if(!latest.account){void act('forget');return;}
     const message=`移除「${latest.connectionName||'当前微信'}」将清除它的本机凭据、选择记录、备注名和待投递结果，并停止它的任务；其他微信连接和客户端自身的聊天历史不受影响。`;
-    if(window.confirm(message))void act('forget');
+    if(await confirmWechat({title:'移除微信连接？',message,confirmLabel:'移除连接',danger:true}))void act('forget');
   }
   $('forget').addEventListener('click',forgetConnection);
   $('remove-draft').addEventListener('click',forgetConnection);
@@ -355,25 +402,34 @@ export function createWechatView() {
       rowsKey='';jobsKey='';selectedChat='';selectedTask='';detailVersion++;taskDetails.clear();taskRows.clear();chatRows.clear();chatPages.clear();$('jobs').replaceChildren();
       discovery=null;discoveryKey='';discoveryError='';drawClients();
     }
-    if(switched){$('name-dialog').close();$('settings-dialog').close();}
+    if(switched){$('name-dialog').close();$('avatar-dialog').close();$('settings-dialog').close();for(const dialog of $('view').querySelectorAll('.ui-confirm-dialog[open]'))dialog.close();}
     latest=data;
     const connections=data.connections||[];
     const nextConnectionsKey=JSON.stringify([connections,data.selectedConnectionId]);
     if(nextConnectionsKey!==connectionsKey){
       // 仅身份、状态或选择变化时重画账号卡，后台广播不能反复抢走键盘焦点。
-      const settings=$('account-settings'),toolbar=$('account-toolbar'),active=document.activeElement;
-      const focused=active?.dataset.connectionId,editing=!switched&&(settings.contains(active)||toolbar.contains(active));
-      // 复用管理区节点，先移出再重建卡片，保留二维码、表单内容及操作焦点。
-      settings.remove();toolbar.remove();connectionsKey=nextConnectionsKey;$('connections').replaceChildren();
+      const settings=$('account-settings'),toolbar=$('account-toolbar'),statusDetails=$('status-details'),active=document.activeElement;
+      const focused=active?.dataset.connectionId,editing=!switched&&(settings.contains(active)||toolbar.contains(active)||statusDetails.contains(active));
+      // 状态说明和恢复按钮跟随当前账号复用；重画卡片不能丢失二维码或操作焦点。
+      settings.remove();toolbar.remove();statusDetails.remove();connectionsKey=nextConnectionsKey;$('connections').replaceChildren();
       let mounted=false;
       for(const item of connections){
         const showStatus=item.account||['logging-in','error'].includes(item.status);
         // 已绑定且停收的账号在重启后可能尚未启动轮询，展示“已暂停”以匹配下方恢复操作。
         const state=item.account&&!item.enabled&&item.status==='disconnected'?'paused':item.status;
         const button=element('button',null,'ui-choice'),name=element('strong',null,'wechat-account-field'),status=element('small',showStatus?statuses[state]||state:'待扫码');
-        const selected=item.id===data.selectedConnectionId;button.type='button';button.dataset.connectionId=item.id;button.setAttribute('aria-pressed',String(selected));status.className='ui-status';status.dataset.state=showStatus?state:'disconnected';if(selected)status.id='wechat-status';
+        const selected=item.id===data.selectedConnectionId;button.type='button';button.dataset.connectionId=item.id;button.setAttribute('aria-pressed',String(selected));status.className='ui-status';status.dataset.state=showStatus?state:'disconnected';status.id=selected?'wechat-status':'wechat-status-'+item.id;button.setAttribute('aria-describedby',status.id);
+        if(['connecting','reconnecting'].includes(status.dataset.state)){
+          const spinner=element('span',null,'wechat-status-spinner');spinner.setAttribute('aria-hidden','true');
+          // 短线保持在固定位置，通过错开的明暗节奏形成系统常见的菊花加载效果。
+          for(let index=0;index<12;index++){const spoke=element('i');spoke.style.setProperty('--spoke',String(index));spinner.append(spoke);}
+          status.prepend(spinner);
+        }
         const identity=element('span',null,'wechat-account-identity'),copy=element('span',null,'wechat-account-copy');
-        if(item.avatar){const avatar=element('img',null,'ui-avatar');avatar.src=item.avatar;avatar.alt='';identity.append(avatar);}
+        const avatarButton=element('button',null,'wechat-account-avatar');avatarButton.type='button';avatarButton.dataset.connectionAvatar=item.id;
+        avatarButton.setAttribute('aria-label',`查看及更新${item.name}的头像`);avatarButton.setAttribute('aria-haspopup','dialog');avatarButton.title='查看及更新头像';
+        if(item.avatar){const avatar=element('img',null,'ui-avatar');avatar.src=item.avatar;avatar.alt='';avatarButton.append(avatar);}else avatarButton.textContent=Array.from(item.nickname||item.name)[0]||'微';
+        avatarButton.addEventListener('click',async()=>{if(item.id!==latest.selectedConnectionId&&!await act('select-connection',item.id))return;showAvatar(item.id);});
         const remarkValue=element('span',item.name);remarkValue.dataset.editConnectionName='remark';remarkValue.title='点击修改备注名';
         name.append(element('span','备注名：','wechat-account-label'),remarkValue);copy.append(name);
         if(item.nickname){
@@ -381,20 +437,23 @@ export function createWechatView() {
           value.dataset.editConnectionName='nickname';value.title='点击修改昵称';
           nickname.append(element('span','昵　称：','wechat-account-label'),value);copy.append(nickname);
         }
-        identity.append(copy);button.append(identity,status);
+        identity.append(copy);button.append(identity);
+        const statusBlock=element('div',null,'wechat-account-status');statusBlock.append(status);
+        if(selected)statusBlock.append(statusDetails);
         const attention=[item.taskCount?`${item.taskCount} 个任务`:null,item.pendingCount?`${item.pendingCount} 位待授权`:null,item.outboxCount?`${item.outboxCount} 条待投递`:null].filter(Boolean).join(' · ');
-        if(attention)button.append(element('small',attention,'wechat-account-attention'));
+        if(attention)statusBlock.append(element('small',attention,'wechat-account-attention'));
         button.addEventListener('click',async event=>{
           const edit=event.target.closest('[data-edit-connection-name]')?.dataset.editConnectionName;
           if(item.id!==latest.selectedConnectionId&&!await act('select-connection',item.id))return;
           if(edit)editConnectionName(edit);
         });
         const card=element('section',null,'ui-card wechat-connection-card'),heading=element('div',null,'wechat-connection-heading');
-        card.dataset.selected=String(selected);card.setAttribute('aria-label',item.name);heading.append(button);card.append(heading);
+        const main=element('div',null,'wechat-account-main');main.append(avatarButton,button,statusBlock);
+        card.dataset.selected=String(selected);card.setAttribute('aria-label',item.name);heading.append(main);card.append(heading);
         if(selected){heading.append(toolbar);card.append(settings);mounted=true;}
         $('connections').append(card);
       }
-      if(!mounted){settings.prepend(toolbar);$('connections').append(settings);}
+      if(!mounted){settings.prepend(toolbar,statusDetails);$('connections').append(settings);}
       if(focused)[...$('connections').querySelectorAll('[data-connection-id]')].find(button=>button.dataset.connectionId===focused)?.focus();
       else if(editing)active.focus({preventScroll:true});
     }
@@ -419,8 +478,12 @@ export function createWechatView() {
     $('account').textContent=data.account?`机器人：${data.account.id}`:'扫码绑定机器人账号后，用微信给它发送 /projects。';
     $('owner').textContent=data.account?.owner?`扫码账号：${data.account.owner}`:'';
     const loggingIn=data.status==='logging-in'||Boolean(data.qr);
-    $('connection-state').textContent=loggingIn?`请用要接入的微信扫描二维码，完成「${connectionName}」的连接。`:!bound?`「${connectionName}」尚未扫码。扫码后即可通过这个微信发送任务。`:data.status==='expired'?'登录已失效，请重新扫码恢复连接。':!data.enabled?'接收已暂停，恢复后继续接收这个微信的消息。':!enabled.length?'微信已连接；尚未启用客户端，请先设置客户端。':data.status!=='connected'?'正在尝试连接，请稍候。':'';
-    $('connection-panel').hidden=!$('connection-state').textContent;
+    const canRetryConnection=bound&&data.enabled&&!loggingIn&&['disconnected','reconnecting','error'].includes(data.status);
+    // 连接中已有状态文字与加载图标，仅在有原因或恢复操作时补充说明，避免重复提示。
+    $('connection-state').textContent=loggingIn?`请用要接入的微信扫描二维码，完成「${connectionName}」的连接。`:!bound?`「${connectionName}」尚未扫码。扫码后即可通过这个微信发送任务。`:data.status==='expired'?'登录已失效，请重新登录恢复连接。':!data.enabled?'接收已暂停，恢复后继续接收这个微信的消息。':data.status==='reconnecting'?'连接暂时中断，正在自动重连，也可重试连接。':canRetryConnection?'连接暂时不可用，请查看下方提示或重试连接。':data.status!=='connected'?'':!enabled.length?'微信已连接；尚未启用客户端，请先设置客户端。':'';
+    $('status-details').hidden=!$('connection-state').textContent;
+    // 二维码独占下方空间；普通连接提示留在名称旁，健康连接不产生空白说明行。
+    $('connection-panel').hidden=!data.qr;
     $('qr-box').hidden=!data.qr;
     if(data.qr){if($('qr').src!==data.qr.image)$('qr').src=data.qr.image;$('qr-status').textContent=data.qr.status;}else $('qr').removeAttribute('src');
     $('toggle').hidden=!bound||data.status==='expired'||loggingIn;$('toggle').setAttribute('aria-checked',String(Boolean(data.enabled)));
@@ -432,14 +495,17 @@ export function createWechatView() {
     $('forget').hidden=!bound;
     $('identity').hidden=!bound;
     for(const button of $('view').querySelectorAll('button'))button.disabled=busy||button.dataset.edge==='true';
+    renderAvatar();
     // 检测或保存期间仍可关闭设置、阅读帮助，避免低频配置阻塞页面退出。
     for(const button of $('settings-dialog').querySelectorAll('[data-settings-tab],#wechat-close-settings'))button.disabled=false;
     $('add-connection').disabled=busy||!data.storageAvailable||connections.length>=(data.connectionLimit||8);
     $('login').hidden=loggingIn||(bound&&data.status!=='expired');
-    $('login').textContent=data.account?'重新扫码':'扫码连接';
+    $('login').textContent=bound?'重新登录':'扫码连接';
     $('login').disabled=busy||!data.storageAvailable||Boolean(data.qr)||Boolean(data.active);
-    $('reconnect').hidden=!bound||data.status==='expired'||loggingIn;$('reconnect').disabled=$('login').disabled;
+    $('account-options').hidden=!bound||data.status==='expired'||loggingIn;$('reconnect').disabled=$('login').disabled;
+    $('retry-connection').hidden=!canRetryConnection;$('retry-connection').disabled=busy||!data.storageAvailable;
     $('cancel-login').hidden=!loggingIn;
+    $('connection-actions').hidden=[...$('connection-actions').children].every(button=>button.hidden);
     for(const input of $('name-form').querySelectorAll('input,button'))input.disabled=busy;
     const locked=busy||Boolean(data.active)||data.jobs.some(job=>['queued','recovering'].includes(job.state));
     for(const input of $('settings').querySelectorAll('input,select,button'))input.disabled=locked||input.dataset.edge==='true';
@@ -460,7 +526,7 @@ export function createWechatView() {
         rename.type='button';button.type='button';rename.addEventListener('click',()=>{form.hidden=false;input.value=latest.contactNames?.[user]||'';input.focus();});
         cancel.addEventListener('click',()=>{form.hidden=true;rename.focus();});form.append(input,save,cancel);
         form.addEventListener('submit',async event=>{event.preventDefault();if(await act('rename-user',{sender:user,name:input.value}))form.hidden=true;});
-        button.addEventListener('click',()=>{if(kind==='allowed'&&!window.confirm(`撤销「${contactName(latest,user)}」在当前微信的本机操作权限，并停止其任务和待投递结果？`))return;void act(kind==='allowed'?'remove-user':'allow-user',user);});
+        button.addEventListener('click',async()=>{if(kind==='allowed'&&!await confirmWechat({title:'撤销联系人权限？',message:`撤销「${contactName(latest,user)}」在当前微信的本机操作权限，并停止其任务和待投递结果。`,confirmLabel:'撤销权限',danger:true}))return;void act(kind==='allowed'?'remove-user':'allow-user',user);});
         actions.append(rename,button);row.append(text,actions,form);$('users').append(row);
       }
       if(!$('users').children.length)$('users').textContent='暂无联系人';
@@ -469,7 +535,7 @@ export function createWechatView() {
     $('task-card').hidden=!bound&&!data.jobs.length;
     $('empty').hidden=data.jobs.length>0||!bound;
     $('empty').querySelector('h3').textContent=data.status==='expired'?'恢复连接后，继续用微信发任务':!data.enabled?'恢复接收后，继续用微信发任务':!enabled.length?'设置好客户端，就能开始了':'连接好了，发条微信试试';
-    $('start-hint').textContent=data.status==='expired'?'先重新扫码恢复连接，再在微信里发送任务。':!data.enabled?'先恢复接收，再在微信里发送任务。':!enabled.length?'先点击上方“设置客户端”，启用一个客户端后再发送任务。':`用「${connectionName}」给扫码连接的机器人发送：`;
+    $('start-hint').textContent=data.status==='expired'?'先重新登录恢复连接，再在微信里发送任务。':!data.enabled?'先恢复接收，再在微信里发送任务。':!enabled.length?'先点击上方“设置客户端”，启用一个客户端后再发送任务。':`用「${connectionName}」给扫码连接的机器人发送：`;
     drawJobs(data.jobs);
   }
   return {render};

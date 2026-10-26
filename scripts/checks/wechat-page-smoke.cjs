@@ -9,8 +9,8 @@ const data={status:'connected',storageAvailable:true,enabled:true,account:{id:'w
 const html=fs.readFileSync(path.join(root,'src/ui/index.html'),'utf8').replace('href="style.css"',`href="${url(path.join(root,'src/ui/style.css'))}"`).replace('href="quota-key.css"',`href="${url(path.join(root,'src/ui/quota-key.css'))}"`).replace(/<script\b[^>]*>[\s\S]*?<\/script>/g,'').replace('</body>','<script type="module" src="fixture.mjs"></script></body>');
 fs.writeFileSync(path.join(dir,'index.html'),html);
 fs.writeFileSync(path.join(dir,'fixture.mjs'),`import {createWechatView} from ${JSON.stringify(url(path.join(root,'src/ui/wechat-view.mjs')))};
-const data=${JSON.stringify(data)},dialogs=[],actions=[];let confirmResult=false;
-window.confirm=message=>{dialogs.push(message);return confirmResult;};
+const data=${JSON.stringify(data)},dialogs=[],actions=[];
+window.confirm=message=>{dialogs.push(message);throw Error('不应调用原生确认框');};
 const original=structuredClone(data),states=new Map([['work',structuredClone(data)],['personal',{...structuredClone(data),account:{id:'personal-bot',owner:'personal-owner'},connectionName:'个人微信',selectedConnectionId:'personal'}]]);
 function select(id){const connections=data.connections;Object.assign(data,{qr:null},structuredClone(states.get(id)),{connections});}
 window.whale={snapshot:async()=>({wechat:data}),wechat:async(name,payload)=>{
@@ -26,12 +26,22 @@ window.whale={snapshot:async()=>({wechat:data}),wechat:async(name,payload)=>{
     if(payload.connectionId!==data.selectedConnectionId)throw Error('wrong scope');
     data.enabled=payload.value;data.status=data.enabled?'connected':'paused';
     Object.assign(data.connections.find(item=>item.id===payload.connectionId),{enabled:data.enabled,status:data.status});
+  }else if(name==='login'){
+    if(payload.connectionId!==data.selectedConnectionId)throw Error('wrong scope');
+    data.status='logging-in';data.qr={image:'data:image/png;base64,iVBORw0KGgo=',status:'等待扫码'};
+  }else if(name==='cancel-login'){
+    data.qr=null;data.status=data.account?'connected':'disconnected';
   }else if(name==='rename-connection'){
     if(payload.connectionId!==data.selectedConnectionId)throw Error('wrong scope');
     data.connectionName=payload.value;Object.assign(data.connections.find(item=>item.id===payload.connectionId),{name:payload.value,remark:payload.value});
   }else if(name==='rename-nickname'){
     if(payload.connectionId!==data.selectedConnectionId)throw Error('wrong scope');
     data.connections.find(item=>item.id===payload.connectionId).nickname=payload.value;
+  }else if(name==='update-avatar'){
+    if(payload.connectionId!==data.selectedConnectionId)throw Error('wrong scope');
+    if(window.pageFixture.failAvatar)return {error:'测试头像保存失败'};
+    data.connections.find(item=>item.id===payload.connectionId).avatar=payload.value;
+    data.profile={...data.profile,avatar:payload.value};
   }else if(name==='delete-chat'){
     if(payload.connectionId!==data.selectedConnectionId)throw Error('wrong scope');
     data.jobs=data.jobs.filter(job=>job.chat.key!==payload.value);
@@ -46,7 +56,7 @@ window.whale={snapshot:async()=>({wechat:data}),wechat:async(name,payload)=>{
 }};
 for(const el of document.querySelector('main').children)el.hidden=el.id!=='wechat-view';
 for(const button of document.querySelectorAll('[data-view]')){const selected=button.dataset.view==='wechat';button.classList.toggle('selected',selected);if(selected)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');}
-const view=createWechatView();window.pageFixture={data,dialogs,actions,confirm:value=>{confirmResult=value;},show:patch=>{Object.assign(data,patch);const current=data.connections.find(item=>item.id===data.selectedConnectionId);if(current)Object.assign(current,{account:data.account,enabled:data.enabled,status:data.status});view.render(data);}};view.render(data);`);
+const view=createWechatView();window.pageFixture={data,dialogs,actions,show:patch=>{Object.assign(data,patch);const current=data.connections.find(item=>item.id===data.selectedConnectionId);if(current)Object.assign(current,{account:data.account,enabled:data.enabled,status:data.status});view.render(data);}};view.render(data);`);
 const bootstrap=path.join(dir,'bootstrap.cjs');fs.writeFileSync(bootstrap,`const {app,BrowserWindow}=require('electron');app.setPath('userData',${JSON.stringify(dir)});app.whenReady().then(()=>new BrowserWindow({width:1060,height:770,show:false,focusable:false,webPreferences:{contextIsolation:true,nodeIntegration:false}}).loadFile(${JSON.stringify(path.join(dir,'index.html'))}));`);
 fs.mkdirSync(path.join(root,'out'),{recursive:true});
 let app;
@@ -55,6 +65,8 @@ let app;
   await page.waitForFunction(()=>Boolean(window.pageFixture));
   assert.equal(await page.locator('#wechat-login').isHidden(),true);assert.equal(await page.locator('#wechat-forget').isVisible(),true);
   assert.equal(await page.locator('#wechat-toggle').isVisible(),true);
+  assert.equal(await page.locator('#wechat-account-toolbar #wechat-reconnect').count(),0,'正常账号卡片不提供扫码入口');
+  assert.equal(await page.locator('#wechat-retry-connection').isHidden(),true,'正常连接不需要重试');
   assert.equal(await page.locator('#wechat-settings-dialog #wechat-account-settings').count(),0,'账号操作直接放在账号列表下面');
   assert.equal(await page.locator('#wechat-tab-account').count(),0,'设置不保留重复入口');
   assert.equal(await page.locator('#wechat-connections [data-connection-id]').count(),2);
@@ -70,8 +82,15 @@ let app;
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
     await page.screenshot({path:path.join(root,`out/wechat-daily-${width}.png`),fullPage:true});
     if(width===860)await page.locator('.wechat-account-card').screenshot({path:path.join(root,'out/wechat-account-controls.png')});
-    await page.locator('#wechat-reconnect').click();assert.match((await page.evaluate(()=>window.pageFixture.dialogs)).at(-1),/工作微信.*停止当前任务/);
-    await page.locator('#wechat-forget').click();assert.match((await page.evaluate(()=>window.pageFixture.dialogs)).at(-1),/工作微信.*其他微信/);
+    assert.equal(await page.locator('#wechat-reconnect').isHidden(),true);
+    await page.locator('#wechat-open-settings').click();assert.equal(await page.locator('#wechat-reconnect').isHidden(),true,'账号操作默认折叠');
+    await page.locator('#wechat-account-options > summary').click();
+    await page.locator('#wechat-reconnect').click();assert.match(await page.locator('.ui-confirm-dialog').textContent(),/工作微信.*停止当前任务/);
+    assert.equal(await page.locator('.ui-confirm-dialog .outline').evaluate(el=>el===document.activeElement),true,'默认聚焦取消');
+    await page.keyboard.press('Escape');assert.equal(await page.locator('#wechat-reconnect').evaluate(el=>el===document.activeElement),true,'取消后恢复焦点');
+    await page.locator('#wechat-close-settings').click();
+    await page.locator('#wechat-forget').click();assert.match(await page.locator('.ui-confirm-dialog').textContent(),/工作微信.*其他微信/);
+    await page.locator('.ui-confirm-dialog').getByRole('button',{name:'取消',exact:true}).click();
     assert.equal(await page.locator('#wechat-settings-dialog').isVisible(),false);
     await page.locator('#wechat-open-settings').click();
     const menu=await page.locator('#wechat-settings-dialog').boundingBox();assert.ok(menu.x>=0&&menu.x+menu.width<=width);
@@ -90,8 +109,27 @@ let app;
   await page.waitForFunction(()=>!document.getElementById('wechat-toggle').disabled);
   await page.evaluate(()=>window.pageFixture.show({status:'disconnected',enabled:false}));
   assert.equal(await page.locator('#wechat-status').textContent(),'已暂停','重启后的停收账号与恢复操作保持一致');
+  assert.equal(await page.locator('#wechat-retry-connection').isHidden(),true,'已暂停时通过接收开关恢复');
   await page.evaluate(()=>window.pageFixture.show({status:'expired'}));
-  assert.equal(await page.locator('#wechat-login').isVisible(),true);assert.equal(await page.locator('#wechat-login').textContent(),'重新扫码');assert.equal(await page.locator('#wechat-toggle').isHidden(),true);
+  assert.equal(await page.locator('#wechat-login').isVisible(),true);assert.equal(await page.locator('#wechat-login').textContent(),'重新登录');assert.equal(await page.locator('#wechat-toggle').isHidden(),true);
+  assert.equal(await page.locator('#wechat-account-options').isHidden(),true);
+  await page.locator('#wechat-login').click();await page.waitForFunction(()=>!document.getElementById('wechat-cancel-login').disabled);
+  assert.equal(await page.locator('#wechat-qr-box').isVisible(),true);assert.equal((await page.evaluate(()=>window.pageFixture.actions)).at(-1).payload.connectionId,'work');
+  await page.locator('#wechat-cancel-login').click();await page.waitForFunction(()=>!document.getElementById('wechat-toggle').disabled);
+  const loginCount=await page.evaluate(()=>window.pageFixture.actions.filter(action=>action.name==='login').length);
+  for(const status of ['connecting','reconnecting','error','disconnected']){
+    await page.evaluate(status=>window.pageFixture.show({status,enabled:true}),status);
+    assert.equal(await page.locator('#wechat-login').isHidden(),true,'暂时断线不引导扫码');
+    assert.equal(await page.locator('#wechat-retry-connection').isVisible(),status!=='connecting');
+    if(status==='connecting')for(const width of [1060,860]){
+      await page.setViewportSize({width,height:770});
+      assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'状态与说明不挤出账号卡片');
+      await page.locator('.wechat-account-card').screenshot({path:path.join(root,`out/wechat-inline-status-${width}.png`)});
+    }
+  }
+  await page.locator('#wechat-retry-connection').click();await page.waitForFunction(()=>!document.getElementById('wechat-toggle').disabled);
+  assert.deepEqual(await page.evaluate(()=>window.pageFixture.actions.at(-1)),{name:'enable',payload:{connectionId:'work',value:true}},'重试连接只复用原凭据');
+  assert.equal(await page.evaluate(()=>window.pageFixture.actions.filter(action=>action.name==='login').length),loginCount);
   await page.evaluate(()=>window.pageFixture.show({enabled:true,status:'connected',clients:[]}));
   assert.match(await page.locator('#wechat-connection-state').textContent(),/尚未启用客户端/);
   assert.equal(await page.locator('#wechat-setup-client').isVisible(),true);
@@ -246,15 +284,63 @@ let app;
   await page.waitForFunction(()=>document.querySelectorAll('#wechat-jobs .wechat-chat-button').length===1);
   assert.deepEqual(await page.evaluate(()=>window.pageFixture.data.jobs.map(j=>j.id)),['b'],'只删除指定任务记录');
   assert.deepEqual(await page.evaluate(()=>window.pageFixture.actions.at(-1)),{name:'delete-task',payload:{connectionId:'work',value:'a'}});
-  await page.evaluate(()=>{window.pageFixture.confirm(true);window.pageFixture.show({jobs:[
+  await page.evaluate(()=>{window.pageFixture.show({jobs:[
     {id:'chat-1',state:'completed',canDelete:true,chat:{key:'whole',name:'整个会话'}},
     {id:'chat-2',state:'completed',canDelete:true,chat:{key:'whole',name:'整个会话'}},
     {id:'active',state:'running',canDelete:false,chat:{key:'active',name:'进行中的会话'}}
   ]});});
   assert.equal(await page.locator('[data-chat-delete="active"]').isDisabled(),true);
+  for(const width of [860,1060]){
+    await page.setViewportSize({width,height:770});await page.locator('[data-chat-delete="whole"]').click();
+    const dialog=page.getByRole('alertdialog',{name:'删除会话记录？'}),bounds=await dialog.boundingBox();
+    assert.ok(bounds.x>=0&&bounds.x+bounds.width<=width&&bounds.y>=0&&bounds.y+bounds.height<=770,'确认框不超出窗口');
+    assert.match(await dialog.textContent(),/整个会话.*不会删除 Codex 会话或已发送消息/);
+    await page.screenshot({path:path.join(root,`out/wechat-confirm-${width}.png`)});
+    await page.keyboard.press('Enter');await page.waitForFunction(()=>!document.querySelector('.ui-confirm-dialog'));
+    assert.equal(await page.evaluate(()=>window.pageFixture.data.jobs.length),3,'默认 Enter 取消，不删除');
+  }
   await page.locator('[data-chat-delete="whole"]').click();
+  await page.evaluate(()=>window.pageFixture.show({selectedConnectionId:'personal'}));
+  await page.waitForFunction(()=>!document.querySelector('.ui-confirm-dialog'));
+  assert.equal(await page.evaluate(()=>window.pageFixture.data.jobs.length),3,'切换账号取消旧确认');
+  await page.evaluate(()=>window.pageFixture.show({selectedConnectionId:'work'}));
+  await page.locator('[data-chat-delete="whole"]').click();
+  await page.getByRole('alertdialog').getByRole('button',{name:'删除记录',exact:true}).click();
   await page.waitForFunction(()=>window.pageFixture.data.jobs.length===1);
   assert.deepEqual(await page.evaluate(()=>window.pageFixture.data.jobs.map(job=>job.id)),['active']);
   assert.deepEqual(await page.evaluate(()=>window.pageFixture.actions.at(-1)),{name:'delete-chat',payload:{connectionId:'work',value:'whole'}});
-  assert.deepEqual(errors,[]);console.log('WeChat page UI OK: visible multi-account states, task-first guidance, settings dialog/focus/tabs, paused/expired/setup states, unscanned draft deletion without confirmation/QR flow, merged account cards, inline task accordion; 860/1060px');
+  const avatarFile={name:'头像.png',mimeType:'image/png',buffer:fs.readFileSync(path.join(root,'assets/icon.png'))};
+  await page.locator('[data-connection-avatar="work"]').click();assert.equal(await page.locator('#wechat-avatar-dialog').isVisible(),true);
+  assert.equal(await page.locator('#wechat-avatar-empty').isVisible(),true,'没有头像时也能设置');
+  await page.locator('#wechat-avatar-file').setInputFiles(avatarFile);await page.waitForFunction(()=>!document.getElementById('wechat-avatar-feedback').hidden);
+  const savedAvatar=await page.locator('#wechat-avatar-image').getAttribute('src');assert.match(savedAvatar,/^data:image\/png;base64,/);
+  assert.equal(await page.locator('[data-connection-avatar="work"] img').getAttribute('src'),savedAvatar,'保存后账号头像同步更新');
+  assert.equal(await page.locator('#wechat-avatar-empty').isHidden(),true);
+  await page.locator('#wechat-avatar-dialog').screenshot({path:path.join(root,'out/wechat-avatar-preview.png')});
+  // 同一轮事件中关闭并重开，旧 close 事件不能清掉新预览的账号。
+  await page.evaluate(()=>new Promise(resolve=>{
+    const dialog=document.getElementById('wechat-avatar-dialog');dialog.addEventListener('close',resolve,{once:true});
+    dialog.close();document.querySelector('[data-connection-avatar="work"]').click();
+  }));
+  assert.equal(await page.locator('#wechat-avatar-dialog').isVisible(),true);
+  await page.locator('#wechat-avatar-file').setInputFiles(avatarFile);
+  await page.waitForFunction(()=>!document.getElementById('wechat-avatar-feedback').hidden,null,{timeout:2000});
+  await page.evaluate(()=>{window.pageFixture.failAvatar=true;});await page.locator('#wechat-avatar-file').setInputFiles(avatarFile);
+  await page.waitForFunction(()=>document.getElementById('wechat-avatar-error').textContent.includes('测试头像保存失败'));
+  assert.equal(await page.locator('#wechat-avatar-image').getAttribute('src'),savedAvatar,'失败保留旧头像');
+  const beforeOversize=await page.evaluate(()=>window.pageFixture.actions.length);
+  await page.locator('#wechat-avatar-file').setInputFiles({name:'过大.png',mimeType:'image/png',buffer:Buffer.alloc(4*1024*1024+1)});
+  await page.waitForFunction(()=>document.getElementById('wechat-avatar-error').textContent.includes('4 MB'));
+  assert.equal(await page.evaluate(()=>window.pageFixture.actions.length),beforeOversize,'超限图片不提交');
+  await page.keyboard.press('Escape');assert.equal(await page.locator('#wechat-avatar-dialog').isVisible(),false);
+  await page.evaluate(()=>{window.pageFixture.failAvatar=false;});
+  await page.locator('[data-connection-avatar="personal"]').focus();await page.keyboard.press('Enter');
+  assert.equal(await page.locator('#wechat-avatar-dialog').isVisible(),true,'头像支持键盘打开');
+  assert.equal(await page.evaluate(()=>window.pageFixture.data.selectedConnectionId),'personal');assert.equal(await page.locator('#wechat-avatar-empty').isVisible(),true,'各账号头像独立');
+  await page.locator('#wechat-avatar-file').setInputFiles(avatarFile);
+  await page.waitForFunction(()=>!document.getElementById('wechat-avatar-feedback').hidden);
+  assert.deepEqual(await page.evaluate(()=>window.pageFixture.actions.at(-1).payload.connectionId),'personal');
+  await page.locator('#wechat-avatar-close').click();assert.equal(await page.locator('#wechat-avatar-dialog').isHidden(),true);
+  assert.deepEqual(await page.evaluate(()=>window.pageFixture.dialogs),[],'不调用系统原生确认框');
+  assert.deepEqual(errors,[]);console.log('WeChat page UI OK: shared confirmation/cancel/keyboard/focus/account isolation, inline tasks and avatar updates; 860/1060px');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{if(app)await app.close();});

@@ -37,6 +37,12 @@ async function toggle(id,enabled){
 }
 (async()=>{try{
   await launch();assert.equal(await panel.locator('#home-module-toggle').count(),0);
+  await panel.locator('#nav-wechat').click();await panel.locator('[data-connection-avatar]').first().click();
+  await panel.locator('#wechat-avatar-file').setInputFiles({name:'头像.png',mimeType:'image/png',buffer:fs.readFileSync(path.join(root,'assets/icon.png'))});
+  await panel.waitForFunction(()=>!document.getElementById('wechat-avatar-feedback').hidden);
+  const avatar=(await panel.evaluate(()=>window.whale.snapshot())).wechat.profile.avatar;
+  assert.deepEqual(await app.evaluate(({nativeImage},data)=>nativeImage.createFromDataURL(data).getSize(),avatar),{width:128,height:128},'主进程真实解码并裁切缩放头像');
+  await panel.locator('#wechat-avatar-close').click();
   await panel.evaluate(()=>window.whale.shortcuts('pat'));
   const task=await panel.evaluate(()=>window.whale.planner('save-task',{title:'关闭模块也保留的待办',notes:'原备注',deadline:'none',category:'work'}));assert.ok(task.value,JSON.stringify(task));
   await panel.evaluate(()=>window.whale.subscriptions('add',{username:'test_account'}));

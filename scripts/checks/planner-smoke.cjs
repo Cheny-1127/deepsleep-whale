@@ -235,18 +235,13 @@ async function addTask(title,deadline) {
   await allDayCard.getByRole('button',{name:'开始处理',exact:true}).click();
   await advance('2026-10-27T00:00:00');assert.equal((await snapshot()).active[0].state,'processing');
   await advance('2026-10-27T00:01:00');assert.equal((await snapshot()).reminders.find(item=>item.id===allDayItem.id).run.dueAt,+new Date('2026-10-27T00:03:00'));
-  // 原生 confirm 会展示隐藏的父窗口；静默测试拦截确认结果并核对文案与删除行为。
-  if(process.env.WHALE_TEST_WINDOWS!=='inactive') {
-    await panel.evaluate(()=>{window.plannerOriginalConfirm=window.confirm;window.plannerConfirmMessages=[];window.confirm=message=>{window.plannerConfirmMessages.push(message);return false;};});
-    await allDayCard.getByRole('button',{name:'删除',exact:true}).click();
-    assert.equal((await snapshot()).reminders.some(item=>item.id===allDayItem.id),true,'取消删除保留提醒');
-    await panel.evaluate(()=>{window.confirm=message=>{window.plannerConfirmMessages.push(message);return true;};});
-  } else panel.once('dialog',dialog=>dialog.accept()); // 观察模式保留原生确认框，供窗口行为检查。
-  await allDayCard.getByRole('button',{name:'删除',exact:true}).click();await panel.waitForFunction(()=>document.querySelectorAll('.planner-reminder').length===3);
-  if(process.env.WHALE_TEST_WINDOWS!=='inactive') {
-    assert.deepEqual(await panel.evaluate(()=>window.plannerConfirmMessages),['删除提醒「全天休息」？','删除提醒「全天休息」？']);
-    await panel.evaluate(()=>{window.confirm=window.plannerOriginalConfirm;delete window.plannerOriginalConfirm;delete window.plannerConfirmMessages;});
-  }
+  // 同一个应用内确认组件用于日程删除，隐藏测试直接操作中文按钮。
+  await allDayCard.getByRole('button',{name:'删除',exact:true}).click();
+  const removeDialog=panel.getByRole('alertdialog',{name:'删除提醒？'});assert.match(await removeDialog.textContent(),/全天休息/);
+  await removeDialog.getByRole('button',{name:'取消',exact:true}).click();
+  assert.equal((await snapshot()).reminders.some(item=>item.id===allDayItem.id),true,'取消删除保留提醒');
+  await allDayCard.getByRole('button',{name:'删除',exact:true}).click();
+  await removeDialog.getByRole('button',{name:'删除提醒',exact:true}).click();await panel.waitForFunction(()=>document.querySelectorAll('.planner-reminder').length===3);
   await assertWindowPolicy();
   // 分类是筛选条件；在新建事项中选择类型和个人，保存后跳到对应分类。
   await panel.locator('[data-category="personal"]').click();

@@ -113,3 +113,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--ui-accent); }
 /* 对话框复用公共表面与间距；焦点约束和 Esc 交给浏览器。 */
 .ui-dialog { width: min(740px, calc(100vw - 48px)); max-height: calc(100vh - 48px); overflow-y: auto; margin: auto; padding: var(--ui-card-padding); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-card); color: var(--ui-text); background: var(--ui-surface); }
 .ui-dialog::backdrop { background: rgb(20 40 32 / 30%); }
+.ui-confirm-dialog { width: min(440px, calc(100vw - 48px)); padding: 24px; }
+.ui-confirm-dialog h2 { margin: 0; font-size: var(--ui-font-reading); color: var(--ui-text-strong); }
+.ui-confirm-dialog p { margin: 12px 0 24px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ui-text-muted); }
+.ui-confirm-actions { display: flex; justify-content: flex-end; gap: 12px; flex-wrap: wrap; }
+.ui-confirm-actions button { min-width: 88px; }
+.ui-confirm-danger, .ui-confirm-danger:hover:not(:disabled) { background: var(--ui-danger); color: var(--ui-on-accent); }
