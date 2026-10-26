@@ -124,6 +124,22 @@ function createWechatManager({store,onChange=()=>{},...options}) {
       const id=scoped?payload.connectionId:selected,value=scoped?payload.value:payload;
       const record=records.find(item=>item.id===id),gateway=gateways.get(id);
       if(!record||!gateway)throw Error('微信连接不存在，请重新选择。');
+      if(name==='update-avatar'){
+        // 限制原图大小并复用微信端的图片校验、居中裁切和缩放，页面不能直接写入任意头像数据。
+        if(typeof value!=='string'||value.length>Math.ceil(4*1024*1024/3)*4+32)throw Error('头像图片不能超过 4 MB。');
+        const match=/^data:image\/(?:png|jpeg);base64,([A-Za-z0-9+/]+={0,2})$/.exec(value);
+        if(!match)throw Error('请选择 PNG 或 JPEG 格式的头像图片。');
+        const bytes=Buffer.from(match[1],'base64');
+        // Buffer 解码会容忍部分非法 Base64，回编码比对后才交给图片解码器。
+        if(bytes.length>4*1024*1024||bytes.toString('base64')!==match[1])throw Error('头像图片无法读取或超过 4 MB。');
+        if(typeof options.normalizeAvatar!=='function')throw Error('头像处理暂不可用，请重试。');
+        const avatar=await options.normalizeAvatar(bytes);
+        // 处理图片期间可能切换、删除账号或关闭模块；只允许写回最初选定且仍存在的连接。
+        if(!records.includes(record))throw Error('微信连接不存在，请重新选择。');
+        const profile=userProfile({...userProfile(record.profile),avatar});
+        // 加密存储成功后才更新内存，写盘失败时继续显示原头像。
+        save(records.map(item=>item===record?{...item,profile}:item));record.profile=profile;onChange();return snapshot();
+      }
       // 昵称和备注名只改变展示元数据，保留头像，不写回机器人身份、联系人授权或执行路由。
       if(name==='rename-connection'||name==='rename-nickname'||name==='rename-user') {
         let patch;

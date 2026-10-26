@@ -1,5 +1,6 @@
 import {createSelectView} from './select-view.mjs';
 import {showView} from './hooks-view.mjs';
+import {confirmAction} from './confirm-dialog.mjs';
 const $=id=>document.getElementById('planner-'+id);
 const el=(tag,className,text)=>{const node=document.createElement(tag);if(className)node.className=className;if(text!==undefined)node.textContent=text;return node;};
 const button=(text,run,className='outline')=>{const node=el('button',className,text);node.type='button';node.addEventListener('click',run);return node;};
@@ -201,7 +202,7 @@ export function createPlannerView({floating=false}={}) {
       top.append(actions);card.append(top);
       const schedule=item.customWorkTime||data.workTime;
       card.append(el('p','planner-muted',`${item.mode==='interval'?`完成后间隔 ${item.intervalMinutes} 分钟`:item.fixedTimes.join('、')} · ${item.processMinutes?`处理 ${item.processMinutes} 分钟`:'点击完成'} · ${item.customWorkTime?'独立时段':'默认提醒时间'}`));
-      const footer=el('div','planner-card-footer');footer.append(el('span','planner-muted',scheduleLabel(schedule)),button('删除',()=>{if(window.confirm(`删除提醒「${item.title}」？`))void act('remove-reminder',{id:item.id});},'planner-delete'));card.append(footer);reminders.append(card);
+      const footer=el('div','planner-card-footer');footer.append(el('span','planner-muted',scheduleLabel(schedule)),button('删除',async()=>{if(await confirmAction({owner:container,title:'删除提醒？',message:`将删除提醒「${item.title}」。`,confirmLabel:'删除提醒',danger:true}))void act('remove-reminder',{id:item.id});},'planner-delete'));card.append(footer);reminders.append(card);
     }
     for(const node of container.querySelectorAll('[data-filter]'))node.setAttribute('aria-pressed',String(node.dataset.filter===filter));
     const tasks=categoryTasks.filter(item=>filter==='done'?item.completedAt!==null:item.completedAt===null&&(filter==='all'||filter==='today'&&item.dueDate&&item.dueDate<=data.today||filter==='upcoming'&&item.dueDate>data.today||filter==='none'&&item.dueDate===null)).sort((a,b)=>(a.dueDate||'9999').localeCompare(b.dueDate||'9999')||b.createdAt-a.createdAt);
@@ -214,7 +215,7 @@ export function createPlannerView({floating=false}={}) {
       const content=el('div','planner-task-copy');const title=el('div','planner-item-heading');title.append(el('h3','',task.title),categoryBadge(task));content.append(title);
       const due=el('span','planner-muted',task.completedAt!==null?'已完成':!task.dueDate?'未排期':task.dueDate===data.today?'今天完成':task.dueDate<data.today?`已逾期 · ${task.dueDate}`:`${task.dueDate} 前完成`);if(task.completedAt===null&&task.dueDate&&task.dueDate<data.today)due.classList.add('planner-overdue');content.append(due);
       if(task.notes)content.append(el('p','planner-task-notes',task.notes));
-      const actions=el('div','planner-row-actions');actions.append(button('编辑',()=>openTask(task)),button('删除',()=>{if(window.confirm(`删除待办「${task.title}」？`))void act('remove-task',{id:task.id});},'planner-delete'));
+      const actions=el('div','planner-row-actions');actions.append(button('编辑',()=>openTask(task)),button('删除',async()=>{if(await confirmAction({owner:container,title:'删除待办？',message:`将删除待办「${task.title}」。`,confirmLabel:'删除待办',danger:true}))void act('remove-task',{id:task.id});},'planner-delete'));
       row.append(check,content,actions);list.append(row);
     }
   }

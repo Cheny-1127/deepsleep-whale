@@ -4,20 +4,48 @@
 .wechat-account-card { margin-bottom: 24px; }
 .wechat-account-card > .section-heading { justify-content: space-between; margin-bottom: 12px; }
 .wechat-connections { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
-.wechat-connection-card { margin: 0; min-width: 0; }
+.wechat-connection-card { margin: 0; min-width: 0; container-type: inline-size; }
 .wechat-connection-card[data-selected="true"] { border-color: var(--ui-accent); }
-.wechat-connection-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-.wechat-connection-heading > .ui-choice { flex: 1; min-width: 160px; border: 0; padding: 0; background: transparent; }
-.wechat-connection-heading > .ui-choice[aria-pressed="true"] { background: transparent; }
+.wechat-connection-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; }
+.wechat-account-main { display: grid; grid-template-columns: 40px fit-content(180px) minmax(100px, 1fr); align-items: center; gap: 14px; min-width: 0; }
+.wechat-account-main > .ui-choice { min-width: 0; max-width: 180px; border: 0; padding: 0; background: transparent; }
+.wechat-account-main > .ui-choice[aria-pressed="true"] { background: transparent; }
+/* 连接中以十二条短线依次明暗变化；成功后恢复公共样式的静态绿点。 */
+.wechat-connection-card .ui-status:is([data-state="connecting"], [data-state="reconnecting"]) { color: var(--ui-text-subtle); }
+.wechat-connection-card .ui-status:is([data-state="connecting"], [data-state="reconnecting"])::before { display: none; }
+.wechat-status-spinner { position: relative; width: 14px; height: 14px; flex-shrink: 0; }
+/* 12 条短线以 0.08 秒错开，总周期 0.96 秒；负延迟让首帧就呈现完整明暗层次。 */
+.wechat-status-spinner > i { position: absolute; top: 0; left: calc(50% - .75px); width: 1.5px; height: 4px; border-radius: 1px; background: currentColor; opacity: .25; transform-origin: .75px 7px; transform: rotate(calc(var(--spoke) * 30deg)); animation: wechat-spoke-fade .96s linear infinite; animation-delay: calc(var(--spoke) * .08s - .96s); }
+@keyframes wechat-spoke-fade { from { opacity: 1; } to { opacity: .15; } }
+@media (prefers-reduced-motion: reduce) { .wechat-status-spinner > i { animation: none; } }
+.wechat-account-avatar { display: grid; place-items: center; flex: 0 0 40px; width: 40px; height: 40px; padding: 0; border-radius: 8px; overflow: hidden; background: var(--ui-selected); color: var(--ui-accent); }
+.wechat-account-avatar .ui-avatar { width: 100%; height: 100%; border-radius: 0; object-fit: cover; }
 .wechat-account-identity { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .wechat-account-copy { display: grid; gap: 4px; min-width: 0; }
-.wechat-account-attention { overflow-wrap: anywhere; line-height: 1.6; font-size: var(--ui-font-small); }
+.wechat-account-status { min-width: 0; }
+.wechat-account-status .ui-status { min-height: 20px; }
+.wechat-account-attention { display: block; margin-top: 4px; color: var(--ui-text-subtle); overflow-wrap: anywhere; line-height: 1.6; font-size: var(--ui-font-small); }
+#wechat-status-details { min-width: 0; }
+#wechat-connection-actions { margin-top: 8px; }
 #wechat-connection-panel { margin-top: 12px; margin-bottom: 0; }
-#wechat-connection-state { margin: 0 0 12px; }
+#wechat-connection-state { margin: 4px 0 0; overflow-wrap: anywhere; }
 #wechat-verify-form { max-width: 420px; margin: 12px auto; justify-content: center; }
 .wechat-account-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .wechat-account-toolbar h3 { margin: 0; min-width: 0; overflow-wrap: anywhere; font-size: var(--ui-font-control); }
 #wechat-account-settings { margin: 0; }
+/* 空间不足时，身份占首行，状态与接收开关排在下一行；按卡片宽度响应侧栏变化。 */
+@container (max-width: 500px) {
+  .wechat-connection-heading { grid-template-columns: 40px minmax(0, 1fr) auto; gap: 12px; }
+  .wechat-account-main { display: contents; }
+  .wechat-account-main > .wechat-account-avatar { grid-column: 1; grid-row: 1; }
+  .wechat-account-main > .ui-choice { grid-column: 2 / -1; grid-row: 1; max-width: none; }
+  .wechat-account-status { grid-column: 1 / 3; grid-row: 2; }
+  .wechat-connection-heading > .wechat-account-toolbar { grid-column: 3; grid-row: 2; }
+}
+@container (max-width: 390px) {
+  .wechat-account-status { grid-column: 1 / -1; }
+  .wechat-connection-heading > .wechat-account-toolbar { grid-column: 1 / -1; grid-row: 3; }
+}
 .wechat-chat-summary > .wechat-chat-button::before { content: '▸'; color: var(--ui-text-subtle); }
 .wechat-chat-summary > .wechat-chat-button[aria-expanded="true"]::before { content: '▾'; }
 #wechat-merge-options { margin-top: 16px; }
@@ -35,6 +63,8 @@
 #wechat-settings-dialog { margin: auto; }
 #wechat-settings-dialog > .section-heading { justify-content: space-between; }
 #wechat-settings-dialog .ui-tabs { flex-wrap: wrap; }
+#wechat-account-options { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--ui-divider); }
+#wechat-account-options > summary { cursor: pointer; color: var(--ui-text-muted); font-size: var(--ui-font-control); }
 .wechat-settings-section h3 { font-size: var(--ui-font-control); margin: 0 0 16px; }
 .wechat-inline-form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; width: 100%; }
 .wechat-card .wechat-inline-form label { margin: 0; }
@@ -71,6 +101,12 @@
 #wechat-name { flex: 1; min-width: 0; }
 #wechat-name-apply { flex-shrink: 0; }
 #wechat-name-error { flex: 0 0 100%; margin: 0; }
+
+#wechat-avatar-dialog { width: min(360px, calc(100vw - 48px)); padding: 20px; text-align: center; }
+.wechat-avatar-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.wechat-avatar-preview { display: grid; place-items: center; width: min(240px, 100%); aspect-ratio: 1; margin: auto; border-radius: 12px; overflow: hidden; background: var(--ui-canvas); color: var(--ui-text-subtle); }
+.wechat-avatar-preview img { display: block; width: 100%; height: 100%; object-fit: contain; }
+#wechat-avatar-feedback { color: var(--ui-accent); }
 
 
 /* 一次任务对应一组完整问答，分页不拆分消息。 */
