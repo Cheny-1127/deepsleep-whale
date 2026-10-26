@@ -35,7 +35,7 @@ const codexBin=path.join(dir,'codex-fixture');
 fs.writeFileSync(codexBin,'#!'+process.execPath+'\n'+`require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(m.id)process.stdout.write(JSON.stringify({id:m.id,result:m.id===1?{}:m.id===3?{config:{}}:m.id===4?{requirements:null}:{data:[{hooks:${JSON.stringify(hookFixture)},errors:[]}]}})+'\\n');});`,{mode:0o700});
 // 仅在这个隔离进程中替换 /bin/ps 的可执行路径清单，不关闭用户的真实客户端。
 const bootstrap=path.join(dir,'bootstrap.cjs');
-fs.writeFileSync(bootstrap,`const fs=require('node:fs'),cp=require('node:child_process'),original=cp.execFile;cp.execFile=function(file,args,options,callback){if(file==='/bin/ps'&&args.join(' ')==='-axo comm='){setImmediate(()=>{const value=fs.readFileSync(${JSON.stringify(processFile)},'utf8');callback(value==='ERROR'?new Error('simulated query failure'):null,value);});return;}return original.apply(this,arguments);};require(${JSON.stringify(path.join(root,'src/main.cjs'))});`);
+fs.writeFileSync(bootstrap,`require(${JSON.stringify(path.join(__dirname,'test-window-policy.cjs'))}).installTestWindowPolicy();const fs=require('node:fs'),cp=require('node:child_process'),original=cp.execFile;cp.execFile=function(file,args,options,callback){if(file==='/bin/ps'&&args.join(' ')==='-axo comm='){setImmediate(()=>{const value=fs.readFileSync(${JSON.stringify(processFile)},'utf8');callback(value==='ERROR'?new Error('simulated query failure'):null,value);});return;}return original.apply(this,arguments);};require(${JSON.stringify(path.join(root,'src/main.cjs'))});`);
 let app,panel,pet;const errors=[];
 async function launch() {
  app=await electron.launch({executablePath:require('electron'),args:[bootstrap],env:{...process.env,CODEX_HOME:home,WHALE_CURSOR_HOME:cursorHome,WHALE_CURSOR_STATE_DB:cursorState,WHALE_CODEX_BIN:codexBin,WHALE_DATA_DIR:dir}});
@@ -65,7 +65,7 @@ async function send(event) {
  const beforeNotifications=await app.evaluate(()=>global.notified);
  // 点击与轮询之间恰好退出：点击必须主动重新检查，不能发出打开客户端的系统链接。
  clients(true,false);
- const failure=await panel.evaluate(async id=>{try{await window.whale.action('open-chat',{sessionId:id,noticeId:'cursor-a'});return null;}catch(error){return error.message;}},'cursor:'+ids[1]);
+ const failure=await panel.evaluate(async id=>(await window.whale.openChat({sessionId:id,noticeId:'cursor-a'})).error,'cursor:'+ids[1]);
  assert.match(failure,/Cursor 已退出/);
  await wait(async()=>{const s=await window.whale.snapshot();return s.activity.unread===2&&s.activity.working===0;});
  assert.equal((await snapshot()).activity.pending,1);
@@ -81,7 +81,7 @@ async function send(event) {
  assert.equal(fs.readFileSync(path.join(dir,'reminders.json'),'utf8'),saved);
  // 检测失败保留上次状态；跳转则明确失败，不猜测客户端仍在运行。
  fs.writeFileSync(processFile,'ERROR');
- const unknown=await panel.evaluate(async id=>{try{await window.whale.action('open-chat',{sessionId:id});return null;}catch(error){return error.message;}},ids[0]);
+ const unknown=await panel.evaluate(async id=>(await window.whale.openChat({sessionId:id})).error,ids[0]);
  assert.match(unknown,/无法确认/);assert.equal((await snapshot()).activity.unread,3);
  clients(false,true);
  await wait(async()=>{const s=await window.whale.snapshot();return !s.clientRunning.codex&&s.activity.unread===1&&s.activity.pending===0;});
@@ -96,5 +96,6 @@ async function send(event) {
  assert.equal((await snapshot()).activity.pending,0);assert.equal((await snapshot()).activity.working,0);
  assert.deepEqual(await app.evaluate(()=>global.notified),[]);
  assert.deepEqual(errors,[]);
+ assert.deepEqual(await app.evaluate(()=>global.testWindowPolicy.events),[]);
  console.log('PASS: per-source hide/restore, preserved disk records/order, no notification or growth replay, no stale live states, closed-client jump blocked, failed query retains state, restart recovery');
 }finally{if(app)await app.close();fs.rmSync(dir,{recursive:true,force:true});}})().catch(error=>{console.error(error);process.exitCode=1;});

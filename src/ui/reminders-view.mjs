@@ -4,6 +4,15 @@ const $ = id => document.getElementById(id);
 export function createReminderView({render,action,floating}) {
   let lastData;
   let reminderKey='';
+  // 小屋和桌宠共用跳转反馈，失败时保留提醒，并恢复按钮以便重试。
+  async function openReminder(value,button){
+    const error=$(floating?'completion-error':'reminder-error');error.hidden=true;button.disabled=true;
+    try {
+      const result=await window.whale.openChat(value);
+      if(result.error)throw Error(result.error);render(result.value);
+    }catch(failure){error.textContent=failure.message||'没打开，再点一次试试？';error.hidden=false;}
+    finally{button.disabled=false;}
+  }
   function renderCompletionRows(notices,isBusy=false) {
     const key=JSON.stringify([isBusy,notices]);
     if(key===reminderKey)return;
@@ -17,12 +26,7 @@ export function createReminderView({render,action,floating}) {
       const isTask=Boolean(item.state);
       button.classList.toggle('pending-row',item.state==='approval');
       button.dataset.noticeId=isTask?item.session_id:item.id;button.textContent=item.title;button.title=button.textContent;
-      button.addEventListener('click',async()=>{
-        const error=$('completion-error');error.hidden=true;button.disabled=true;
-        try { render(await window.whale.action('open-chat',{sessionId:item.session_id,noticeId:isTask?undefined:item.id})); }
-        catch(failure) { error.textContent=failure.message||'没打开，再点一次试试？';error.hidden=false; }
-        finally { button.disabled=false; }
-      });
+      button.addEventListener('click',()=>void openReminder({sessionId:item.session_id,noticeId:isTask?undefined:item.id},button));
       wrapper.append(button);return wrapper;
     }));
     if(focused) ([...rows.querySelectorAll('button')].find(button=>button.dataset.noticeId===focused)||rows.querySelector('button'))?.focus();
@@ -86,7 +90,7 @@ export function createReminderView({render,action,floating}) {
       text.append(title,detail);element.append(text);
       const open=document.createElement('button');open.textContent='打开聊天';
       open.disabled=!/^(cursor:)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item.session_id);
-      open.addEventListener('click',()=>action('open-chat',{sessionId:item.session_id,noticeId:unread?item.id:undefined}));
+      open.addEventListener('click',()=>void openReminder({sessionId:item.session_id,noticeId:unread?item.id:undefined},open));
       element.append(open);
       if(unread) {
         const read=document.createElement('button');read.textContent='标为已读';

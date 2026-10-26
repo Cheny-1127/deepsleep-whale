@@ -3,7 +3,12 @@
 #wechat-view > header > button { flex-shrink: 0; }
 .wechat-account-card { margin-bottom: 24px; }
 .wechat-account-card > .section-heading { justify-content: space-between; margin-bottom: 12px; }
-.wechat-connections { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+.wechat-connections { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.wechat-connection-card { margin: 0; min-width: 0; }
+.wechat-connection-card[data-selected="true"] { border-color: var(--ui-accent); }
+.wechat-connection-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.wechat-connection-heading > .ui-choice { flex: 1; min-width: 160px; border: 0; padding: 0; background: transparent; }
+.wechat-connection-heading > .ui-choice[aria-pressed="true"] { background: transparent; }
 .wechat-account-identity { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .wechat-account-copy { display: grid; gap: 4px; min-width: 0; }
 .wechat-account-attention { overflow-wrap: anywhere; line-height: 1.6; font-size: var(--ui-font-small); }
@@ -12,7 +17,9 @@
 #wechat-verify-form { max-width: 420px; margin: 12px auto; justify-content: center; }
 .wechat-account-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .wechat-account-toolbar h3 { margin: 0; min-width: 0; overflow-wrap: anywhere; font-size: var(--ui-font-control); }
-#wechat-account-settings { margin-top: 12px; margin-bottom: 0; }
+#wechat-account-settings { margin: 0; }
+.wechat-chat-summary > .wechat-chat-button::before { content: '▸'; color: var(--ui-text-subtle); }
+.wechat-chat-summary > .wechat-chat-button[aria-expanded="true"]::before { content: '▾'; }
 #wechat-merge-options { margin-top: 16px; }
 #wechat-merge-options > p { margin: 0 0 10px; }
 .wechat-account-actions, .wechat-contact-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -41,8 +48,16 @@
 #wechat-settings-feedback { color: var(--ui-accent); font-size: var(--ui-font-control); }
 @media (max-width: 760px) { .wechat-start-steps { grid-template-columns: 1fr; gap: 20px; } }
 
-.wechat-chat-summary > .wechat-chat-button::before { content: '▸'; color: var(--ui-text-subtle); }
-.wechat-chat-summary > .wechat-chat-button[aria-expanded="true"]::before { content: '▾'; }
+/* 文字说明与药丸轨道共用一个可用键盘操作的开关。 */
+.wechat-receive-switch { display: inline-flex; align-items: center; gap: 10px; border: 0; background: transparent; color: var(--ui-text-muted); }
+.wechat-switch-track { display: inline-block; position: relative; width: 42px; height: 24px; flex-shrink: 0; border-radius: 999px; background: var(--ui-border-control); transition: background .15s; }
+.wechat-switch-track::after { content: ''; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: var(--ui-surface); box-shadow: 0 1px 3px #0002; transition: transform .15s; }
+.wechat-receive-switch[aria-checked="true"] .wechat-switch-track { background: var(--ui-accent); }
+.wechat-receive-switch[aria-checked="true"] .wechat-switch-track::after { transform: translateX(18px); }
+.wechat-account-copy > .wechat-account-field { display: flex; align-items: baseline; gap: 8px; max-width: 100%; font-size: var(--ui-font-control); font-weight: 600; line-height: 1.6; }
+.wechat-account-label { flex: 0 0 4em; white-space: nowrap; color: var(--ui-text-subtle); font-weight: 400; }
+.wechat-account-field > [data-edit-connection-name] { min-width: 0; border-radius: 4px; text-decoration: none; overflow-wrap: anywhere; }
+.wechat-account-field > [data-edit-connection-name]:hover { background: var(--ui-hover); }
 
 .wechat-chat-summary { display: flex; align-items: center; gap: 16px; padding: 0 8px; border-top: 1px solid var(--ui-divider); }
 .wechat-chat-summary:hover, .wechat-chat-summary:focus-within { background: var(--ui-hover); }
@@ -50,6 +65,13 @@
 .wechat-chat-summary > .wechat-chat-button:hover { background: transparent; }
 .wechat-chat-summary > [data-chat-delete] { flex-shrink: 0; min-height: 32px; padding: 4px 8px; border: 0; border-radius: 6px; background: transparent; font-size: var(--ui-font-small); }
 .wechat-chat-summary > [data-chat-delete]:hover:not(:disabled) { background: var(--ui-danger-surface); }
+
+#wechat-name-dialog { width: min(480px, calc(100vw - 48px)); padding: 16px; }
+#wechat-name-form { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+#wechat-name { flex: 1; min-width: 0; }
+#wechat-name-apply { flex-shrink: 0; }
+#wechat-name-error { flex: 0 0 100%; margin: 0; }
+
 
 /* 一次任务对应一组完整问答，分页不拆分消息。 */
 .wechat-conversation { margin: 0 0 16px; min-width: 0; }

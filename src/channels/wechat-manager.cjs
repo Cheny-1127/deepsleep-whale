@@ -124,10 +124,11 @@ function createWechatManager({store,onChange=()=>{},...options}) {
       const id=scoped?payload.connectionId:selected,value=scoped?payload.value:payload;
       const record=records.find(item=>item.id===id),gateway=gateways.get(id);
       if(!record||!gateway)throw Error('微信连接不存在，请重新选择。');
-      // 备注名只改变展示元数据，不写回机器人身份、联系人授权或执行路由。
-      if(name==='rename-connection'||name==='rename-user') {
+      // 昵称和备注名只改变展示元数据，保留头像，不写回机器人身份、联系人授权或执行路由。
+      if(name==='rename-connection'||name==='rename-nickname'||name==='rename-user') {
         let patch;
         if(name==='rename-connection')patch={name:displayName(value)};
+        else if(name==='rename-nickname')patch={profile:userProfile({...userProfile(record.profile),nickname:profileText(value)})};
         else {
           const current=gateway.snapshot(),sender=value?.sender;
           if(!current.allowed.includes(sender)&&!current.pending.includes(sender))throw Error('联系人不存在，请刷新后重试。');

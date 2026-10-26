@@ -153,8 +153,8 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
       await cursorChats.open(sessionId);
       if(activity.acknowledgeCursor(sessionId))saveReminders();
     } else {
-      // 桌宠任务入口统一查看最新内容；不能只在待审批时定位，否则执行中和完成通知仍可能回到开头。
-      await codexChats.open(sessionId,{title:titles.title(sessionId)||''});
+      // 使用客户端深链接打开会话，不再通过辅助功能操作滚动控件。
+      await codexChats.open(sessionId);
       if(activity.notices.some(item=>item.id===noticeId&&item.session_id===sessionId)) {
         activity.markRead(noticeId);saveReminders();
       }
@@ -226,7 +226,6 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     else if (action === 'reminders') showReminders();
     else if (action === 'planner') showPlanner();
     else if (action === 'read-notice' && typeof value === 'string') { activity.markRead(value);saveReminders(); }
-    else if (action === 'open-chat') { await openChat(value?.sessionId,value?.noticeId); }
     else if (action === 'panel') showPanel();
     else if (action === 'toggle-pet') windows.isPetVisible()?windows.hidePet():windows.showPet();
     else if (action === 'show-pet') windows.showPet();
@@ -236,6 +235,12 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     return snapshot();
   }
   ipcMain.handle('action', (_event, action, value) => performAction(action, value));
+  ipcMain.handle('open-chat',async(event,value)=>{
+    // 仅允许小屋和桌宠的主页面跳转；返回可展示的错误，打开失败不消耗提醒。
+    if((!windows.isPanel(event.sender)&&!windows.isPet(event.sender))||event.senderFrame!==event.sender.mainFrame)return {error:'不允许打开聊天'};
+    try {await openChat(value?.sessionId,value?.noticeId);broadcast();return {value:snapshot()};}
+    catch(error){return {error:error.message||'聊天未能打开，请重试。'};}
+  });
   // 完整工作备注仅由小屋读取；桌宠只接收当前提醒及受限的处理动作。
   ipcMain.handle('planner',(event,name,value)=>{
     const panel=windows.isPanel(event.sender),pet=windows.isPet(event.sender);
