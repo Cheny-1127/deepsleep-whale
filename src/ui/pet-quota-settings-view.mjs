@@ -12,7 +12,7 @@ export function createPetQuotaSettingsView() {
     if (latest.settings.accountId === accountId) return '流量跟踪配置';
     const owner = (latest.settings.trackingConfigs || []).find(config => config.id !== card.id &&
       (config.accountId === accountId || latest.extraTrackings?.some(item => item.id === config.id && item.tracking.accountId === accountId)));
-    return owner ? `流量跟踪配置-${owner.id}` : null;
+    return owner ? `流量跟踪配置-${owner.number ?? owner.id}` : null;
   }
   function dirty(card) {
     return card.baseline && (selectedAccount(card) !== card.baseline.accountId || Number(card.get('yellow').value) !== card.baseline.yellowBelow ||
@@ -40,22 +40,24 @@ export function createPetQuotaSettingsView() {
       return button;
     }));
   }
-  function makeCard(id) {
+  function makeCard(id, number = id) {
     let root;
     if (id !== 'primary') {
       root=$('config-template').content.cloneNode(true).firstElementChild;root.dataset.configId=String(id);
+      root.dataset.configNumber=String(number);
       for (const element of root.querySelectorAll('[data-field]')) element.id=`quota-config-${id}-${element.dataset.field}`;
       root.id=`quota-config-${id}`;
-      $('extra-configs').append(root);
+      const following=Array.from($('extra-configs').children).find(card=>Number(card.dataset.configNumber)>number);
+      $('extra-configs').insertBefore(root,following || null);
     }
     const get=name=>id === 'primary' ? $(name) : name === 'card' ? root : root.querySelector(`[data-field="${name}"]`);
     const card={id,root,get,baseline:null,draftAccountId:undefined,draftGroupId:undefined,accountsKey:'',groupsKey:''};
     cards.set(id,card);
-    get('copy').setAttribute('aria-label',id === 'primary' ? '复制流量跟踪配置' : `复制流量跟踪配置-${id}`);
-    get('copy').title=id === 'primary' ? '复制流量跟踪配置' : `复制流量跟踪配置-${id}`;
+    get('copy').setAttribute('aria-label',id === 'primary' ? '复制流量跟踪配置' : `复制流量跟踪配置-${number}`);
+    get('copy').title=id === 'primary' ? '复制流量跟踪配置' : `复制流量跟踪配置-${number}`;
     get('copy').addEventListener('click',()=>void update('copy-config',id));
     if (id !== 'primary') {
-      const title=`流量跟踪配置-${id}`;get('title').textContent=title;
+      const title=`流量跟踪配置-${number}`;get('title').textContent=title;
       root.querySelector('table').setAttribute('aria-label',title);
       get('accounts').setAttribute('aria-label',`${title}额度跟踪账号`);
       get('delete').setAttribute('aria-label',`删除${title}`);get('delete').title=`删除${title}`;
@@ -77,7 +79,7 @@ export function createPetQuotaSettingsView() {
     latest=data;
     const configs=data.settings.trackingConfigs || [];
     for(const [id,card] of cards) if(id!=='primary'&&!configs.some(config=>config.id===id)){card.root.remove();cards.delete(id);}
-    for(const config of configs) if(!cards.has(config.id))makeCard(config.id);
+    for(const config of configs) if(!cards.has(config.id))makeCard(config.id,config.number ?? config.id);
     accountsToggle.setAttribute('aria-expanded',String(data.settings.accountsExpanded));accountsToggle.disabled=saving;
     document.getElementById('quota-accounts-body').hidden=!data.settings.accountsExpanded;
     document.getElementById('quota-account-tools').hidden=!data.settings.accountsExpanded;
@@ -85,7 +87,7 @@ export function createPetQuotaSettingsView() {
       // 主配置不占副本名额；所有复制入口共用同一上限，删除后由快照统一恢复。
       const config=configFor(card), copyLimitReached=configs.length>=3;
       card.get('copy').disabled=saving||copyLimitReached;
-      card.get('copy').title=copyLimitReached ? '最多只能创建 3 条副配置，请先删除已有副配置' : card.id==='primary' ? '复制流量跟踪配置' : `复制流量跟踪配置-${card.id}`;
+      card.get('copy').title=copyLimitReached ? '最多只能创建 3 条副配置，请先删除已有副配置' : card.id==='primary' ? '复制流量跟踪配置' : `复制流量跟踪配置-${config.number ?? card.id}`;
       if(card.id!=='primary') {
         // 主配置抢占后立即同步副账号；只丢弃冲突的账号草稿，保留阈值和分组草稿。
         if(card.baseline)card.baseline.accountId=config.accountId;

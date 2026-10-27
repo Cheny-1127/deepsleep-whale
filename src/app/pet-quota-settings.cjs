@@ -14,14 +14,16 @@ function validate(value) {
   validateTracking(next);
   if (typeof next.accountsExpanded !== 'boolean') throw Error('无效的折叠状态');
   if (!Array.isArray(next.trackingConfigs) || !Number.isSafeInteger(next.nextConfigId) || next.nextConfigId < 2) throw Error('无效的流量跟踪配置');
-  const ids = new Set();
+  const ids = new Set(), numbers = new Set();
   next.trackingConfigs = next.trackingConfigs.map(config => {
-    if (!config || typeof config !== 'object' || Array.isArray(config) || Object.keys(config).length !== 6 ||
-      Object.keys(config).some(key => !['id','accountId','yellowBelow','redBelow','configExpanded','groupId'].includes(key)) ||
+    if (!config || typeof config !== 'object' || Array.isArray(config) || Object.keys(config).length !== (Object.hasOwn(config,'number') ? 7 : 6) ||
+      Object.keys(config).some(key => !['id','number','accountId','yellowBelow','redBelow','configExpanded','groupId'].includes(key)) ||
       !Number.isSafeInteger(config.id) || config.id < 2 || config.id >= Number.MAX_SAFE_INTEGER || ids.has(config.id) ||
       (config.groupId !== null && (!Number.isSafeInteger(config.groupId) || config.groupId <= 0))) throw Error('无效的流量跟踪配置');
-    validateTracking(config);ids.add(config.id);
-    // 编号只递增，删除配置后不复用旧编号，避免旧窗口操作指向新配置。
+    const number = Object.hasOwn(config,'number') ? config.number : config.id;
+    if (!Number.isSafeInteger(number) || number < 2 || numbers.has(number)) throw Error('无效的流量跟踪配置编号');
+    validateTracking(config);ids.add(config.id);numbers.add(number);
+    // 内部标识只递增，显示编号单独复用，避免旧窗口操作指向新配置。
     next.nextConfigId = Math.max(next.nextConfigId, config.id + 1);
     return {...config};
   });
