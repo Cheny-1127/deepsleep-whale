@@ -1,6 +1,6 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path');
-const MODULE_IDS=['subscriptions','archery','hooks','wechat','mail','quota','shortcuts','planner'];
+const MODULE_IDS=['subscriptions','archery','hooks','wechat','mail','quota','shortcuts','planner','reports'];
 
 function createModuleSettings({dataDir}) {
   const file=path.join(dataDir,'modules.json');

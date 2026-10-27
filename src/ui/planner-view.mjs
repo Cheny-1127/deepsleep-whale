@@ -6,6 +6,7 @@ const el=(tag,className,text)=>{const node=document.createElement(tag);if(classN
 const button=(text,run,className='outline')=>{const node=el('button',className,text);node.type='button';node.addEventListener('click',run);return node;};
 const dateTime=value=>new Date(value).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false});
 const remaining=value=>{const seconds=Math.max(0,Math.ceil((value-Date.now())/1000));return `${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`;};
+const taskStatuses=[{value:'pending',label:'待处理'},{value:'processing',label:'处理中'},{value:'done',label:'处理完成'}];
 const dayNames=['周日','周一','周二','周三','周四','周五','周六'];
 const isAllDay=schedule=>schedule.periods.length===1&&schedule.periods[0].start==='00:00'&&schedule.periods[0].end==='24:00';
 const scheduleLabel=schedule=>`${schedule.days.length===7?'每天':schedule.days.map(day=>dayNames[day]).join('、')} · ${isAllDay(schedule)?'全天':schedule.periods.map(p=>p.start+'–'+(p.end==='24:00'?'当天结束':p.end)).join(' / ')}`;
@@ -43,7 +44,7 @@ function workEditor(root,prefix) {
 export function createPlannerView({floating=false}={}) {
   const container=$('content'),bubble=$('bubble');
   if(!container&&!bubble)return {render(){}};
-  let data,lastRevision=-1,requestedRevision=-1,loading=false,filter='all',category='all',itemKind='task',itemId=null,mode='interval',deadline='none',settingsDirty=false,petKey='',listKey='',saving=false;
+  let data,lastRevision=-1,requestedRevision=-1,loading=false,filter='all',category='all',section='current',historyDate='',historyKey='',historyRequest=0,lastCompleted=null,itemKind='task',itemId=null,mode='interval',deadline='none',taskState='pending',settingsDirty=false,petKey='',listKey='',saving=false;
   async function request(name,value) {
     const response=await window.whale.planner(name,value);
     if(response.error)throw Error(response.error);
@@ -52,7 +53,13 @@ export function createPlannerView({floating=false}={}) {
   function report(error,target=$('error')){if(target){target.textContent=error.message;target.hidden=false;}}
   async function act(name,value) {
     if(saving)return;saving=true;
-    try {const next=await request(name,value);if(container)apply(next);if($('error'))$('error').hidden=Boolean(!next.error);return next;}
+    const previous=data?.tasks.find(item=>item.id===value?.id);
+    if(container&&['toggle-task','set-task-status'].includes(name)){lastCompleted=null;$('completed-feedback').hidden=true;}
+    try {
+      const next=await request(name,value);
+      if(container){const task=next.tasks.find(item=>item.id===value?.id);if(task?.status==='done'&&previous?.status!=='done')rememberCompletion(task);apply(next);}
+      if($('error'))$('error').hidden=Boolean(!next.error);return next;
+    }
     catch(error){report(error);}
     finally {saving=false;}
   }
@@ -76,13 +83,15 @@ export function createPlannerView({floating=false}={}) {
   }
   if(container) {
     // 这里的 HTML 全为固定结构；用户填写的名称和备注只通过 textContent/value 展示。
-    container.innerHTML=`<div class="planner-overview"><div class="planner-filters planner-category-filter" role="group" aria-label="事项分类"><button type="button" data-category="all" aria-pressed="true">全部事项</button><button type="button" data-category="work" aria-pressed="false">工作</button><button type="button" data-category="personal" aria-pressed="false">个人</button></div><p id="planner-overview-summary" class="planner-muted" role="status"></p></div>
+    container.innerHTML=`<div class="ui-tabs planner-tabs" role="tablist" aria-label="日程视图"><button id="planner-current-tab" type="button" role="tab" aria-selected="true" aria-controls="planner-current">事项安排</button><button id="planner-history-tab" type="button" role="tab" aria-selected="false" aria-controls="planner-history" tabindex="-1">完成历史</button></div><div class="planner-overview"><div class="planner-filters planner-category-filter" role="group" aria-label="事项分类"><button type="button" data-category="all" aria-pressed="true">全部事项</button><button type="button" data-category="work" aria-pressed="false">工作</button><button type="button" data-category="personal" aria-pressed="false">个人</button></div><p id="planner-overview-summary" class="planner-muted" role="status"></p></div>
       <p class="ui-alert" id="planner-error" role="alert" hidden></p>
+      <div id="planner-completed-feedback" class="planner-completed-feedback" role="status" hidden><span id="planner-completed-message"></span><button id="planner-view-completed" type="button" class="outline">查看完成历史</button></div>
       <p id="planner-settings-feedback" class="planner-muted" role="status"></p>
-      <div class="planner-modules">
+      <div class="planner-modules" id="planner-current" role="tabpanel" aria-labelledby="planner-current-tab">
       <section id="planner-reminders" class="planner-module" aria-labelledby="planner-reminders-heading"><div class="planner-toolbar"><h2 id="planner-reminders-heading">定时提醒 <span id="planner-reminder-count" class="planner-count"></span></h2><p id="planner-work-summary" class="planner-muted"></p></div><div id="planner-reminder-list" class="planner-list"></div>
       <p class="planner-footnote">电脑休眠或应用退出时不能即时提醒；恢复后只提示当前时段内的一轮，不积压过期提醒。</p></section>
-      <section id="planner-tasks" class="planner-module" aria-labelledby="planner-tasks-heading"><div class="planner-toolbar"><h2 id="planner-tasks-heading">待办事项 <span id="planner-task-count" class="planner-count"></span></h2><div class="planner-filters" role="group" aria-label="筛选待办"><button type="button" data-filter="all" aria-pressed="true">全部</button><button type="button" data-filter="today" aria-pressed="false">今天</button><button type="button" data-filter="upcoming" aria-pressed="false">接下来</button><button type="button" data-filter="none" aria-pressed="false">未排期</button><button type="button" data-filter="done" aria-pressed="false">已完成</button></div></div><div id="planner-task-list" class="planner-list"></div></section></div>
+      <section id="planner-tasks" class="planner-module" aria-labelledby="planner-tasks-heading"><div class="planner-toolbar"><h2 id="planner-tasks-heading">待办事项 <span id="planner-task-count" class="planner-count"></span></h2><div class="planner-filters" role="group" aria-label="筛选待办"><button type="button" data-filter="all" aria-pressed="true">全部</button><button type="button" data-filter="today" aria-pressed="false">今天</button><button type="button" data-filter="upcoming" aria-pressed="false">接下来</button><button type="button" data-filter="none" aria-pressed="false">未排期</button><button type="button" data-filter="pending" aria-pressed="false">待处理</button><button type="button" data-filter="processing" aria-pressed="false">处理中</button><button type="button" data-filter="done" aria-pressed="false">处理完成</button></div></div><div id="planner-task-list" class="planner-list"></div></section></div>
+      <section id="planner-history" role="tabpanel" aria-labelledby="planner-history-tab" hidden><div class="planner-toolbar"><h2>完成历史 <span id="planner-history-count" class="planner-count"></span></h2><div class="planner-history-controls"><label>完成日期<input id="planner-history-date" type="date" min="2000-01-01" max="2100-12-31"></label><button id="planner-history-today" type="button" class="outline">今天</button></div></div><p class="planner-muted">保留任务完成时的标题和备注，删除原任务后记录仍在。工作待办按完成日期自动归入日报，需开启报告同步；个人事项不纳入。</p><div id="planner-history-list" class="planner-list" aria-live="polite"></div></section>
       <dialog class="ui-dialog planner-dialog" id="planner-settings-dialog" aria-labelledby="planner-settings-heading"><form id="planner-settings-form"><div class="planner-dialog-heading"><h2 id="planner-settings-heading">默认配置</h2><button type="button" class="ui-icon-button" id="planner-close-settings" aria-label="关闭默认配置">×</button></div><p class="planner-muted">工作与个人共用此默认时间和通知设置，每条提醒也可单独设置。允许时段外停止提示，下个允许时段重新计时。日期按星期选择，不自动识别法定节假日。</p><div id="planner-work-editor"></div><div class="planner-notifications"><label><input type="checkbox" id="planner-notifications"> 系统通知</label><label><input type="checkbox" id="planner-sound"> 提示音</label></div><p id="planner-settings-error" class="ui-alert" role="alert" hidden></p><div class="planner-dialog-actions"><button type="button" class="outline" id="planner-cancel-settings">取消</button><button type="submit" class="primary">保存配置</button></div></form></dialog>
       <dialog class="ui-dialog planner-dialog" id="planner-item-dialog" aria-labelledby="planner-item-heading"><form id="planner-item-form">
         <div class="planner-dialog-heading"><h2 id="planner-item-heading">新建事项</h2><button type="button" class="ui-icon-button" id="planner-close-item" aria-label="关闭事项设置">×</button></div>
@@ -90,16 +99,25 @@ export function createPlannerView({floating=false}={}) {
         <label class="planner-field">事项名称<input id="planner-item-title" maxlength="200" placeholder="例如：整理周报、买牛奶" required></label>
         <fieldset class="planner-category-choice"><legend>所属分类</legend><label><input type="radio" name="planner-category" value="work" checked>工作</label><label><input type="radio" name="planner-category" value="personal">个人</label></fieldset>
         <fieldset class="planner-item-fields" id="planner-reminder-fields" hidden disabled>${pickerHtml('mode','计时方式')}<label class="planner-field" id="planner-interval-field">完成后间隔（分钟）<input type="number" id="planner-interval" min="1" max="1440" value="40" required></label><label class="planner-field" id="planner-fixed-field" hidden>每天固定时间<input id="planner-fixed" placeholder="例如：10:30, 15:00, 18:00"><small>用逗号分隔，必须位于允许提醒的时段内。</small></label><label class="planner-field">处理时长（分钟）<input type="number" id="planner-process" min="0" max="180" value="0" required><small>0：点击完成后开始下一轮；大于 0：点击开始处理，倒计时结束后自动完成。</small></label><label class="planner-follow"><input type="checkbox" id="planner-use-default" checked> 沿用默认提醒时间</label><div id="planner-custom-work" hidden></div></fieldset>
-        <fieldset class="planner-item-fields" id="planner-task-fields">${pickerHtml('deadline','完成期限')}<label class="planner-field" id="planner-date-field" hidden>截止日期<input type="date" id="planner-task-date" min="2000-01-01" max="2100-12-31"></label><label class="planner-field">备注<textarea id="planner-task-notes" maxlength="4000" rows="3" placeholder="补充说明、处理步骤……"></textarea></label></fieldset>
+        <fieldset class="planner-item-fields" id="planner-task-fields">${pickerHtml('task-status','处理状态')}${pickerHtml('deadline','完成期限')}<label class="planner-field" id="planner-date-field" hidden>截止日期<input type="date" id="planner-task-date" min="2000-01-01" max="2100-12-31"></label><label class="planner-field">备注<textarea id="planner-task-notes" maxlength="4000" rows="3" placeholder="补充说明、处理步骤……"></textarea></label></fieldset>
         <p id="planner-item-error" class="ui-alert" role="alert" hidden></p><div class="planner-dialog-actions"><button type="button" class="outline" id="planner-cancel-item">取消</button><button class="primary" type="submit">保存事项</button></div></form></dialog>`;
   }
-  let defaultWork,customWork,modePicker,deadlinePicker;
+  let defaultWork,customWork,modePicker,deadlinePicker,taskStatusPicker;
   if(container) {
     defaultWork=workEditor($('work-editor'),'默认时段');customWork=workEditor($('custom-work'),'独立时段');
     modePicker=select('mode',[{value:'interval',label:'完成后计时'},{value:'fixed',label:'固定时间'}],value=>{mode=value;renderMode();});
     deadlinePicker=select('deadline',[{value:'none',label:'暂不安排'},{value:'today',label:'今天完成'},{value:'tomorrow',label:'明天完成'},{value:'week',label:'一周内完成'},{value:'date',label:'指定日期'}],value=>{deadline=value;renderDeadline();});
+    taskStatusPicker=select('task-status',taskStatuses,value=>{taskState=value;taskStatusPicker.set(taskState);});
     for(const node of container.querySelectorAll('[data-category]'))node.addEventListener('click',()=>{category=node.dataset.category;filter='all';renderLists();});
     for(const node of container.querySelectorAll('[name="planner-kind"]'))node.addEventListener('change',()=>{if(!itemId&&!saving){itemKind=node.value;renderItemType();}});
+    for(const name of ['current','history']) {
+      const tab=$(name+'-tab');
+      tab.addEventListener('click',()=>{section=name;historyKey='';renderLists();});
+      tab.addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight'].includes(event.key))return;event.preventDefault();const next=name==='current'?'history':'current';$(next+'-tab').click();$(next+'-tab').focus();});
+    }
+    $('view-completed').addEventListener('click',()=>openCompletionHistory(lastCompleted));
+    $('history-date').addEventListener('change',()=>{historyDate=$('history-date').value||data.today;$('history-date').value=historyDate;renderLists();});
+    $('history-today').addEventListener('click',()=>{historyDate=data.today;$('history-date').value=historyDate;renderLists();});
     $('settings-form').addEventListener('input',()=>{settingsDirty=true;});
     $('open-settings').addEventListener('click',()=>{
       if(!data||saving)return;
@@ -119,7 +137,7 @@ export function createPlannerView({floating=false}={}) {
     $('add-item').addEventListener('click',()=>openItem());
     for(const name of ['close','cancel'])$(name+'-item').addEventListener('click',()=>{if(!saving)$('item-dialog').close();});
     $('item-dialog').addEventListener('cancel',event=>{if(saving)event.preventDefault();});
-    $('item-dialog').addEventListener('close',()=>{modePicker.close();deadlinePicker.close();});
+    $('item-dialog').addEventListener('close',()=>{modePicker.close();deadlinePicker.close();taskStatusPicker.close();});
     $('item-form').addEventListener('submit',saveItem);
     for(const node of container.querySelectorAll('[data-filter]'))node.addEventListener('click',()=>{filter=node.dataset.filter;listKey='';renderLists();});
   }
@@ -132,11 +150,11 @@ export function createPlannerView({floating=false}={}) {
     $('reminder-fields').hidden=!reminder;$('reminder-fields').disabled=!reminder;
     $('task-fields').hidden=reminder;$('task-fields').disabled=reminder;
     $('item-title').maxLength=reminder?100:200;$('item-title').placeholder=reminder?'例如：喝水、闭眼休息':'例如：整理周报、买牛奶';
-    $('item-error').hidden=true;modePicker.close();deadlinePicker.close();renderMode();renderDeadline();
+    $('item-error').hidden=true;modePicker.close();deadlinePicker.close();taskStatusPicker.close();renderMode();renderDeadline();taskStatusPicker.set(taskState);
   }
   function openItem(kind='task',item=null,preset=null) {
     if(!data||saving)return;
-    itemKind=kind;itemId=item?.id||null;mode=item?.mode||'interval';deadline=item?.dueDate?'date':'none';
+    itemKind=kind;itemId=item?.id||null;mode=item?.mode||'interval';deadline=item?.dueDate?'date':'none';taskState=item?.status||'pending';
     $('item-title').value=item?.title||preset?.title||'';
     const selectedCategory=item?.category||(category==='personal'?'personal':'work');
     for(const node of container.querySelectorAll('[name="planner-category"]'))node.checked=node.value===selectedCategory;
@@ -156,14 +174,16 @@ export function createPlannerView({floating=false}={}) {
     const submit=event.target.querySelector('[type="submit"]');submit.disabled=true;$('item-error').hidden=true;
     const value={id:itemId||undefined,title:$('item-title').value,category:container.querySelector('[name="planner-category"]:checked').value};
     if(kind==='reminder')Object.assign(value,{mode,intervalMinutes:Number($('interval').value),processMinutes:Number($('process').value),fixedTimes:mode==='fixed'?$('fixed').value.split(/[,，\s]+/).filter(Boolean):[],customWorkTime:$('use-default').checked?null:customWork.get(),enabled:data.reminders.find(item=>item.id===itemId)?.enabled??true});
-    else Object.assign(value,{notes:$('task-notes').value,deadline,dueDate:$('task-date').value});
+    else Object.assign(value,{notes:$('task-notes').value,status:taskState,deadline,dueDate:$('task-date').value});
     try {
       const next=await request('save-'+kind,value);
       // 新记录应立即可见，避免被当前分类或已完成筛选藏起来。
       if(category!=='all'&&category!==value.category)category=value.category;
+      lastCompleted=null;section='current';
       if(kind==='task') {
         const saved=itemId?next.tasks.find(item=>item.id===itemId):next.tasks.at(-1);
-        filter=saved.completedAt!==null?'done':'all';
+        filter='all';
+        if(saved.status==='done'){setHistoryDate(saved);section='history';historyKey='';}
       }
       apply(next);$('item-dialog').close();$('error').hidden=true;
     } catch(error){report(error,$('item-error'));}finally{saving=false;submit.disabled=false;}
@@ -176,15 +196,42 @@ export function createPlannerView({floating=false}={}) {
     if(run?.state==='processing')return '处理中';
     return run?'下次 '+dateTime(run.dueAt):'等待安排';
   }
+  function openReportDay(item){document.dispatchEvent(new CustomEvent('whale-show-report-day',{detail:{completedAt:item.completedAt}}));}
+  function setHistoryDate(item){historyDate=new Intl.DateTimeFormat('sv-SE',{year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(item.completedAt));$('history-date').value=historyDate;}
+  function rememberCompletion(item){lastCompleted=item;$('completed-message').textContent=`「${item.title}」已完成，已保存到完成历史。`;}
+  function openCompletionHistory(item){if(item)setHistoryDate(item);section='history';historyKey='';renderLists();}
+  async function renderHistory() {
+    const key=JSON.stringify([data.revision,historyDate,category]);if(key===historyKey)return;historyKey=key;
+    const serial=++historyRequest,list=$('history-list');list.replaceChildren(el('p','planner-muted','正在读取完成历史……'));$('history-count').textContent='';
+    try {
+      const result=await request('history',{date:historyDate,category});
+      if(serial!==historyRequest||section!=='history')return;
+      list.replaceChildren();$('history-count').textContent=result.items.length;
+      if(!result.items.length){const empty=el('div','ui-card planner-empty');empty.append(el('h2','','这一天没有完成记录'),el('p','planner-muted','可以选择其他日期；完成任务后会自动保留记录。'));list.append(empty);}
+      for(const item of result.items) {
+        const card=el('article','ui-card planner-history-card'),copy=el('div','planner-task-copy'),heading=el('div','planner-item-heading');
+        const status=el('span','planner-task-status','处理完成');status.dataset.status='done';
+        card.dataset.historyId=item.id;heading.append(el('h3','',item.title),categoryBadge(item),status);copy.append(heading,el('span','planner-muted','完成于 '+dateTime(item.completedAt)));
+        if(item.notes)copy.append(el('p','planner-task-notes',item.notes));
+        if(!data.tasks.some(task=>task.id===item.taskId))copy.append(el('p','planner-muted','原任务已删除 · 完成记录已保留'));
+        card.append(copy);
+        if(item.category==='work'){const actions=el('div','planner-row-actions');actions.append(button('查看当日日报',()=>openReportDay(item)));card.append(actions);}
+        list.append(card);
+      }
+    } catch(error){if(serial!==historyRequest||section!=='history')return;historyKey='';list.replaceChildren(el('p','ui-alert',error.message));}
+  }
   function renderLists() {
     if(!data)return;
+    $('completed-feedback').hidden=section!=='current'||!lastCompleted;
     // 主进程每秒广播，只有记录、日期或筛选变化时重建列表，避免打断焦点与操作。
-    const key=JSON.stringify([data.revision,data.today,filter,category]);if(key===listKey)return;listKey=key;
+    const key=JSON.stringify([data.revision,data.today,filter,category,section,historyDate]);if(key===listKey)return;listKey=key;
+    for(const name of ['current','history']){const selected=section===name;$(name).hidden=!selected;$(name+'-tab').setAttribute('aria-selected',String(selected));$(name+'-tab').tabIndex=selected?0:-1;}
+    for(const node of container.querySelectorAll('[data-category]'))node.setAttribute('aria-pressed',String(node.dataset.category===category));
+    if(section==='history'){$('overview-summary').textContent=`共保留 ${data.historyCount} 条完成记录`;void renderHistory();return;}
     const reminders=$('reminder-list');reminders.replaceChildren();
     const matchesCategory=item=>category==='all'||item.category===category;
     const priority=item=>!item.enabled?3:item.run?.state==='waiting'?0:item.run?.state==='processing'?1:2;
     const categoryReminders=data.reminders.filter(matchesCategory).sort((a,b)=>priority(a)-priority(b)||(a.run?.dueAt??Infinity)-(b.run?.dueAt??Infinity)),categoryTasks=data.tasks.filter(matchesCategory);
-    for(const node of container.querySelectorAll('[data-category]'))node.setAttribute('aria-pressed',String(node.dataset.category===category));
     $('reminder-count').textContent=categoryReminders.length;
     const waiting=categoryReminders.filter(item=>item.enabled&&['waiting','processing'].includes(item.run?.state)).length;
     $('overview-summary').textContent=`${waiting} 项提醒待处理 · ${categoryTasks.filter(item=>item.completedAt===null).length} 项待办未完成`;
@@ -205,22 +252,31 @@ export function createPlannerView({floating=false}={}) {
       const footer=el('div','planner-card-footer');footer.append(el('span','planner-muted',scheduleLabel(schedule)),button('删除',async()=>{if(await confirmAction({owner:container,title:'删除提醒？',message:`将删除提醒「${item.title}」。`,confirmLabel:'删除提醒',danger:true}))void act('remove-reminder',{id:item.id});},'planner-delete'));card.append(footer);reminders.append(card);
     }
     for(const node of container.querySelectorAll('[data-filter]'))node.setAttribute('aria-pressed',String(node.dataset.filter===filter));
-    const tasks=categoryTasks.filter(item=>filter==='done'?item.completedAt!==null:item.completedAt===null&&(filter==='all'||filter==='today'&&item.dueDate&&item.dueDate<=data.today||filter==='upcoming'&&item.dueDate>data.today||filter==='none'&&item.dueDate===null)).sort((a,b)=>(a.dueDate||'9999').localeCompare(b.dueDate||'9999')||b.createdAt-a.createdAt);
+    const selectedStatus=taskStatuses.find(status=>status.value===filter);
+    const tasks=categoryTasks.filter(item=>{
+      if(filter==='all')return item.status!=='done';
+      if(selectedStatus)return item.status===filter;
+      return item.status!=='done'&&(filter==='today'&&item.dueDate&&item.dueDate<=data.today||filter==='upcoming'&&item.dueDate>data.today||filter==='none'&&item.dueDate===null);
+    }).sort((a,b)=>(a.dueDate||'9999').localeCompare(b.dueDate||'9999')||b.createdAt-a.createdAt);
     $('task-count').textContent=tasks.length;
     const list=$('task-list');list.replaceChildren();
-    if(!tasks.length){const empty=el('div','ui-card planner-empty');empty.append(el('h2','',filter==='done'?'还没有已完成的待办':'这里暂时没有待办'),el('p','planner-muted','可以安排今天、明天、一周内完成，也可以先记下，不排时间。'));list.append(empty);}
+    if(!tasks.length){const empty=el('div','ui-card planner-empty');empty.append(el('h2','',selectedStatus?`没有${selectedStatus.label}的待办`:'这里暂时没有待办'),el('p','planner-muted','可以安排今天、明天、一周内完成，也可以先记下，不排时间。'));list.append(empty);}
     for(const task of tasks) {
-      const row=el('article','ui-card planner-task'),check=el('input');check.type='checkbox';check.checked=task.completedAt!==null;check.setAttribute('aria-label',`${check.checked?'恢复待办':'完成待办'}：${task.title}`);
-      check.addEventListener('change',async()=>{check.disabled=true;await act('toggle-task',{id:task.id,completed:check.checked});check.checked=data.tasks.find(item=>item.id===task.id)?.completedAt!==null;check.disabled=false;});
-      const content=el('div','planner-task-copy');const title=el('div','planner-item-heading');title.append(el('h3','',task.title),categoryBadge(task));content.append(title);
-      const due=el('span','planner-muted',task.completedAt!==null?'已完成':!task.dueDate?'未排期':task.dueDate===data.today?'今天完成':task.dueDate<data.today?`已逾期 · ${task.dueDate}`:`${task.dueDate} 前完成`);if(task.completedAt===null&&task.dueDate&&task.dueDate<data.today)due.classList.add('planner-overdue');content.append(due);
+      const row=el('article','ui-card planner-task');
+      const content=el('div','planner-task-copy');const title=el('div','planner-item-heading');const status=el('span','planner-task-status',taskStatuses.find(status=>status.value===task.status).label);status.dataset.status=task.status;title.append(el('h3','',task.title),categoryBadge(task),status);content.append(title);
+      const due=el('span','planner-muted',task.completedAt!==null?'完成于 '+dateTime(task.completedAt):!task.dueDate?'未排期':task.dueDate===data.today?'今天完成':task.dueDate<data.today?`已逾期 · ${task.dueDate}`:`${task.dueDate} 前完成`);if(task.completedAt===null&&task.dueDate&&task.dueDate<data.today)due.classList.add('planner-overdue');content.append(due);
       if(task.notes)content.append(el('p','planner-task-notes',task.notes));
-      const actions=el('div','planner-row-actions');actions.append(button('编辑',()=>openTask(task)),button('删除',async()=>{if(await confirmAction({owner:container,title:'删除待办？',message:`将删除待办「${task.title}」。`,confirmLabel:'删除待办',danger:true}))void act('remove-task',{id:task.id});},'planner-delete'));
-      row.append(check,content,actions);list.append(row);
+      const actions=el('div','planner-row-actions');
+      if(task.status==='pending')actions.append(button('开始处理',()=>act('set-task-status',{id:task.id,status:'processing'}),'soft'));
+      actions.append(button(task.status==='done'?'重新处理':'处理完成',()=>act('set-task-status',{id:task.id,status:task.status==='done'?'processing':'done'}),'soft'));
+      if(task.status==='done'&&task.category==='work')actions.append(button('查看当日日报',()=>openReportDay(task)));
+      actions.append(button('编辑',()=>openTask(task)),button('删除',async()=>{if(await confirmAction({owner:container,title:'删除待办？',message:`将删除待办「${task.title}」。`,confirmLabel:'删除待办',danger:true}))void act('remove-task',{id:task.id});},'planner-delete'));
+      row.append(content,actions);list.append(row);
     }
   }
   function apply(next) {
     data=next;lastRevision=next.revision;
+    if(!historyDate){historyDate=data.today;$('history-date').value=historyDate;}
     if(!settingsDirty){defaultWork.set(data.workTime);$('notifications').checked=data.notifications;$('sound').checked=data.sound;}
     $('work-summary').textContent='默认：'+scheduleLabel(data.workTime);
     if(data.error)report(Error(data.error));

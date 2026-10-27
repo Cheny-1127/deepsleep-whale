@@ -157,6 +157,49 @@ test('工作支持今天、明天、一周内、指定日期和未排期，期�
   f.p.action('toggle-task',{id:task.id,completed:false});assert.equal(f.p.snapshot().tasks[0].completedAt,null);
   assert.throws(()=>f.p.action('save-task',{title:'日期错误',deadline:'date',dueDate:'2026-02-30'}),/有效/);
 });
+test('待办支持三种状态，编辑和重启保留进度，重复完成不改写完成时间',t=>{
+  const f=fixture(t);
+  f.p.action('save-task',{title:'整理周报',deadline:'tomorrow'});
+  const original=f.p.snapshot().tasks[0];assert.equal(original.status,'pending');
+  f.p.action('set-task-status',{id:original.id,status:'processing'});
+  f.p.action('save-task',{id:original.id,title:'整理月报',deadline:'date',dueDate:original.dueDate});
+  f.restart();let task=f.p.snapshot().tasks[0];
+  assert.equal(task.status,'processing');assert.equal(task.completedAt,null);assert.equal(task.dueDate,original.dueDate);
+  f.p.action('set-task-status',{id:task.id,status:'done'});
+  const completedAt=f.p.snapshot().tasks[0].completedAt;assert.equal(completedAt,at('2026-10-26T10:00:00'));
+  f.time('2026-10-26T11:00:00');f.p.action('toggle-task',{id:task.id,completed:true});
+  f.p.action('save-task',{id:task.id,title:task.title,deadline:'none',status:'done'});
+  f.restart();assert.equal(f.p.snapshot().tasks[0].completedAt,completedAt);
+  f.p.action('save-task',{id:task.id,title:task.title,deadline:'none',status:'processing'});
+  assert.equal(f.p.snapshot().tasks[0].completedAt,null);
+  f.p.action('toggle-task',{id:task.id,completed:false});assert.equal(f.p.snapshot().tasks[0].status,'pending');
+});
+test('旧待办按完成时间补状态且不重写文件；状态与完成时间冲突时保护原文件',t=>{
+  const f=fixture(t);
+  for(const title of ['未完成','已完成'])f.p.action('save-task',{title,deadline:'none'});
+  f.p.action('toggle-task',{id:f.p.snapshot().tasks[1].id,completed:true});
+  const file=path.join(f.dataDir,'planner.json'),saved=JSON.parse(fs.readFileSync(file,'utf8'));
+  saved.tasks.forEach(item=>delete item.status);
+  const original=JSON.stringify(saved);fs.writeFileSync(file,original);f.restart();
+  assert.equal(f.p.snapshot().error,'');assert.deepEqual(f.p.snapshot().tasks.map(item=>item.status),['pending','done']);
+  assert.equal(fs.readFileSync(file,'utf8'),original);
+  saved.tasks[1].status='processing';const conflict=JSON.stringify(saved);fs.writeFileSync(file,conflict);f.restart();
+  assert.match(f.p.snapshot().error,/停止写入/);assert.equal(fs.readFileSync(file,'utf8'),conflict);
+});
+test('无效状态和保存失败不改变待办进度，可恢复重试',t=>{
+  const f=fixture(t);f.p.action('save-task',{title:'工作',deadline:'none',status:'processing'});
+  const task=f.p.snapshot().tasks[0],before=f.p.snapshot();
+  for(const status of ['other',null]) {
+    assert.throws(()=>f.p.action('set-task-status',{id:task.id,status}),/状态/);
+    assert.throws(()=>f.p.action('save-task',{id:task.id,title:task.title,deadline:'none',status}),/状态/);
+  }
+  assert.deepEqual(f.p.snapshot(),before);
+  fs.mkdirSync(path.join(f.dataDir,'planner.json.tmp'));
+  assert.throws(()=>f.p.action('set-task-status',{id:task.id,status:'done'}),/保存失败/);
+  assert.deepEqual(f.p.snapshot().tasks,[task]);
+  fs.rmdirSync(path.join(f.dataDir,'planner.json.tmp'));f.p.action('set-task-status',{id:task.id,status:'done'});
+  assert.equal(f.p.snapshot().tasks[0].status,'done');f.restart();assert.equal(f.p.snapshot().tasks[0].status,'done');
+});
 test('损坏文件不覆盖；保存失败不消费本轮提醒且可恢复重试',t=>{
   const f=fixture(t),item=f.add();f.time('2026-10-26T10:02:00');const token=f.p.summary().active[0].token;
   fs.mkdirSync(path.join(f.dataDir,'planner.json.tmp'));
@@ -164,4 +207,41 @@ test('损坏文件不覆盖；保存失败不消费本轮提醒且可恢复重�
   fs.rmdirSync(path.join(f.dataDir,'planner.json.tmp'));f.p.action('complete',{id:item.id,token});assert.equal(f.p.summary().active.length,0);
   fs.writeFileSync(path.join(f.dataDir,'planner.json'),'broken');f.restart();assert.match(f.p.snapshot().error,/停止写入/);
   assert.throws(()=>f.add(),/停止写入/);assert.equal(fs.readFileSync(path.join(f.dataDir,'planner.json'),'utf8'),'broken');
+});
+test('完成历史按完成日期和分类查询，重复完成不新增，删除与编辑不抹去快照',t=>{
+  const f=fixture(t);f.p.action('save-task',{title:'原工作',notes:'完成时的内容',deadline:'tomorrow'});
+  const task=f.p.snapshot().tasks[0];f.p.action('set-task-status',{id:task.id,status:'done'});
+  const original=f.p.action('history',{date:'2026-10-26'}).items;
+  assert.equal(original.length,1);assert.equal(original[0].taskId,task.id);assert.equal(original[0].dueDate,'2026-10-27');
+  f.p.action('toggle-task',{id:task.id,completed:true});
+  f.p.action('save-task',{id:task.id,title:'修改后的工作',notes:'修改后的内容',deadline:'none',status:'done'});
+  assert.deepEqual(f.p.action('history',{date:'2026-10-26'}).items,original);
+  f.p.action('set-task-status',{id:task.id,status:'processing'});f.time('2026-10-27T10:00:00');
+  f.p.action('set-task-status',{id:task.id,status:'done'});f.p.action('remove-task',{id:task.id});
+  f.p.action('save-task',{title:'个人事项',category:'personal',deadline:'none',status:'done'});f.restart();
+  assert.deepEqual(f.p.action('history',{date:'2026-10-26'}).items,original);
+  assert.equal(f.p.action('history',{date:'2026-10-27',category:'work'}).items[0].title,'修改后的工作');
+  assert.equal(f.p.action('history',{date:'2026-10-27',category:'personal'}).items[0].title,'个人事项');
+  assert.equal(f.p.action('history',{date:'2026-10-28'}).items.length,0);
+  assert.throws(()=>f.p.action('history',{date:'2026-02-30'}),/日期/);
+  assert.throws(()=>f.p.action('history',{date:'2026-10-27',category:'invalid'}),/分类/);
+  assert.equal(f.p.summary().completedTasks,undefined);assert.equal(f.p.snapshot().completedTasks,undefined);
+  assert.equal(f.p.snapshot().historyCount,3);
+});
+test('历史与任务同时落盘，失败不新增；旧文件补入已完成任务且读取不重写',t=>{
+  const f=fixture(t);f.p.action('save-task',{title:'旧任务',deadline:'none'});const task=f.p.snapshot().tasks[0];
+  const file=path.join(f.dataDir,'planner.json');fs.mkdirSync(file+'.tmp');
+  assert.throws(()=>f.p.action('toggle-task',{id:task.id,completed:true}),/保存失败/);
+  assert.equal(f.p.action('history',{date:'2026-10-26'}).items.length,0);f.restart();
+  assert.equal(f.p.snapshot().tasks[0].status,'pending');fs.rmdirSync(file+'.tmp');
+  f.p.action('toggle-task',{id:task.id,completed:true});
+  const legacy=JSON.parse(fs.readFileSync(file,'utf8'));delete legacy.completedTasks;
+  const original=JSON.stringify(legacy);fs.writeFileSync(file,original);f.restart();
+  const history=f.p.action('history',{date:'2026-10-26'}).items;
+  assert.equal(history.length,1);assert.equal(history[0].title,'旧任务');assert.equal(fs.readFileSync(file,'utf8'),original);
+  f.restart();assert.deepEqual(f.p.action('history',{date:'2026-10-26'}).items,history);
+  f.p.action('remove-task',{id:task.id});f.restart();assert.deepEqual(f.p.action('history',{date:'2026-10-26'}).items,history);
+  const invalid=JSON.parse(fs.readFileSync(file,'utf8'));invalid.completedTasks[0].completedAt=null;
+  const corrupt=JSON.stringify(invalid);fs.writeFileSync(file,corrupt);f.restart();
+  assert.match(f.p.snapshot().error,/停止写入/);assert.equal(fs.readFileSync(file,'utf8'),corrupt);
 });

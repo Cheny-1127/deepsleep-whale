@@ -15,6 +15,7 @@
     "test:styles": "node scripts/checks/styles-smoke.cjs",
     "test:hooks": "node scripts/checks/hooks-smoke.cjs",
     "test:planner": "node scripts/checks/planner-smoke.cjs",
+    "test:reports": "node scripts/checks/reports-smoke.cjs",
     "test:reminders": "node scripts/checks/reminder-smoke.cjs",
     "test:presence": "node scripts/checks/client-presence-smoke.cjs",
     "test:actions": "node scripts/checks/actions-smoke.cjs",

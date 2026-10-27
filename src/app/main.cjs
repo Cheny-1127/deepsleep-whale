@@ -32,6 +32,8 @@ const {createSidebarSettings}=require('./sidebar-settings.cjs');
 const {createModuleSettings}=require('./module-settings.cjs');
 const {createModuleRuntime}=require('./module-runtime.cjs');
 const {createPlanner}=require('./planner.cjs');
+const {createWorkReports}=require('./work-reports.cjs');
+const {createGitlabStore}=require('../reports/gitlab-store.cjs');
 const {createPetQuotaSettings}=require('./pet-quota-settings.cjs');
 const {createPetQuota}=require('../channels/pet-quota.cjs');
 const {createMessageSubscriptions}=require('../channels/message-subscriptions.cjs');
@@ -45,7 +47,7 @@ app.setPath('userData', dataDir);
 app.setName('鲸鱼娘');
 if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   let bridge,wechat,mail,archery,quota,groupUsage,keyUsage,petQuota,subscriptions;
-  let planner,plannerTimer;
+  let planner,plannerTimer,reports;
   const plannerNotifications=new Map();
   let eventQueue=Promise.resolve();
   const cursorState=process.env.WHALE_CURSOR_STATE_DB||path.join(os.homedir(),'Library','Application Support','Cursor','User','globalStorage','state.vscdb');
@@ -253,6 +255,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     else if(id==='mail')mail?.setModuleEnabled(enabled);
     else if(id==='subscriptions')subscriptions?.setModuleEnabled(enabled);
     else if(id==='planner')tickPlanner();
+    else if(id==='reports')reports?.setModuleEnabled(enabled);
     else if(id==='hooks'){
       if(enabled)for(const source of SOURCES)void hooks.refresh(source);
       else{
@@ -293,6 +296,19 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   ipcMain.handle('sidebar-settings',(event,value)=>{
     if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋整理菜单');
     return value===undefined?sidebarSettings.snapshot():sidebarSettings.update(value);
+  });
+  // 工作正文、仓库路径和归档权限仅开放给小屋主页面，拒绝桌宠和子框架调用。
+  ipcMain.handle('work-reports',async(event,name,value)=>{
+    if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw Error('仅允许在小屋管理工作报告');
+    if(!reports)return {error:'工作报告正在初始化'};
+    try{
+      if(name==='pick-directory'){
+        if(!modules.enabled('reports'))throw Error('工作报告已关闭，请先开启');
+        const selected=await dialog.showOpenDialog({title:'选择工作报告使用的目录',properties:['openDirectory']});
+        return {value:{path:selected.canceled?'':selected.filePaths[0]}};
+      }
+      return {value:await reports.action(name,value)};
+    }catch(error){return {error:error.message||'工作报告操作未完成，请重试。'};}
   });
   ipcMain.handle('shortcut-settings',(event,value)=>{
     if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋配置快捷操作');
@@ -433,7 +449,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     activity.reconcile(titles.readState());
     if(savedReminders)saveReminders();
     windows.start({showPanelOnStartup:hooks.settings.showPanelOnStartup});
-    planner=createPlanner({dataDir,onChange:()=>{syncPlannerNotifications();broadcast();},onDue:(item,preferences)=>{
+    planner=createPlanner({dataDir,onChange:()=>{syncPlannerNotifications();reports?.syncPlanner();broadcast();},onDue:(item,preferences)=>{
       if(preferences.notifications&&Notification.isSupported()) {
         const notice=new Notification({title:'deepsleep · 日程提醒',body:item.title+(item.processMinutes?` · 准备好后开始处理 ${item.processMinutes} 分钟`:' · 完成后再开始下一轮'),silent:true});
         notice.on('click',showPlanner);plannerNotifications.set(item.id,{notice,token:item.run.token});notice.show();
@@ -447,6 +463,10 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
       }
       if(preferences.sound)windows.chime();
     }});
+    reports=createWorkReports({dataDir,getTasks:()=>planner.snapshot().tasks,onChange:broadcast,gitlabStore:createGitlabStore({dataDir,safeStorage}),fetchImpl:(url,options)=>net.fetch(url,options),gitlabFetchImpl:globalThis.fetch});
+    reports.setModuleEnabled(modules.enabled('reports'));reports.start();
+    const resumeReports=()=>void reports.runScheduled();powerMonitor.on('resume',resumeReports);
+    app.once('before-quit',()=>{reports.close();powerMonitor.removeListener('resume',resumeReports);});
     // 计时统一由主进程推进；关闭小屋不影响进度，唤醒时立即按持久化状态补算。
     tickPlanner();plannerTimer=setInterval(tickPlanner,1000);
     powerMonitor.on('resume',tickPlanner);

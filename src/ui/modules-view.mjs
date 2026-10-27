@@ -1,4 +1,4 @@
-const labels={subscriptions:'消息订阅',archery:'Archery',hooks:'Hooks 配置',wechat:'微信接入',mail:'邮箱接收',quota:'API 额度',shortcuts:'快捷操作',planner:'日程备忘'};
+const labels={subscriptions:'消息订阅',archery:'Archery',hooks:'Hooks 配置',wechat:'微信接入',mail:'邮箱接收',quota:'API 额度',shortcuts:'快捷操作',planner:'日程备忘',reports:'工作报告'};
 
 export function createModulesView({render}) {
   const rows=new Map();let latest={},saving=new Set();

@@ -1,0 +1,138 @@
+#reports-view > header { gap: 16px; flex-wrap: wrap; }
+.report-actions, .report-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.report-toolbar { justify-content: space-between; margin-bottom: 16px; }
+.report-toolbar label, .report-field { display: flex; flex-direction: column; gap: 7px; font-size: var(--ui-font-small); color: var(--ui-text-muted); min-width: 0; }
+.report-toolbar input { max-width: 180px; }
+.report-recent-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; margin-bottom: 20px; }
+.report-day-button { display: grid; gap: 4px; min-width: 0; padding: 12px 6px; text-align: center; }
+.report-day-date { color: var(--ui-text-muted); font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
+.report-day-button[aria-pressed="true"] { background: var(--ui-selected); color: var(--ui-accent); border-color: var(--ui-accent); }
+.report-day-button[aria-pressed="true"] .report-day-date { color: inherit; }
+.report-note { color: var(--ui-text-muted); font-size: var(--ui-font-small); line-height: 1.8; overflow-wrap: anywhere; white-space: pre-wrap; }
+.report-list { display: grid; gap: 12px; }
+.report-matches { margin-bottom: 20px; }
+.report-matches > h2 { font-size: 16px; margin: 0; }
+.report-match-list { display: grid; gap: 12px; }
+.report-match { padding: 0; min-width: 0; overflow-wrap: anywhere; border-color: var(--ui-accent); }
+.report-match-summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px; cursor: pointer; list-style: none; }
+.report-match-summary::-webkit-details-marker { display: none; }
+.report-match-summary:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 3px; border-radius: var(--ui-radius-card); }
+.report-match-heading { display: grid; gap: 10px; min-width: 0; flex: 1; }
+.report-match-title-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.report-match-label { padding: 3px 8px; border-radius: 6px; background: var(--ui-selected); color: var(--ui-accent); font-size: 12px; font-weight: 600; }
+.report-match-title { color: var(--ui-text); font-size: 17px; line-height: 1.6; font-weight: 700; }
+.report-match-reason { display: block; padding: 6px 10px; border-left: 3px solid var(--ui-accent); background: var(--ui-selected); border-radius: 4px; color: var(--ui-accent); font-size: 13px; font-weight: 500; line-height: 1.7; }
+.report-match-toggle { flex-shrink: 0; color: var(--ui-accent); font-size: 12px; }
+.report-match-toggle::after { content: '⌄'; display: block; text-align: center; font-size: 18px; }
+.report-match[open] > .report-match-summary .report-match-toggle::after { transform: rotate(180deg); }
+.report-match-collapse, .report-match[open] > .report-match-summary .report-match-expand { display: none; }
+.report-match[open] > .report-match-summary .report-match-collapse { display: inline; }
+.report-match-content { padding: 18px; border-top: 1px solid var(--ui-divider); }
+.report-match-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.report-match-grid > .report-work-card { min-width: 0; padding: 16px; background: var(--ui-bg); }
+.report-match-grid .report-work-heading h3 { font-size: 15px; }
+.report-match-source-list { display: grid; gap: 8px; margin-top: 12px; max-height: 420px; overflow-y: auto; }
+.report-source-card { min-width: 0; padding: 0; font-size: var(--ui-font-small); }
+.report-source-card > summary { display: block; padding: 10px 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; list-style: none; }
+.report-source-card > summary::-webkit-details-marker { display: none; }
+.report-source-card[open] > summary { white-space: normal; overflow-wrap: anywhere; border-bottom: 1px solid var(--ui-divider); }
+.report-source-card-content { padding: 12px; }
+.report-source-card-content > .report-note { margin: 0 0 8px; }
+.report-source-card-content > .report-entry { padding: 0; border: 0; background: transparent; }
+.report-source-card .report-entry-head { flex-direction: column; }
+.report-match-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--ui-divider); }
+.report-match-footer > .report-actions { margin-left: auto; }
+#report-matches-actions { margin-top: 12px; }
+.report-entry { padding: 18px; }
+.report-entry-head { display: flex; justify-content: space-between; gap: 14px; align-items: start; }
+.report-entry h3 { margin: 8px 0; font-size: 15px; line-height: 1.6; overflow-wrap: anywhere; }
+.report-entry p { margin: 7px 0; }
+.report-source-status { margin: 12px 0 20px; color: var(--ui-text-muted); font-size: var(--ui-font-small); }
+.report-source-status > summary, .report-work-evidence > summary { cursor: pointer; }
+.report-source-result { display: flex; gap: 12px; padding: 6px 0; flex-wrap: wrap; }
+.report-source-result > span:nth-child(2) { flex: 1; min-width: 150px; }
+.report-work-section { display: grid; gap: 12px; }
+.report-section-heading { font-size: 14px; color: var(--ui-text-muted); margin: 8px 0 0; }
+.report-work-card { padding: 22px; }
+.report-work-controls { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 12px; margin-top: 10px; }
+#report-work-dialog { box-sizing: border-box; width: min(620px, calc(100vw - 48px)); max-height: calc(100vh - 48px); overflow-y: auto; }
+.report-work-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.report-work-heading > h3 { min-width: 0; margin: 0; font-size: 17px; line-height: 1.6; overflow-wrap: anywhere; }
+.report-work-heading > .report-work-badge { flex-shrink: 0; margin-top: 2px; font-size: var(--ui-font-small); white-space: nowrap; }
+.report-work-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; color: var(--ui-text-muted); font-size: var(--ui-font-small); }
+.report-work-card > .report-work-meta { margin-top: 10px; }
+.report-work-project { overflow-wrap: anywhere; }
+.report-work-badge { padding: 3px 9px; border-radius: 6px; background: var(--ui-selected); color: var(--ui-accent); }
+.report-source-reference { position: relative; display: inline-flex; min-width: 0; max-width: 100%; }
+.report-work-evidence > .report-source-reference { display: flex; width: 100%; margin-top: 10px; }
+.report-source-reference::after { content: ''; position: absolute; left: 0; right: 0; top: 100%; height: 8px; }
+.report-source-trigger { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: underline dotted; text-underline-offset: 4px; }
+.report-source-popup { position: absolute; top: calc(100% + 8px); right: 0; z-index: 15; width: min(360px, calc(100vw - 32px)); max-height: min(360px, calc(100vh - 32px)); overflow-y: auto; box-sizing: border-box; padding: 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); background: var(--ui-surface); box-shadow: 0 8px 24px #243b3b26; visibility: hidden; pointer-events: none; }
+.report-source-reference:not(.is-dismissed):hover > .report-source-popup, .report-source-reference:not(.is-dismissed):focus-within > .report-source-popup { visibility: visible; pointer-events: auto; }
+.report-source-popup > .report-note { margin: 0 0 8px; }
+.report-source-popup .report-entry { padding: 12px; }
+.report-source-popup .report-entry-head { flex-direction: column; }
+.report-release-list { padding-left: 18px; color: var(--ui-text-muted); font-size: var(--ui-font-small); line-height: 1.9; }
+.report-work-description { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--ui-font-small); line-height: 1.8; }
+.report-work-description-empty { color: var(--ui-text-muted); }
+.report-work-release-summary { margin: 10px 0; color: var(--ui-text-muted); font-size: var(--ui-font-small); line-height: 1.8; overflow-wrap: anywhere; }
+.report-work-warning { color: var(--ui-text-muted); font-size: var(--ui-font-small); }
+.report-work-evidence { margin-top: 16px; font-size: var(--ui-font-small); color: var(--ui-text-muted); }
+.report-work-evidence > .report-entry { margin-top: 12px; }
+.report-excluded { margin-bottom: 20px; }
+.report-entry[data-included="false"] { opacity: .65; }
+.report-meta { display: flex; gap: 8px; flex-wrap: wrap; color: var(--ui-text-subtle); font-size: 11px; }
+.report-empty { text-align: center; padding: 42px 24px; }
+.report-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
+.report-wide { grid-column: 1 / -1; }
+.report-field input, .report-field textarea, .report-field select { width: 100%; min-width: 0; }
+.report-check { display: flex; gap: 8px; align-items: start; font-size: 12px; line-height: 1.7; }
+.report-check input { width: auto; margin-top: 4px; }
+.report-settings-section { margin: 22px 0; border-top: 1px solid var(--ui-divider); padding-top: 18px; }
+.report-source-row { margin: 12px 0; padding: 16px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); }
+.report-source-row .report-grid { margin-top: 0; }
+.report-gitlab-browser { display: grid; gap: 14px; margin: 18px 0; }
+.report-gitlab-projects { display: grid; gap: 9px; overflow-wrap: anywhere; padding: 8px 2px; }
+.report-gitlab-projects .report-check { min-width: 0; }
+.report-gitlab-projects input { flex: 0 0 auto; }
+.report-gitlab-tree { border: 1px solid var(--ui-border); border-radius: 12px; padding: 12px; }
+.report-gitlab-group > summary { cursor: pointer; padding: 7px 0; }
+.report-gitlab-group > summary .report-check { display: inline-flex; vertical-align: middle; max-width: calc(100% - 24px); }
+.report-gitlab-children { margin-left: 12px; padding-left: 18px; border-left: 1px solid var(--ui-border); }
+.report-gitlab-name { overflow-wrap: anywhere; min-width: 0; }
+.report-gitlab-group .report-check { gap: 9px; }
+.report-gitlab-group input { flex: 0 0 auto; }
+.report-gitlab-group summary .report-note { flex: 0 0 auto; }
+.report-gitlab-project { padding: 7px 0; }
+.report-dialog-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 20px; }
+.report-preview { width: 100%; min-height: 380px; resize: vertical; padding: 16px; font: 12px/1.9 ui-monospace, monospace; white-space: pre-wrap; }
+.report-week-card { padding: 20px; }
+.report-inline-input { display: flex; gap: 8px; align-items: center; }
+.report-inline-input input { flex: 1; min-width: 0; }
+#report-error, #report-feedback { margin: 10px 0 18px; }
+#report-settings-dialog { box-sizing: border-box; width: min(840px, calc(100vw - 48px)); height: min(760px, calc(100vh - 48px)); padding: 0; overflow: hidden; }
+#report-settings-form { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.report-settings-header { flex: 0 0 auto; padding: 22px 24px 0; }
+.report-settings-header h2 { margin-bottom: 16px; }
+.report-settings-header .ui-tabs { margin-bottom: 0; gap: 4px; flex-wrap: wrap; }
+.report-settings-body { flex: 1; min-height: 0; overflow-y: auto; padding: 0 24px 20px; scrollbar-gutter: stable; }
+.report-settings-body > [role="tabpanel"] { padding-top: 18px; }
+.report-settings-body .report-settings-section:first-child { margin-top: 0; border-top: 0; padding-top: 0; }
+.report-settings-footer { flex: 0 0 auto; border-top: 1px solid var(--ui-divider); padding: 14px 24px; background: var(--ui-surface); }
+.report-settings-footer-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.report-settings-footer-row .report-note { margin: 0; }
+.report-settings-footer-row .report-actions { margin-left: auto; flex-shrink: 0; }
+#report-settings-state[data-dirty="true"] { color: var(--ui-accent); }
+.report-settings-footer .ui-alert { margin: 0 0 10px; max-height: 72px; overflow-y: auto; }
+.report-settings-extra > summary { cursor: pointer; padding: 12px 0; font-size: var(--ui-font-control); font-weight: 600; }
+.report-settings-extra > summary .report-note { margin-left: 8px; font-weight: 400; }
+.report-gitlab-connection { padding: 10px 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); }
+.report-gitlab-connection > summary { cursor: pointer; font-size: var(--ui-font-small); overflow-wrap: anywhere; }
+.report-gitlab-connection > summary .report-note { margin-left: 12px; }
+#report-gitlab-settings > .report-toolbar { margin-bottom: 8px; }
+#report-gitlab-settings h3 { margin: 0; }
+#report-gitlab-selection, #report-gitlab-filters { border-bottom: 1px solid var(--ui-divider); }
+#report-gitlab-filters > .report-field { margin: 8px 0 16px; }
+#report-gitlab-author-mode { max-width: 320px; }
+@media (max-width: 600px) { .report-settings-header { padding: 16px 16px 0; } .report-settings-body { padding: 0 16px 16px; } .report-settings-footer { padding: 12px 16px; } }
+@media (max-width: 800px) { .report-grid, .report-match-grid { grid-template-columns: 1fr; } .report-wide { grid-column: auto; } .report-entry-head { flex-direction: column; } }

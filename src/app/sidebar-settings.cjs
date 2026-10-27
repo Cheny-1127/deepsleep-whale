@@ -1,6 +1,6 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path');
-const MENU_IDS=['home','subscriptions','archery','hooks','wechat','mail','quota','shortcuts','planner'];
+const MENU_IDS=['home','subscriptions','archery','hooks','wechat','mail','quota','shortcuts','planner','reports'];
 
 function normalize(saved) {
   const seen=new Set();

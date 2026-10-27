@@ -12,6 +12,7 @@ Notification.isSupported=()=>true;Notification.prototype.show=function(){global.
 const presence=require(${JSON.stringify(path.join(root,'src/clients/presence.cjs'))});presence.readClientPresence=async()=>({codex:false,cursor:false});
 const archery=require(${JSON.stringify(path.join(root,'src/channels/archery-pending.cjs'))}),createArchery=archery.createArcheryPending;archery.createArcheryPending=options=>createArchery({...options,readConfig:()=>{throw Object.assign(Error('测试隔离'),{archeryConfig:true});}});
 const planner=require(${JSON.stringify(path.join(root,'src/app/planner.cjs'))}),createPlanner=planner.createPlanner;planner.createPlanner=options=>(global.plannerTest=createPlanner({...options,now:()=>global.plannerNow}));
+const reports=require(${JSON.stringify(path.join(root,'src/app/work-reports.cjs'))}),createReports=reports.createWorkReports;reports.createWorkReports=options=>createReports({...options,now:()=>global.plannerNow,readEnvironment:()=>({})});
 const windows=require(${JSON.stringify(path.join(root,'src/app/windows.cjs'))}),createWindows=windows.createWindows;windows.createWindows=options=>({...createWindows(options),chime(){global.plannerChimes++;}});
 require(${JSON.stringify(path.join(root,'src/main.cjs'))});`);
 let app,panel,pet;
@@ -65,8 +66,174 @@ async function addTask(title,deadline) {
   await panel.locator('#planner-task-notes').fill('本地工作备注 <img src=x onerror=alert(1)>');
   await panel.locator('#planner-item-form [type="submit"]').click();await panel.waitForFunction(()=>!document.getElementById('planner-item-dialog').open);
 }
+async function checkTaskStatuses() {
+  const row=title=>panel.locator('.planner-task').filter({has:panel.getByRole('heading',{name:title,exact:true})});
+  const waitStatus=async(title,status)=>{await row(title).locator(`.planner-task-status[data-status="${status}"]`).waitFor();};
+  const save=async()=>{await panel.locator('#planner-item-form [type="submit"]').click();await panel.waitForFunction(()=>!document.getElementById('planner-item-dialog').open);};
+  await addTask('测试待处理','今天完成');await waitStatus('测试待处理','pending');
+  await row('测试待处理').getByRole('button',{name:'开始处理',exact:true}).click();await waitStatus('测试待处理','processing');
+  await row('测试待处理').getByRole('button',{name:'编辑',exact:true}).click();
+  assert.equal(await panel.locator('#planner-task-status-selected').textContent(),'处理中');
+  await choose('task-status','待处理');await panel.locator('#planner-cancel-item').click();
+  await waitStatus('测试待处理','processing');
+  await panel.locator('[data-filter="pending"]').click();assert.equal(await panel.locator('.planner-task').count(),0);
+  await panel.locator('[data-filter="processing"]').click();assert.equal(await panel.locator('.planner-task').count(),1);
+  // 写入失败不得把处理中显示成已完成；恢复磁盘后同一操作可重试。
+  fs.mkdirSync(path.join(dir,'planner.json.tmp'));
+  await row('测试待处理').getByRole('button',{name:'处理完成',exact:true}).click();
+  await panel.locator('#planner-error:not([hidden])').waitFor();await waitStatus('测试待处理','processing');
+  assert.equal((await snapshot()).tasks[0].completedAt,null);
+  fs.rmdirSync(path.join(dir,'planner.json.tmp'));
+  await row('测试待处理').getByRole('button',{name:'处理完成',exact:true}).click();
+  await panel.waitForFunction(()=>!document.querySelector('.planner-task'));
+  await panel.locator('[data-filter="done"]').click();await waitStatus('测试待处理','done');
+  assert.ok(Number.isFinite((await snapshot()).tasks[0].completedAt));
+  await row('测试待处理').getByRole('button',{name:'重新处理',exact:true}).click();
+  await panel.waitForFunction(()=>!document.querySelector('.planner-task'));
+  await panel.locator('[data-filter="all"]').click();await waitStatus('测试待处理','processing');
+  await row('测试待处理').getByRole('button',{name:'编辑',exact:true}).click();
+  await choose('task-status','待处理');await save();await waitStatus('测试待处理','pending');
+  assert.equal(await row('测试待处理').getByRole('checkbox').count(),0);
+  await row('测试待处理').getByRole('button',{name:'处理完成',exact:true}).click();await panel.waitForFunction(()=>!document.querySelector('.planner-task'));
+  await panel.locator('[data-filter="done"]').click();await waitStatus('测试待处理','done');
+  await row('测试待处理').getByRole('button',{name:'编辑',exact:true}).click();await choose('task-status','待处理');await save();await waitStatus('测试待处理','pending');
+  // 新建表单可指定状态；默认列表只含未完成，处理完成可从专门筛选与历史查看。
+  await newItem();await panel.locator('#planner-item-title').fill('测试处理中');await choose('task-status','处理中');await choose('deadline','明天完成');await save();
+  await newItem();assert.equal(await panel.locator('#planner-task-status-selected').textContent(),'待处理');
+  await panel.locator('#planner-item-title').fill('测试已完成');await chooseCategory('personal');await choose('task-status','处理完成');await save();
+  await panel.locator('#planner-current-tab').click();await panel.locator('[data-filter="all"]').click();assert.equal(await panel.locator('.planner-task').count(),2);
+  for(const status of ['pending','processing','done']) {
+    await panel.locator(`[data-filter="${status}"]`).click();assert.equal(await panel.locator('.planner-task').count(),1);
+    assert.equal(await panel.locator(`.planner-task .planner-task-status[data-status="${status}"]`).count(),1);
+  }
+  for(const filter of ['today','upcoming']) {await panel.locator(`[data-filter="${filter}"]`).click();assert.equal(await panel.locator('.planner-task').count(),1);}
+  await panel.locator('[data-category="personal"]').click();assert.equal(await panel.locator('.planner-task').count(),0);
+  await panel.locator('[data-category="all"]').click();
+  for(const width of [860,1060]) {
+    await app.evaluate(({BrowserWindow},width)=>BrowserWindow.getAllWindows().find(win=>win.webContents.getURL().endsWith('/index.html')).setSize(width,770),width);
+    await panel.locator('#planner-tasks').scrollIntoViewIfNeeded();
+    assert.ok(await panel.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+    assert.ok(await panel.locator('#planner-tasks').evaluate(el=>el.scrollWidth<=el.clientWidth));
+    await panel.screenshot({path:path.join(out,`planner-task-statuses-${width}.png`)});
+    await row('测试处理中').getByRole('button',{name:'编辑',exact:true}).click();await panel.locator('#planner-task-status-trigger').click();
+    assert.ok(await panel.locator('#planner-item-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth));
+    await panel.screenshot({path:path.join(out,`planner-task-status-editor-${width}.png`)});
+    await panel.keyboard.press('Escape');await panel.locator('#planner-cancel-item').click();
+  }
+  const saved=(await snapshot()).tasks;await assertWindowPolicy();await app.close();app=null;await launch();
+  assert.deepEqual((await snapshot()).tasks,saved);assert.equal(await panel.locator('.planner-task .planner-task-status').count(),2);
+  await assertWindowPolicy();assert.deepEqual(errors,[]);
+  console.log('Planner task statuses OK: transitions, filters, editor, explicit completion buttons, save failure, persistence, layout and hidden windows');
+}
+async function checkTaskHistory() {
+  const row=title=>panel.locator('.planner-task').filter({has:panel.getByRole('heading',{name:title,exact:true})});
+  const history=title=>panel.locator('.planner-history-card').filter({has:panel.getByRole('heading',{name:title,exact:true})});
+  const date=async value=>{await panel.locator('#planner-history-date').fill(value);await panel.locator('#planner-history-date').dispatchEvent('change');};
+  await addTask('完成支付回归','明天完成');
+  await row('完成支付回归').getByRole('button',{name:'开始处理',exact:true}).click();
+  await row('完成支付回归').getByRole('button',{name:'处理完成',exact:true}).click();
+  await panel.locator('#planner-completed-feedback').getByRole('button',{name:'查看完成历史'}).click();await history('完成支付回归').waitFor();
+  await history('完成支付回归').getByRole('button',{name:'查看当日日报',exact:true}).click();
+  await panel.locator('#reports-view:not([hidden])').waitFor();
+  assert.equal(await panel.locator('#report-date').inputValue(),'2026-10-26');
+  await panel.getByRole('heading',{name:'完成支付回归',exact:true}).waitFor();
+  await panel.locator('#report-preview-day').click();assert.match(await panel.locator('#report-day-content').inputValue(),/完成支付回归/);
+  await panel.locator('#report-preview-dialog [data-close]').click();
+  await panel.locator('#report-weekly-tab').click();
+  await panel.locator('#nav-planner').click();await panel.locator('#planner-history-tab').click();await history('完成支付回归').waitFor();
+  assert.equal(await panel.locator('#planner-current').isVisible(),false);
+  assert.equal(await panel.locator('#planner-history-list img').count(),0);
+  await history('完成支付回归').getByRole('button',{name:'查看当日日报'}).click();
+  await panel.locator('#report-daily:not([hidden])').waitFor();assert.equal(await panel.locator('#report-date').inputValue(),'2026-10-26');
+  await panel.locator('#nav-planner').click();await panel.locator('#planner-current-tab').click();
+  await panel.locator('[data-filter="done"]').click();
+  await row('完成支付回归').getByRole('button',{name:'删除',exact:true}).click();
+  await panel.getByRole('alertdialog').getByRole('button',{name:'删除待办',exact:true}).click();
+  await panel.waitForFunction(()=>!document.querySelector('.planner-task'));
+  await panel.locator('#planner-history-tab').click();await history('完成支付回归').getByText('原任务已删除 · 完成记录已保留',{exact:true}).waitFor();
+  await newItem();await panel.locator('#planner-item-title').fill('个人购物');await chooseCategory('personal');await choose('task-status','处理完成');
+  await panel.locator('#planner-item-form [type="submit"]').click();await panel.waitForFunction(()=>!document.getElementById('planner-item-dialog').open);
+  await panel.locator('#planner-history-tab').click();await history('个人购物').waitFor();
+  assert.equal(await history('个人购物').getByRole('button').count(),0);
+  await panel.locator('[data-category="work"]').click();await history('完成支付回归').waitFor();assert.equal(await panel.locator('.planner-history-card').count(),1);
+  await panel.locator('[data-category="personal"]').click();await history('个人购物').waitFor();assert.equal(await panel.locator('.planner-history-card').count(),1);
+  await panel.locator('[data-category="all"]').click();await panel.waitForFunction(()=>document.querySelectorAll('.planner-history-card').length===2);
+  for(const width of [860,1060]) {
+    await app.evaluate(({BrowserWindow},width)=>BrowserWindow.getAllWindows().find(win=>win.webContents.getURL().endsWith('/index.html')).setSize(width,770),width);
+    await panel.locator('#planner-heading').scrollIntoViewIfNeeded();
+    assert.ok(await panel.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+    assert.ok(await panel.locator('#planner-history').evaluate(el=>el.scrollWidth<=el.clientWidth));
+    await panel.screenshot({path:path.join(out,`planner-history-${width}.png`)});
+  }
+  await advance('2026-10-27T10:00:00');
+  await newItem();await panel.locator('#planner-item-title').fill('次日工作');await choose('task-status','处理完成');
+  await panel.locator('#planner-item-form [type="submit"]').click();await panel.waitForFunction(()=>!document.getElementById('planner-item-dialog').open);
+  await panel.locator('#planner-history-tab').click();await panel.locator('#planner-history-today').click();await history('次日工作').waitFor();assert.equal(await panel.locator('.planner-history-card').count(),1);
+  await date('2026-10-28');await panel.getByRole('heading',{name:'这一天没有完成记录',exact:true}).waitFor();
+  await date('2026-10-26');await history('完成支付回归').waitFor();
+  assert.match((await pet.evaluate(()=>window.whale.planner('history',{date:'2026-10-26'}))).error,/仅允许/);
+  assert.equal((await snapshot()).completedTasks,undefined);assert.equal((await snapshot()).historyCount,3);
+  const before=await panel.evaluate(()=>window.whale.planner('history',{date:'2026-10-26'}));
+  await assertWindowPolicy();await app.close();app=null;await launch();
+  await panel.locator('#planner-history-tab').click();await history('完成支付回归').waitFor();
+  assert.deepEqual(await panel.evaluate(()=>window.whale.planner('history',{date:'2026-10-26'})),before);
+  await history('完成支付回归').getByRole('button',{name:'查看当日日报'}).click();
+  await panel.getByRole('heading',{name:'完成支付回归',exact:true}).waitFor();
+  assert.equal(await panel.locator('#report-list .report-entry').count(),1);
+  await assertWindowPolicy();assert.deepEqual(errors,[]);
+  console.log('Planner completion history OK: day/category filters, snapshots after deletion, daily report links, personal exclusion, restart, IPC and hidden 860/1060px UI');
+}
+async function checkCompletedTasksLeaveList() {
+  const row=title=>panel.locator('.planner-task').filter({has:panel.getByRole('heading',{name:title,exact:true})});
+  const history=title=>panel.locator('.planner-history-card').filter({has:panel.getByRole('heading',{name:title,exact:true})});
+  await addTask('直接完成后移入历史','今天完成');
+  assert.equal(await row('直接完成后移入历史').getByRole('checkbox').count(),0,'待办用明确状态和按钮操作，不显示勾选框');
+  await row('直接完成后移入历史').getByRole('button',{name:'处理完成',exact:true}).click();
+  await panel.waitForFunction(()=>!document.querySelector('.planner-task')||document.querySelector('.planner-task-status[data-status="done"]'));
+  assert.equal(await panel.locator('.planner-task').count(),0,'完成任务应立即从默认待办列表移走');
+  await panel.locator('#planner-heading').scrollIntoViewIfNeeded();
+  assert.ok(await panel.locator('#planner-completed-feedback').evaluate(el=>!el.hidden&&el.scrollWidth<=el.clientWidth));
+  await panel.screenshot({path:path.join(out,'planner-completed-feedback.png')});
+  await panel.locator('#planner-completed-feedback').getByRole('button',{name:'查看完成历史'}).click();
+  await history('直接完成后移入历史').waitFor();
+  assert.equal(await history('直接完成后移入历史').locator('.planner-task-status[data-status="done"]').textContent(),'处理完成');
+  assert.equal(await panel.locator('#planner-history-date').inputValue(),'2026-10-26');
+  await addTask('按钮完成后移入历史','明天完成');
+  await row('按钮完成后移入历史').getByRole('button',{name:'开始处理',exact:true}).click();
+  // 保存失败仍留在原列表，不得提示成功或新增完成历史。
+  fs.mkdirSync(path.join(dir,'planner.json.tmp'));
+  await row('按钮完成后移入历史').getByRole('button',{name:'处理完成',exact:true}).click();
+  await panel.locator('#planner-error:not([hidden])').waitFor();
+  assert.equal((await snapshot()).historyCount,1);assert.equal(await row('按钮完成后移入历史').count(),1);
+  fs.rmdirSync(path.join(dir,'planner.json.tmp'));
+  await row('按钮完成后移入历史').getByRole('button',{name:'处理完成',exact:true}).click();
+  await panel.waitForFunction(()=>document.querySelector('#planner-task-count').textContent==='0');
+  assert.equal(await panel.locator('.planner-task').count(),0);
+  await panel.locator('#planner-completed-feedback').getByRole('button',{name:'查看完成历史'}).click();await history('按钮完成后移入历史').waitFor();
+  await addTask('编辑完成后移入历史','今天完成');
+  await row('编辑完成后移入历史').getByRole('button',{name:'编辑',exact:true}).click();await choose('task-status','处理完成');
+  await panel.locator('#planner-item-form [type="submit"]').click();await panel.waitForFunction(()=>!document.getElementById('planner-item-dialog').open);
+  assert.equal(await panel.locator('#planner-history-tab').getAttribute('aria-selected'),'true','表单保存完成状态后应展示完成历史');
+  await history('编辑完成后移入历史').waitFor();
+  assert.equal(await panel.locator('.planner-history-card').count(),3);
+  for(const width of [860,1060]) {
+    await app.evaluate(({BrowserWindow},width)=>BrowserWindow.getAllWindows().find(win=>win.webContents.getURL().endsWith('/index.html')).setSize(width,770),width);
+    await panel.locator('#planner-heading').scrollIntoViewIfNeeded();
+    assert.ok(await panel.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+    await panel.screenshot({path:path.join(out,`planner-completed-history-${width}.png`)});
+  }
+  await panel.locator('#planner-current-tab').click();assert.equal(await panel.locator('.planner-task').count(),0);
+  await assertWindowPolicy();await app.close();app=null;await launch();
+  assert.equal(await panel.locator('.planner-task').count(),0,'重启后已完成任务仍不应返回默认待办');
+  await panel.locator('#planner-history-tab').click();await history('编辑完成后移入历史').waitFor();assert.equal(await panel.locator('.planner-history-card').count(),3);
+  await assertWindowPolicy();assert.deepEqual(errors,[]);
+  console.log('Completed tasks leave default todo list OK: direct completion button, action, editor, failure preservation, explicit history status, restart and hidden layout');
+}
 (async()=>{try {
   await launch();
+  if(process.env.WHALE_PLANNER_COMPLETION_ONLY==='1'){await checkCompletedTasksLeaveList();return;}
+  if(process.env.WHALE_PLANNER_HISTORY_ONLY==='1'){await checkTaskHistory();return;}
+  if(process.env.WHALE_PLANNER_STATUS_ONLY==='1'){await checkTaskStatuses();return;}
   // 新入口可以切页，已有侧栏配置升级后仍保留全部菜单。
   assert.equal(await panel.locator('#home-view').isVisible(),false);
   assert.equal((await panel.evaluate(()=>window.whale.sidebar())).visible.includes('planner'),true);
@@ -151,9 +318,9 @@ async function addTask(title,deadline) {
   assert.equal(await panel.locator('#planner-task-list img').count(),0);
   await panel.getByRole('button',{name:'未排期',exact:true}).click();assert.equal(await panel.locator('.planner-task').count(),1);
   await panel.getByRole('button',{name:'今天',exact:true}).click();assert.equal(await panel.locator('.planner-task').count(),1);
-  await panel.getByRole('checkbox',{name:'完成待办：今天处理',exact:true}).click();await panel.waitForFunction(()=>!document.querySelector('.planner-task'));
-  await panel.getByRole('button',{name:'已完成',exact:true}).click();assert.equal(await panel.locator('.planner-task').count(),1);
-  await panel.getByRole('checkbox',{name:'恢复待办：今天处理',exact:true}).click();await panel.waitForFunction(()=>!document.querySelector('.planner-task'));
+  await panel.locator('.planner-task').getByRole('button',{name:'处理完成',exact:true}).click();await panel.waitForFunction(()=>!document.querySelector('.planner-task'));
+  await panel.getByRole('button',{name:'处理完成',exact:true}).click();assert.equal(await panel.locator('.planner-task').count(),1);
+  await panel.locator('.planner-task').getByRole('button',{name:'重新处理',exact:true}).click();await panel.waitForFunction(()=>!document.querySelector('.planner-task'));
   // 验证编辑后期限不滚动，以及失败时保留输入和已保存数据。
   await panel.getByRole('button',{name:'全部',exact:true}).click();
   await panel.locator('.planner-task').first().getByRole('button',{name:'编辑',exact:true}).click();
