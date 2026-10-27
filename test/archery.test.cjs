@@ -4,18 +4,18 @@ const {readArcheryConfig,createArcheryMcp,pendingPage,approvalResult,orderDetail
 const {createArcheryPending,INTERVAL_MS}=require('../src/channels/archery-pending.cjs');
 const tick=()=>new Promise(setImmediate);
 function response(page=1,{items=[{order_id:566,order_type:'work_order',title:'工单',submitter:'测试人员'}],more=false,total=items.length}={}) {
-  return {structuredContent:{status:'success',data:{items,pagination:{page,page_size:20,total:null,source_total:total,has_more:more,next_page:more?page+1:null,scope:'source_page_filtered'}}}};
+  return {structuredContent:{status:'success',data:{items:items.map(item=>({status:'workflow_manreviewing',...item})),pagination:{page,page_size:20,total:null,source_total:total,has_more:more,next_page:more?page+1:null,scope:'source_page_filtered'}}}};
 }
 function fixture(t,options={}) {
-  let config={fingerprint:'account-a',baseUrl:'https://archery.example.com',canApprove:true,canDetail:true},request=async page=>response(page),now=1000,confirm=async()=>false,approval=async id=>approved(id),detail=async id=>detailResponse(id),largeConfirm=async()=>false;
-  const jobs=new Set(),calls=[],clients=[],confirmations=[],approvalCalls=[],detailCalls=[],largeConfirmations=[];
+  let config={fingerprint:'account-a',baseUrl:'https://archery.example.com',canApprove:true,canDetail:true,canList:false,canExecute:true},request=async page=>response(page),now=1000,confirm=async()=>false,approval=async id=>approved(id),detail=async id=>detailResponse(id),largeConfirm=async()=>false;
+  const jobs=new Set(),calls=[],clients=[],confirmations=[],approvalCalls=[],executionCalls=[],detailCalls=[],largeConfirmations=[];
   const clock={now:()=>now,setTimeout:(fn,ms)=>{const job={fn,ms};jobs.add(job);return job;},clearTimeout:job=>jobs.delete(job)};
   const receiver=createArcheryPending({clock,readConfig:()=>{if(config instanceof Error)throw config;return config;},
-    createClient:()=>{const client={closed:0,close(){this.closed++;},pending(page,options){calls.push({page,...options});return request(page,options);},approve(id,options){approvalCalls.push({id,...options});return approval(id,options);},detail(id,options){detailCalls.push({id,...options});return detail(id,options);}};clients.push(client);return client;},
+    createClient:()=>{const client={closed:0,close(){this.closed++;},pending(page,options){calls.push({page,...options});return request(page,options);},execute(id,options){executionCalls.push({id,...options});return approval(id,options);},approve(id,options){approvalCalls.push({id,...options});return approval(id,options);},detail(id,options){detailCalls.push({id,...options});return detail(id,options);}};clients.push(client);return client;},
     confirmLargeDetail:async item=>{largeConfirmations.push(item);return largeConfirm(item);},
     confirmApproval:async item=>{confirmations.push(item);return confirm(item);},settingsFile:options.settingsFile});
   t.after(()=>receiver.close());
-  return {receiver,jobs,calls,clients,confirmations,approvalCalls,detailCalls,largeConfirmations,setDetail:fn=>detail=fn,setLargeConfirm:fn=>largeConfirm=fn,setConfirm:fn=>confirm=fn,setApproval:fn=>approval=fn,setNow:value=>now=value,setConfig:value=>config=value,setRequest:fn=>request=fn,
+  return {enableExecution(){config={...config,accountKey:config.accountKey||config.fingerprint,fingerprint:config.fingerprint+'-list',canList:true};},receiver,jobs,calls,clients,confirmations,approvalCalls,executionCalls,detailCalls,largeConfirmations,setDetail:fn=>detail=fn,setLargeConfirm:fn=>largeConfirm=fn,setConfirm:fn=>confirm=fn,setApproval:fn=>approval=fn,setNow:value=>now=value,setConfig:value=>config=value,setRequest:fn=>request=fn,
     async fire(){assert.equal(jobs.size,1);const job=[...jobs][0];assert.equal(job.ms,INTERVAL_MS);jobs.delete(job);now+=job.ms;job.fn();await tick();}};
 }
 
@@ -42,7 +42,7 @@ test('detail reads only a displayed ID through the existing account session; sum
   const f=fixture(t);await f.receiver.action('refresh');const value=await f.receiver.action('detail',566);
   assert.equal(value.sql,'SELECT 1;');assert.equal(f.clients.length,1);assert.deepEqual(f.detailCalls.map(c=>[c.id,c.allowLarge]),[[566,false]]);
   assert.doesNotMatch(JSON.stringify(f.receiver.snapshot()),/SELECT 1|审核通过/);
-  for(const id of [567,'566',true])await assert.rejects(f.receiver.action('detail',id),/当前待审核列表/);
+  for(const id of [567,'566',true])await assert.rejects(f.receiver.action('detail',id),/当前待处理列表/);
   f.setConfig({fingerprint:'blocked',canDetail:false});await f.receiver.action('refresh');
   await assert.rejects(f.receiver.action('detail',566),/详情不可用/);assert.equal(f.detailCalls.length,1);
 });
@@ -242,6 +242,48 @@ test('the requesting panel confirmation runs under the approval lock and cannot 
   assert.equal(f.receiver.snapshot().busy,true);await assert.rejects(f.receiver.action('approve',566),/正在处理/);
   release(true);await waiting;assert.deepEqual(f.approvalCalls.map(call=>call.id),[566]);assert.equal(f.receiver.snapshot().busy,false);
 });
+test('approval preview uses existing cached details and only reads uncached details on request under the same lock',async t=>{
+  const f=fixture(t);await f.receiver.action('refresh');let preview;
+  await f.receiver.action('approve',566,async(item,context)=>{
+    preview=context;assert.equal(context.cachedDetail,null);assert.equal(f.detailCalls.length,0);
+    await assert.rejects(f.receiver.action('detail',566),/正在处理/);
+    const value=await context.loadDetail(false);assert.equal(value.sql,'SELECT 1;');assert.equal(f.receiver.snapshot().busy,true);
+    assert.equal(f.approvalCalls.length,0);return false;
+  });
+  await assert.rejects(preview.loadDetail(false),/已结束/);assert.equal(f.detailCalls.length,1);
+  await f.receiver.action('approve',566,async(item,context)=>{
+    assert.equal(context.cachedDetail.sql,'SELECT 1;');assert.equal(context.cachedDetail.cached,true);return false;
+  });
+  assert.equal(f.detailCalls.length,1);assert.equal(f.approvalCalls.length,0);
+});
+test('cancelled approval aborts its preview and cannot cache or approve a late detail response',async t=>{
+  const f=fixture(t);await f.receiver.action('refresh');let context,cancel,release;
+  f.setDetail(()=>new Promise(resolve=>release=resolve));
+  const waiting=f.receiver.action('approve',566,(_item,preview)=>{context=preview;return new Promise(resolve=>cancel=resolve);});await tick();
+  const reading=context.loadDetail(false),rejected=assert.rejects(reading,/取消/);await tick();
+  cancel(false);await tick();assert.equal(f.detailCalls[0].signal.aborted,true);assert.equal(f.receiver.snapshot().busy,true);
+  release(detailResponse());await rejected;await waiting;assert.equal(f.approvalCalls.length,0);
+  await f.receiver.action('approve',566,async(_item,preview)=>{assert.equal(preview.cachedDetail,null);return false;});
+});
+test('approval preview retains large-content consent and never requests full content after cancellation',async t=>{
+  const f=fixture(t);await f.receiver.action('refresh');
+  f.setDetail(async(id,{allowLarge})=>allowLarge?detailResponse(id):{structuredContent:{status:'needs_confirmation',data:{order_id:id,order_type:'work_order',response_bytes:40000}}});
+  await f.receiver.action('approve',566,async(_item,preview)=>{
+    await assert.rejects(preview.loadDetail(true),/请先读取/);
+    assert.equal((await preview.loadDetail(false)).needsConfirmation,true);
+    assert.equal((await preview.loadDetail(true)).cancelled,true);assert.equal(f.detailCalls.length,1);
+    f.setLargeConfirm(async()=>true);assert.equal((await preview.loadDetail(true)).sql,'SELECT 1;');return false;
+  });
+  assert.deepEqual(f.detailCalls.map(call=>call.allowLarge),[false,true]);assert.equal(f.approvalCalls.length,0);
+});
+test('changing accounts during approval preview clears the old list and prevents detail access or approval',async t=>{
+  const f=fixture(t);await f.receiver.action('refresh');
+  await f.receiver.action('approve',566,async(_item,preview)=>{
+    f.setConfig({fingerprint:'another',canDetail:true,canApprove:true});
+    await assert.rejects(preview.loadDetail(false),/配置已变化/);return true;
+  });
+  assert.equal(f.detailCalls.length,0);assert.equal(f.approvalCalls.length,0);assert.equal(f.receiver.snapshot().items.length,0);
+});
 
 test('approval cancellation never calls MCP and each successful approval confirms exactly one displayed ID',async t=>{
   const f=fixture(t);await f.receiver.action('refresh');
@@ -249,7 +291,7 @@ test('approval cancellation never calls MCP and each successful approval confirm
   assert.match(f.receiver.snapshot().notice,/已取消/);
   f.setConfirm(async()=>true);await f.receiver.action('approve',566);
   assert.deepEqual(f.approvalCalls.map(call=>call.id),[566]);assert.equal(f.confirmations.length,2);
-  assert.equal(f.confirmations[1].title,'工单');assert.equal(f.receiver.snapshot().items.length,0);
+  assert.equal(f.confirmations[1].title,'工单');assert.equal(f.receiver.snapshot().items.length,1);
   assert.match(f.receiver.snapshot().notice,/#566 已审核通过.*未请求执行 SQL/);
   await f.receiver.action('refresh');await assert.rejects(f.receiver.action('approve',566),/已处理/);
   assert.equal(f.approvalCalls.length,1,'stale upstream rows cannot repeat a successful approval');
@@ -267,10 +309,10 @@ test('confirmation holds the request lock and cancellation releases it without r
 
 test('unlisted IDs, stale lists and disabled approval tools cannot show confirmation or issue approvals',async t=>{
   const f=fixture(t);await f.receiver.action('refresh');f.setConfirm(async()=>true);
-  for(const id of [567,'566',[566],true])await assert.rejects(f.receiver.action('approve',id),/当前待审核列表/);
-  f.setNow(301001);await assert.rejects(f.receiver.action('approve',566),/审批不可用/);
+  for(const id of [567,'566',[566],true])await assert.rejects(f.receiver.action('approve',id),/当前待处理列表/);
+  f.setNow(301001);await assert.rejects(f.receiver.action('approve',566),/审核不可用/);
   f.setConfig({fingerprint:'restricted',canApprove:false,baseUrl:'https://archery.example.com'});
-  await f.receiver.action('refresh');await assert.rejects(f.receiver.action('approve',566),/审批不可用/);
+  await f.receiver.action('refresh');await assert.rejects(f.receiver.action('approve',566),/审核不可用/);
   assert.equal(f.receiver.snapshot().canApprove,false);assert.equal(f.confirmations.length,0);assert.equal(f.approvalCalls.length,0);
 });
 
@@ -381,4 +423,155 @@ test('invalid or unsaved pause keeps automatic refresh enabled',async t=>{
   await assert.rejects(f.receiver.action('set-enabled','false'),/无效/);
   await assert.rejects(f.receiver.action('set-enabled',false),/保存失败/);
   assert.equal(f.receiver.snapshot().enabled,true);assert.equal(f.jobs.size,1);
+});
+
+// 两个来源的分页契约不同，执行列表必须由服务端按已审核状态过滤，不能借审核列表猜测。
+function emptyExecutionPage(page=1){const raw=executionPage(page);raw.structuredContent.data.items=[];raw.structuredContent.data.pagination.source_total=0;raw.structuredContent.data.pagination.total=0;return raw;}
+function executionPage(page=1,{status='workflow_review_pass',more=false}={}){
+  const raw=response(page,{items:[{order_id:566,order_type:'work_order',status}],more,total:more?42:1});
+  Object.assign(raw.structuredContent.data.pagination,{scope:'matching_orders',total:more?42:1});return raw;
+}
+async function readyExecution(f){
+  f.enableExecution();f.setRequest(async(page,{mode})=>mode==='execute'?executionPage(page):response(page));
+  await f.receiver.action('refresh');
+}
+test('one processing page merges both sources without extra page filling and the approved status wins duplicate IDs',async t=>{
+  const f=fixture(t);await readyExecution(f);
+  assert.deepEqual(f.calls.map(c=>[c.page,c.mode]),[[1,'approve'],[1,'execute']]);
+  assert.equal(f.receiver.snapshot().items.length,1);assert.equal(f.receiver.snapshot().items[0].status,'workflow_review_pass');
+  f.setRequest(async(page,{mode})=>mode==='execute'?executionPage(page,{more:true}):response(page,{items:[{order_id:567,order_type:'work_order'}],more:false}));
+  await f.receiver.action('refresh');assert.deepEqual(f.receiver.snapshot().items.map(i=>i.id),[567,566]);
+  assert.equal(f.receiver.snapshot().hasMore,true);await f.receiver.action('page',2);
+  assert.deepEqual(f.calls.slice(-2).map(c=>[c.page,c.mode]),[[2,'approve'],[2,'execute']]);
+  assert.equal(f.executionCalls.length,0);await assert.rejects(f.receiver.action('set-mode','execute'),/不支持/);
+});
+test('execution requires a separate explicit confirmation and cached details remain available within it',async t=>{
+  const f=fixture(t);await readyExecution(f);await f.receiver.action('detail',566);
+  await f.receiver.action('execute',566);assert.equal(f.executionCalls.length,0,'默认取消执行');
+  await f.receiver.action('execute',566,async(item,preview)=>{
+    assert.equal(item.id,566);assert.equal(preview.operation,'execute');assert.equal(preview.cachedDetail.sql,'SELECT 1;');
+    assert.equal(preview.cachedDetail.status,'workflow_review_pass');return true;
+  });
+  assert.deepEqual(f.executionCalls.map(c=>c.id),[566]);assert.equal(f.approvalCalls.length,0);
+  assert.match(f.receiver.snapshot().notice,/执行请求已受理.*最终结果/);assert.equal(f.receiver.snapshot().items.length,0);
+  await f.receiver.action('refresh');await assert.rejects(f.receiver.action('execute',566,async()=>true),/已处理/);
+});
+test('approval automatically verifies status in the same list without executing or rereading cached SQL',async t=>{
+  const f=fixture(t);let passed=false;
+  f.enableExecution();f.setRequest(async(page,{mode})=>mode==='execute'?(passed?executionPage(page):emptyExecutionPage(page)):response(page,{items:passed?[]:[{order_id:566,order_type:'work_order'}]}));
+  f.setApproval(async id=>{passed=true;return approved(id);});f.setConfirm(async()=>true);
+  await f.receiver.action('refresh');await f.receiver.action('detail',566);await f.receiver.action('approve',566);
+  assert.equal(f.executionCalls.length,0);assert.equal(f.receiver.snapshot().items[0].status,'workflow_review_pass');
+  assert.equal((await f.receiver.action('detail',566)).cached,true);assert.equal(f.detailCalls.length,1);
+  await f.receiver.action('execute',566,async()=>false);assert.equal(f.executionCalls.length,0);
+  await f.receiver.action('execute',566,async()=>true);assert.equal(f.executionCalls.length,1);assert.equal(f.approvalCalls.length,1);
+});
+test('execution rejects wrong status, unknown IDs, stale data and disabled tools before confirmation',async t=>{
+  const f=fixture(t);await f.receiver.action('refresh');let confirmations=0;const confirm=async()=>{confirmations++;return true;};
+  await assert.rejects(f.receiver.action('execute',566,confirm),/状态/);await readyExecution(f);
+  await assert.rejects(f.receiver.action('approve',566,confirm),/状态/);
+  for(const id of [567,'566',true,[566]])await assert.rejects(f.receiver.action('execute',id,confirm),/当前待处理列表/);
+  f.setNow(301001);await assert.rejects(f.receiver.action('execute',566,confirm),/执行不可用/);
+  f.setConfig({fingerprint:'no-execute',canList:true,canExecute:false});await f.receiver.action('refresh');
+  await assert.rejects(f.receiver.action('execute',566,confirm),/执行不可用/);
+  f.setConfig({fingerprint:'no-list',canList:false,canExecute:true});f.setRequest(async page=>response(page));await f.receiver.action('refresh');
+  assert.equal(f.receiver.snapshot().canExecute,false);assert.equal(f.receiver.snapshot().canListExecute,false);
+  assert.equal(confirmations,0);assert.equal(f.executionCalls.length,0);
+  for(const status of ['workflow_manreviewing','workflow_finish','workflow_executing','',undefined]){
+    const raw=executionPage();raw.structuredContent.data.items[0].status=status;
+    assert.throws(()=>pendingPage(raw,1,'execute'));
+  }
+});
+test('unknown approval cannot be bypassed by a refreshed execution status',async t=>{
+  const f=fixture(t);await f.receiver.action('refresh');f.setConfirm(async()=>true);f.setApproval(async()=>{throw Error('timeout');});
+  await f.receiver.action('approve',566);f.enableExecution();f.setRequest(async(page,{mode})=>mode==='execute'?executionPage(page):response(page));await f.receiver.action('refresh');
+  await assert.rejects(f.receiver.action('execute',566,async()=>true),/待核实/);assert.equal(f.executionCalls.length,0);
+});
+test('execution confirmation holds the global lock and cannot survive account changes or expiry',async t=>{
+  for(const change of ['account','expiry','module']){
+    const f=fixture(t);await readyExecution(f);let finish;
+    const task=f.receiver.action('execute',566,()=>new Promise(resolve=>finish=resolve));await tick();
+    await assert.rejects(f.receiver.action('execute',566),/正在处理/);
+    await assert.rejects(f.receiver.action('page',2),/正在刷新/);
+    if(change==='account')f.setConfig({fingerprint:'another',canExecute:true,canList:true});
+    if(change==='expiry')f.setNow(301001);
+    if(change==='module'){f.receiver.setModuleEnabled(false);f.receiver.setModuleEnabled(true);}
+    finish(true);await task;assert.equal(f.executionCalls.length,0,change);
+  }
+});
+test('unknown execution is never retried by polling, module toggles or password changes for the same account',async t=>{
+  const f=fixture(t);const config={fingerprint:'one',accountKey:'same-user',canApprove:true,canDetail:true,canList:true,canExecute:true};
+  f.setConfig(config);await readyExecution(f);let reject;
+  f.setApproval(()=>new Promise((_,fail)=>reject=fail));
+  const task=f.receiver.action('execute',566,async()=>true);await tick();f.receiver.setModuleEnabled(false);
+  assert.equal(f.executionCalls[0].signal.aborted,false);reject(Error('secret timeout'));await task;
+  assert.match(f.receiver.snapshot().notice,/执行结果未知/);assert.doesNotMatch(f.receiver.snapshot().notice,/secret/);
+  f.receiver.setModuleEnabled(true);await tick();f.setConfig({...config,fingerprint:'password-changed'});await f.receiver.action('refresh');
+  assert.equal(f.receiver.snapshot().items[0].executionStatus,'unknown');
+  await assert.rejects(f.receiver.action('execute',566,async()=>true),/待核实/);assert.equal(f.executionCalls.length,1);
+});
+test('a rejected execution needs a fresh list and new confirmation, never an automatic retry',async t=>{
+  const f=fixture(t);await readyExecution(f);f.setApproval(async id=>approved(id,'needs_confirmation'));
+  await f.receiver.action('execute',566,async()=>true);assert.equal(f.receiver.snapshot().items[0].executionStatus,'failed');
+  await assert.rejects(f.receiver.action('execute',566,async()=>true),/待核实/);
+  await f.receiver.action('refresh');assert.equal(f.executionCalls.length,1);
+  f.setApproval(async id=>approved(id));await f.receiver.action('execute',566,async()=>true);assert.equal(f.executionCalls.length,2);
+});
+test('execution stdio uses an approved-status list and exactly one explicit ID with no implicit approval',async t=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'whale-archery-execute-wire-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  const trace=path.join(dir,'trace.jsonl'),client=createArcheryMcp({canList:true,canExecute:true,server:{command:process.execPath,
+    args:[path.join(__dirname,'fixtures/archery-mcp.cjs')],env:{TRACE_FILE:trace}},startupMs:3000,timeoutMs:3000});
+  try{
+    await assert.rejects(client.execute(566),/execution_unavailable/);
+    assert.equal(pendingPage(await client.pending(1,{mode:'execute'}),1,'execute').items[0].id,566);
+    for(const id of ['566',true,[566],-1])await assert.rejects(client.execute(id),/execution_unavailable/);
+    assert.equal(approvalResult(await client.execute(566),566),'success');
+  }finally{await client.close();}
+  assert.deepEqual(fs.readFileSync(trace,'utf8').trim().split('\n').map(JSON.parse).filter(r=>r.method==='tools/call').map(r=>r.params),[
+    {name:'work_order_list',arguments:{page:1,page_size:20,status:'workflow_review_pass'}},
+    {name:'work_order_execute',arguments:{order_ids:[566]}}
+  ]);
+});
+test('list and execute tool policy changes invalidate the session without disclosing configuration',t=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'whale-archery-policy-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  const file=path.join(dir,'config.toml');
+  const read=disabled=>{fs.writeFileSync(file,`[mcp_servers.archery]\ncommand="/fixture/archery-mcp"\ndisabled_tools=["${disabled}"]\n`);return readArcheryConfig({configFile:file,env:{}});};
+  const listing=read('work_order_execute');assert.equal(listing.canList,true);assert.equal(listing.canExecute,false);
+  const execution=read('work_order_list');assert.equal(execution.canList,false);assert.equal(execution.canExecute,true);
+  assert.notEqual(listing.fingerprint,execution.fingerprint);assert.equal(listing.accountKey,execution.accountKey);
+});
+
+test('a combined refresh publishes neither source when the other source fails',async t=>{
+  const f=fixture(t);await readyExecution(f);const before=f.receiver.snapshot();
+  f.setRequest(async(page,{mode})=>{
+    if(mode==='execute')throw Error('private-service-error');
+    return response(page,{items:[{order_id:999,order_type:'work_order'}]});
+  });
+  await f.receiver.action('refresh');const after=f.receiver.snapshot();
+  assert.deepEqual(after.items,before.items);assert.equal(after.lastChecked,before.lastChecked);
+  assert.equal(after.state,'error');assert.equal(after.canApprove,false);assert.equal(after.canExecute,false);
+  assert.doesNotMatch(after.error,/private-service-error/);assert.equal(f.calls.length,4);
+});
+test('an unavailable execution-list tool keeps review-only reading usable without extra requests',async t=>{
+  const f=fixture(t);await f.receiver.action('refresh');
+  assert.deepEqual(f.calls.map(c=>c.mode),['approve']);assert.equal(f.receiver.snapshot().items.length,1);
+  assert.equal(f.receiver.snapshot().canApprove,true);assert.equal(f.receiver.snapshot().canExecute,false);
+  assert.equal(f.receiver.snapshot().canListExecute,false);
+});
+test('accepted approval does not infer that a multi-stage review is complete',async t=>{
+  const f=fixture(t);f.enableExecution();f.setRequest(async(page,{mode})=>mode==='execute'?emptyExecutionPage(page):response(page));
+  f.setConfirm(async()=>true);await f.receiver.action('refresh');await f.receiver.action('approve',566);
+  assert.equal(f.receiver.snapshot().items[0].status,'workflow_manreviewing');assert.equal(f.receiver.snapshot().items[0].approvalStatus,'success');
+  await assert.rejects(f.receiver.action('execute',566,async()=>true),/状态/);assert.equal(f.executionCalls.length,0);
+  assert.deepEqual(f.calls.map(c=>c.mode),['approve','execute','approve','execute']);
+});
+test('a failed status refresh after approval retains its known success and never retries the write',async t=>{
+  const f=fixture(t);await readyExecution(f);
+  // 先回到同屏的待审核状态，再模拟写入成功后的只读网络失败。
+  f.setRequest(async(page,{mode})=>mode==='execute'?emptyExecutionPage(page):response(page));await f.receiver.action('refresh');
+  f.setApproval(async id=>{f.setRequest(async()=>{throw Error('offline');});return approved(id);});
+  await f.receiver.action('approve',566,async()=>true);
+  assert.equal(f.receiver.snapshot().state,'error');assert.equal(f.receiver.snapshot().items[0].approvalStatus,'success');
+  assert.equal(f.approvalCalls.length,1);assert.equal(f.executionCalls.length,0);
+  await assert.rejects(f.receiver.action('approve',566,async()=>true),/已处理/);
 });

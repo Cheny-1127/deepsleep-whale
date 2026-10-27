@@ -40,3 +40,32 @@ test('undeliverable and expired confirmations resolve to cancellation',async t=>
   const keepAlive=setTimeout(()=>{},1000);t.after(()=>clearTimeout(keepAlive));
   assert.equal(await f.bridge.request(f.sender,f.item),false);assert.equal(f.messages.at(-1).cancelled,true);
 });
+test('detail reads require the original confirmation and block approval until the read finishes',async t=>{
+  const f=fixture(t);let release,reads=0;
+  const cachedDetail={id:566,sql:'SELECT cached;'};
+  const waiting=f.bridge.request(f.sender,f.item,{cachedDetail,canDetail:true,loadDetail:async()=>{reads++;return new Promise(resolve=>release=resolve);}}),token=f.messages[0].token;
+  assert.deepEqual(f.messages[0].cachedDetail,cachedDetail);
+  await assert.rejects(f.bridge.detail(new EventEmitter(),{token,allowLarge:false}),/失效/);
+  await assert.rejects(f.bridge.detail(f.sender,{token:'stale',allowLarge:false}),/失效/);
+  assert.equal(reads,0);
+  const reading=f.bridge.detail(f.sender,{token,allowLarge:false});assert.equal(f.bridge.reply(f.sender,{token,confirmed:true}),false);
+  await assert.rejects(f.bridge.detail(f.sender,{token,allowLarge:false}),/正在读取/);
+  release(cachedDetail);assert.deepEqual(await reading,cachedDetail);
+  assert.equal(f.bridge.reply(f.sender,{token,confirmed:true}),true);assert.equal(await waiting,true);
+  await assert.rejects(f.bridge.detail(f.sender,{token,allowLarge:false}),/失效/);
+});
+test('cancellation remains available while loading and rejects the late detail result',async t=>{
+  const f=fixture(t);let release;
+  const waiting=f.bridge.request(f.sender,f.item,{canDetail:true,loadDetail:()=>new Promise(resolve=>release=resolve)}),token=f.messages[0].token;
+  const reading=f.bridge.detail(f.sender,{token,allowLarge:false}),rejected=assert.rejects(reading,/取消/);
+  assert.equal(f.bridge.reply(f.sender,{token,confirmed:false}),true);assert.equal(await waiting,false);
+  release({sql:'late'});await rejected;
+});
+test('execution confirmation is tagged by the main process and the review token cannot be reused',async t=>{
+  const f=fixture(t);const review=f.bridge.request(f.sender,f.item),old=f.messages[0].token;
+  assert.equal(f.messages[0].operation,'approve');f.bridge.reply(f.sender,{token:old,confirmed:true});await review;
+  const executing=f.bridge.request(f.sender,f.item,{operation:'execute'}),message=f.messages.at(-1);
+  assert.equal(message.operation,'execute');assert.notEqual(message.token,old);
+  assert.equal(f.bridge.reply(f.sender,{token:old,confirmed:true}),false);
+  assert.equal(f.bridge.reply(f.sender,{token:message.token,confirmed:false}),true);assert.equal(await executing,false);
+});

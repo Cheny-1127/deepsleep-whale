@@ -247,4 +247,8 @@ button.archery-message{display:block;width:100%;min-width:0;padding:12px;border-
 button.archery-message:hover,button.archery-message[aria-expanded="true"]{background:var(--ui-canvas)}button.archery-message:focus-visible{outline:2px solid var(--ui-accent);outline-offset:2px}
 .archery-detail{grid-column:1/-1;min-width:0;padding:16px;border:1px solid var(--ui-border);border-radius:10px;background:var(--ui-canvas)}
 .archery-detail h3{margin:16px 0 8px;font-size:12px}.archery-detail p{font-size:12px;line-height:1.7}.archery-detail pre{margin:0;padding:12px;max-height:360px;overflow:auto;border-radius:6px;background:var(--ui-surface);font-size:12px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}.archery-detail>.text-button{margin-top:14px}.archery-detail-error{color:#b42318}
+/* 审核弹窗复用详情内容，长 SQL 独立滚动，确认按钮保持在弹窗底部可见。 */
+.ui-confirm-dialog:has(.archery-approval-detail){width:min(740px,calc(100vw - 48px))}
+.archery-approval-detail pre{max-height:220px}.archery-approval-detail{margin-bottom:16px}
+.ui-confirm-dialog:has(.archery-approval-detail) .ui-confirm-actions{position:sticky;bottom:-24px;padding-top:16px;background:var(--ui-surface)}
 @media(max-width:600px){.archery-order{grid-template-columns:minmax(0,1fr)}.archery-actions{justify-content:flex-start}}

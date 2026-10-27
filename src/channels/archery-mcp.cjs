@@ -57,12 +57,12 @@ function readArcheryConfig({home=process.env.CODEX_HOME||path.join(os.homedir(),
   const canApprove=(!Array.isArray(entry.enabled_tools)||entry.enabled_tools.includes('work_order_approve'))&&
     !entry.disabled_tools?.includes('work_order_approve');
   const allowed=name=>(!Array.isArray(entry.enabled_tools)||entry.enabled_tools.includes(name))&&!entry.disabled_tools?.includes(name);
-  const canDetail=allowed('work_order_detail'),canExecute=allowed('work_order_execute');
-  const fingerprint=hash(JSON.stringify({server,canApprove,canDetail,canExecute,installed:installed.revision}));
+  const canDetail=allowed('work_order_detail'),canExecute=allowed('work_order_execute'),canList=allowed('work_order_list');
+  const fingerprint=hash(JSON.stringify({server,canApprove,canDetail,canExecute,canList,installed:installed.revision}));
   // 密码变化只使会话失效；同一账号的未知审批结果继续防重。未知启动器按配置来源保守隔离。
   const accountKey=hash(JSON.stringify(baseUrl&&metadata.ARCHERY_USERNAME?[baseUrl,metadata.ARCHERY_USERNAME]:
     [configFile||path.join(home,'config.toml'),entry.command,entry.args||[],entry.cwd||'']));
-  return {server,fingerprint,accountKey,canApprove,canDetail,canExecute,baseUrl,
+  return {server,fingerprint,accountKey,canApprove,canDetail,canExecute,canList,baseUrl,
     startupMs:Math.min(120000,Math.max(1000,(Number(entry.startup_timeout_sec)||30)*1000)),
     timeoutMs:Math.min(180000,Math.max(1000,(Number(entry.tool_timeout_sec)||90)*1000))};
 }
@@ -73,15 +73,22 @@ function createArcheryMcp(config) {
   const transport=new StdioClientTransport({...config.server,stderr:'ignore'});
   let connected=false;
   return {
-    async pending(page,{signal}={}) {
+    async pending(page,{signal,mode='approve'}={}) {
+      if(!['approve','execute'].includes(mode)||mode==='execute'&&!config.canList)throw Error('list_unavailable');
       if(!connected){await client.connect(transport,{signal,timeout:config.startupMs});connected=true;}
-      // 页面没有任意工具调用入口；读取和逐笔审批分别使用固定方法。
+      // 审核只查我的待办；执行按已审核状态查当前账号可见工单，两个来源均只读指定页。
+      if(mode==='execute')return client.callTool({name:'work_order_list',arguments:{page,page_size:PAGE_SIZE,status:'workflow_review_pass'}},undefined,{signal,timeout:config.timeoutMs});
       return client.callTool({name:'work_order_pending_list',arguments:{page,page_size:PAGE_SIZE}},undefined,{signal,timeout:config.timeoutMs});
     },
     async approve(id,{signal}={}) {
       if(!config.canApprove||!connected||!Number.isSafeInteger(id)||id<1)throw new Error('approval_unavailable');
       // 不建新会话、不批量、不重试，更不追加执行 SQL。
       return client.callTool({name:'work_order_approve',arguments:{order_ids:[id],remark:'审核通过'}},undefined,{signal,timeout:config.timeoutMs});
+    },
+    async execute(id,{signal}={}) {
+      if(!config.canExecute||!connected||!Number.isSafeInteger(id)||id<1)throw new Error('execution_unavailable');
+      // 执行需独立确认，只发送一个真实工单号；受理不代表 SQL 已完成，不自动重试。
+      return client.callTool({name:'work_order_execute',arguments:{order_ids:[id]}},undefined,{signal,timeout:config.timeoutMs});
     },
     async detail(id,{signal,allowLarge=false}={}) {
       if(!config.canDetail||!connected||!Number.isSafeInteger(id)||id<1||typeof allowLarge!=='boolean')throw new Error('detail_unavailable');
@@ -126,6 +133,7 @@ function orderDetail(response,id){
     status:text(workflow.status),group:text(workflow.group_name),createdAt:text(workflow.create_time),
     sql:text(data.sql_content),execution:content(data.execute_result)};
 }
+// 审核与执行共用 MCP 的逐笔批次结果格式；执行 success 只表示受理，不能解释为 SQL 已完成。
 function approvalResult(response,id) {
   const payload=payloadOf(response),data=payload?.data;
   if(payload?.status==='success'&&Array.isArray(data?.succeeded)&&data.succeeded.length===1&&data.succeeded[0]===id&&
@@ -137,10 +145,11 @@ function approvalResult(response,id) {
   return 'unknown';
 }
 // 仅接受明确成功的摘要页，不能把混合来源总数当成待我审核数据工单总数。
-function pendingPage(response,page) {
+function pendingPage(response,page,mode='approve') {
   const payload=payloadOf(response),data=payload?.data,p=data?.pagination;
   if(payload?.status!=='success'||!Array.isArray(data?.items)||data.items.length>PAGE_SIZE||
-    p?.page!==page||p.page_size!==PAGE_SIZE||p.scope!=='source_page_filtered'||p.total!==null||
+    p?.page!==page||p.page_size!==PAGE_SIZE||
+    (mode==='approve'?(p.scope!=='source_page_filtered'||p.total!==null):(mode!=='execute'||p.scope!=='matching_orders'||p.total!==p.source_total))||
     !Number.isSafeInteger(p.source_total)||p.source_total<data.items.length||typeof p.has_more!=='boolean'||
     p.next_page!==(p.has_more?page+1:null))throw new Error('invalid_response');
   const text=value=>{
@@ -149,7 +158,8 @@ function pendingPage(response,page) {
     return String(value);
   };
   const items=data.items.map(item=>{
-    if(!Number.isSafeInteger(item.order_id)||item.order_id<1||item.order_type!=='work_order')throw new Error('invalid_response');
+    if(!Number.isSafeInteger(item.order_id)||item.order_id<1||item.order_type!=='work_order'||
+      (mode==='execute'&&item.status!=='workflow_review_pass'))throw new Error('invalid_response');
     return {id:item.order_id,title:text(item.title)||'（无标题）',submitter:text(item.submitter),
       instance:text(item.instance),database:text(item.database),createdAt:text(item.created_at),status:text(item.status)};
   });

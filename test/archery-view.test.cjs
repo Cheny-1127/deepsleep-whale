@@ -9,36 +9,70 @@ function fixture() {
     replaceChildren(...children){this.children=children;}
     addEventListener(name,handler){this.handlers[name]=handler;}
     click(){this.handlers.click?.();}
+    closest(){return null;}
   }
   const elements=new Map();
   for(const [,id] of fs.readFileSync(path.join(__dirname,'../src/ui/index.html'),'utf8').matchAll(/id="([^"]+)"/g))elements.set(id,new Element());
-  let data={state:'connected',busy:false,canApprove:true,canDetail:true,page:1,items:[],hasMore:true,sourceTotal:50,lastChecked:1000},fail=false;
+  let data={state:'connected',busy:false,canApprove:true,canDetail:true,canListExecute:true,canExecute:true,mode:'approve',page:1,items:[],hasMore:true,sourceTotal:50,lastChecked:1000},fail=false;
   let detail=async id=>({id,sql:'SELECT 1; <img src=x onerror=bad()>',review:'审核结果',execution:'尚未执行'});
   let connection={valid:true,configFile:'/fixture/config.toml',defaultFile:'/default/config.toml',permissions:{detail:true,approve:true,execute:false}};
-  const calls=[],timers=[],confirmations=[];let onConfirmation,confirmed=false;
+  const calls=[],timers=[],confirmations=[];let onConfirmation,confirmed=false,confirmImpl=async()=>confirmed;
   const window={whale:{onArcheryConfirmation:callback=>onConfirmation=callback,archery:async(name,value)=>{
     calls.push({name,value});if(fail)throw new Error('raw transport failure');
     if(name==='connection')return {value:connection};
     if(name==='choose-config')return {value:'/chosen/config.toml'};
     if(name==='save-config'){connection={...connection,valid:true,configFile:value};return {value:connection};}
-    if(name==='detail'||name==='detail-large')return {value:await detail(value,name)};
+    if(name==='detail'||name==='detail-large'||name==='approval-detail')return {value:await detail(value,name)};
+    if(name==='set-mode')data={...data,mode:value,page:1};
     if(name==='page')data={...data,page:value};
     if(name==='set-enabled')data={...data,enabled:value};return {value:data};
   }}};
   const source=fs.readFileSync(path.join(__dirname,'../src/ui/archery-view.mjs'),'utf8').replace(/^import .*;\n/gm,'').replace('export function','function');
-  vm.runInNewContext(source+'\ncreateArcheryView();',{window,document:{getElementById:id=>elements.get(id),createElement:tag=>Object.assign(new Element(),{tagName:tag})},Date,updateSidebarStatus:()=>{},confirmAction:async options=>{confirmations.push(options);return confirmed;},setInterval:fn=>timers.push(fn)});
+  vm.runInNewContext(source+'\ncreateArcheryView();',{window,document:{getElementById:id=>elements.get(id),createElement:tag=>Object.assign(new Element(),{tagName:tag})},Date,updateSidebarStatus:()=>{},confirmAction:async options=>{confirmations.push(options);return confirmImpl();},setInterval:fn=>timers.push(fn)});
   const get=id=>elements.get('archery-'+id);
-  return {get,calls,timers,confirmations,confirmation:request=>onConfirmation(request),setConfirmed:value=>confirmed=value,set:value=>data={...data,...value},setConnection:value=>connection={...connection,...value},setDetail:fn=>detail=fn,fail:()=>fail=true,async sync(){elements.get('nav-archery').click();await tick();}};
+  return {get,calls,timers,confirmations,confirmation:request=>onConfirmation(request),setConfirmed:value=>confirmed=value,setConfirm:fn=>confirmImpl=fn,set:value=>data={...data,...value,...(value.items?{items:value.items.map(item=>({status:'workflow_manreviewing',...item}))}:{})},setConnection:value=>connection={...connection,...value},setDetail:fn=>detail=fn,fail:()=>fail=true,async sync(){elements.get('nav-archery').click();await tick();}};
 }
 test('approval confirmation renders the main-process item and replies only with the issued token and explicit choice',async()=>{
   const f=fixture(),request={token:'main-request',item:{id:566,title:'<img src=x>',submitter:'测试人',instance:'实例',database:'数据库'}};
   await f.confirmation(request);assert.equal(f.confirmations[0].owner,f.get('view'));
   assert.match(f.confirmations[0].title,/#566/);assert.match(f.confirmations[0].message,/<img src=x>.*\n提交人：测试人/);
-  assert.match(f.confirmations[0].message,/不请求执行 SQL/);
+  assert.doesNotMatch(f.confirmations[0].message,/仅审核这一笔|不请求执行 SQL/);
   assert.equal(f.calls.at(-1).name,'confirm-approval');assert.equal(f.calls.at(-1).value.token,'main-request');assert.equal(f.calls.at(-1).value.confirmed,false);
   f.setConfirmed(true);await f.confirmation({...request,token:'next-request'});
   assert.equal(f.calls.at(-1).value.token,'next-request');assert.equal(f.calls.at(-1).value.confirmed,true);
   assert.equal(f.calls.some(c=>c.name==='approve'),false,'确认回复不能另行指定工单或直接发起审批');
+});
+test('approval directly displays provided cached SQL without another detail request',async()=>{
+  const f=fixture();await f.confirmation({token:'cached',canDetail:true,item:{id:566,title:'缓存工单'},cachedDetail:{id:566,sql:'SELECT cached;',execution:'未执行',cached:true}});
+  const box=f.confirmations[0].content;
+  assert.deepEqual(box.children.filter(c=>c.tagName==='pre').map(c=>c.textContent),['SELECT cached;','未执行']);
+  assert.equal(f.calls.some(c=>c.name==='approval-detail'),false);
+  assert.equal(box.children.some(c=>c.textContent==='获取详情'),false);
+});
+test('uncached approval details load only on click and failed reads offer retry',async()=>{
+  const f=fixture();let finish;f.setConfirm(()=>new Promise(resolve=>finish=resolve));
+  const waiting=f.confirmation({token:'uncached',canDetail:true,item:{id:566,title:'待获取'}});await tick();
+  const box=f.confirmations[0].content;assert.equal(f.calls.length,0);
+  f.setDetail(async()=>{throw Error('读取失败');});box.children.find(c=>c.textContent==='获取详情').click();await tick();
+  assert.equal(box.children[0].textContent,'读取失败');
+  f.setDetail(async()=>({id:566,sql:'SELECT loaded;',execution:''}));box.children.find(c=>c.textContent==='重试获取详情').click();await tick();
+  assert.equal(box.children.find(c=>c.tagName==='pre').textContent,'SELECT loaded;');
+  const reads=f.calls.filter(c=>c.name==='approval-detail');assert.equal(reads.length,2);assert.equal(reads[0].value.token,'uncached');assert.equal(reads[0].value.allowLarge,false);
+  finish(false);await waiting;
+});
+test('closing an approval dialog discards late detail content',async()=>{
+  const f=fixture();let finish,release;f.setConfirm(()=>new Promise(resolve=>finish=resolve));f.setDetail(()=>new Promise(resolve=>release=resolve));
+  const waiting=f.confirmation({token:'closing',canDetail:true,item:{id:566,title:'取消'}});await tick();
+  const box=f.confirmations[0].content;box.children.find(c=>c.textContent==='获取详情').click();await tick();
+  finish(false);await waiting;release({id:566,sql:'late-private-sql'});await tick();
+  assert.equal(box.children.some(c=>c.textContent.includes('late-private-sql')),false);
+});
+test('repeated clicks on the old preview button cannot start duplicate detail reads',async()=>{
+  const f=fixture();let finish,release;f.setConfirm(()=>new Promise(resolve=>finish=resolve));f.setDetail(()=>new Promise(resolve=>release=resolve));
+  const waiting=f.confirmation({token:'single-read',canDetail:true,item:{id:566,title:'只读一次'}});await tick();
+  const box=f.confirmations[0].content,button=box.children.find(c=>c.textContent==='获取详情');button.click();button.click();await tick();
+  assert.equal(f.calls.filter(c=>c.name==='approval-detail').length,1);release({id:566,sql:'SELECT once;'});await tick();
+  finish(false);await waiting;
 });
 test('connected configuration shows connected, editing enables save, and successful save collapses settings',async()=>{
   const f=fixture();await f.sync();assert.equal(f.get('save-config').textContent,'已连接');assert.equal(f.get('save-config').disabled,true);
@@ -177,4 +211,26 @@ test('connection settings preserve draft across polling and save only the chosen
   await f.get('connection-form').handlers.submit({preventDefault(){}});
   assert.ok(f.calls.some(call=>call.name==='save-config'&&call.value==='/chosen/config.toml'));
   f.get('default-config').click();assert.equal(f.get('config-file').value,'/default/config.toml');
+});
+
+test('one processing list shows both actions and updates the original button when status changes',async()=>{
+  const f=fixture();f.set({items:[{id:566,title:'待审核'},{id:567,title:'已审核',status:'workflow_review_pass'}]});await f.sync();
+  const [review,execution]=f.get('list').children;
+  const reviewButton=review.children[1].children[0],executeButton=execution.children[1].children[0];
+  assert.equal(reviewButton.textContent,'审核通过');assert.equal(executeButton.textContent,'执行');
+  reviewButton.click();await tick();executeButton.click();await tick();
+  assert.ok(f.calls.some(c=>c.name==='approve'&&c.value===566));assert.ok(f.calls.some(c=>c.name==='execute'&&c.value===567));
+  f.set({items:[{id:566,title:'已审核',status:'workflow_review_pass'},{id:567,title:'已结束',status:'workflow_finish'}]});await f.sync();
+  assert.equal(f.get('list').children[0],review);assert.equal(reviewButton.textContent,'执行');assert.equal(reviewButton.disabled,false);
+  reviewButton.click();await tick();assert.ok(f.calls.some(c=>c.name==='execute'&&c.value===566));
+  assert.equal(executeButton.hidden,true);executeButton.click();await tick();assert.equal(f.calls.filter(c=>c.name==='execute'&&c.value===567).length,1);
+  f.set({items:[{id:566,title:'未知',status:'workflow_review_pass',executionStatus:'unknown'}]});await f.sync();
+  const blocked=f.get('list').children[0].children[1].children[0];assert.equal(blocked.disabled,true);assert.equal(blocked.textContent,'结果待核实');
+  const html=fs.readFileSync(path.join(__dirname,'../src/ui/index.html'),'utf8');assert.doesNotMatch(html,/archery-mode-/);
+});
+test('execution has a distinct confirmation and reuses the same cached SQL without a new read',async()=>{
+  const f=fixture();f.setConfirmed(true);await f.confirmation({operation:'execute',token:'execute-one',item:{id:566,title:'待执行'},canDetail:true,cachedDetail:{id:566,sql:'SELECT cached;',status:'workflow_review_pass'}});
+  assert.equal(f.confirmations[0].title,'执行工单 #566？');assert.equal(f.confirmations[0].confirmLabel,'执行');assert.match(f.confirmations[0].message,/请求执行这一笔工单的 SQL/);
+  assert.equal(f.calls.filter(c=>c.name==='approval-detail').length,0);
+  assert.equal(f.calls.length,1);assert.equal(f.calls[0].name,'confirm-approval');assert.equal(f.calls[0].value.token,'execute-one');assert.equal(f.calls[0].value.confirmed,true);
 });
