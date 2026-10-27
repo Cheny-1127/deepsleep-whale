@@ -1,10 +1,12 @@
 'use strict';
 const fs=require('node:fs');
-const {readArcheryConfig,createArcheryMcp,pendingPage,approvalResult}=require('./archery-mcp.cjs');
+const {readArcheryConfig,createArcheryMcp,pendingPage,approvalResult,orderDetail}=require('./archery-mcp.cjs');
+const {createArcheryCache}=require('./archery-cache.cjs');
 const INTERVAL_MS=5*60*1000;
 
-// 轮询属于主进程，关闭或切换页面不会停止；工单摘要只在内存保留。
-function createArcheryPending({readConfig=readArcheryConfig,createClient=createArcheryMcp,openExternal,confirmApproval=async()=>false,
+// 轮询属于主进程，关闭或切换页面不会停止；快照只返回摘要，详情由独立缓存按账号隔离。
+function createArcheryPending({readConfig=readArcheryConfig,createClient=createArcheryMcp,confirmApproval=async()=>false,
+  confirmLargeDetail=async()=>false,cache=createArcheryCache(),
   clock={now:()=>Date.now(),setTimeout,clearTimeout},intervalMs=INTERVAL_MS,settingsFile}={}) {
   let closed=false,timer,flight=null,controller,client=null,config=null,page=1,enabled=true;
   let moduleEnabled=true,moduleGeneration=0,approving=false;
@@ -13,15 +15,16 @@ function createArcheryPending({readConfig=readArcheryConfig,createClient=createA
     const saved=JSON.parse(fs.readFileSync(settingsFile,'utf8'));
     if(typeof saved.enabled==='boolean')enabled=saved.enabled;
   } catch {} // 首次使用或配置损坏时默认开启，不覆盖原文件。
-  const approvals=new Map();
+  const approvals=new Map(),largeDetails=new Map();let contentRevision=0;
+  const accountKey=()=>config?.accountKey||config?.fingerprint;
   const approvalKey=id=>`${config?.accountKey||config?.fingerprint}:${id}`;
   const eligible=()=>Boolean(moduleEnabled&&config?.canApprove&&client&&state==='connected'&&lastChecked!==null&&clock.now()-lastChecked<5*60*1000);
-  function snapshot(){return {state,error,notice,enabled,canApprove:eligible(),busy:Boolean(flight),page,
+  function snapshot(){return {state,error,notice,enabled,contentRevision,canDetail:Boolean(config?.canDetail&&(client&&state==='connected'||items.some(item=>cache.has(accountKey(),item.id)))),canApprove:eligible(),busy:Boolean(flight),page,
     items:items.map(item=>({...item,approvalStatus:approvals.get(approvalKey(item.id))||''})),hasMore,sourceTotal,lastChecked,intervalMs};}
   function clearTimer(){clock.clearTimeout(timer);timer=null;}
   function dropClient(){const old=client;client=null;if(old)void Promise.resolve().then(()=>old.close()).catch(()=>{});}
   // 防重记录按服务器与账号隔离，切换密码/工具配置不解除该账号的未知结果限制。
-  function clearItems(){items=[];hasMore=false;sourceTotal=null;lastChecked=null;notice='';}
+  function clearItems(){items=[];hasMore=false;sourceTotal=null;lastChecked=null;notice='';largeDetails.clear();contentRevision++;}
   function currentConfig() {
     let current;
     try {current=readConfig();}
@@ -53,7 +56,7 @@ function createArcheryPending({readConfig=readArcheryConfig,createClient=createA
   }
   function refresh(target=page) {
     if(closed||!moduleEnabled)return Promise.resolve(snapshot());
-    if(flight)return flight;
+    if(flight)return flight.then(()=>snapshot(),()=>snapshot());
     clearTimer();state='checking';error='';controller=new AbortController();
     const signal=controller.signal;
     // 异步开始，确保 flight 已赋值，手动刷新与定时器不会并发启动两个请求。
@@ -86,7 +89,7 @@ function createArcheryPending({readConfig=readArcheryConfig,createClient=createA
     }).finally(()=>{flight=null;controller=null;schedule();}).then(()=>snapshot());
     return flight;
   }
-  function approve(id) {
+  function approve(id,confirm=confirmApproval) {
     if(flight)throw new Error('正在处理 Archery 请求，请稍后审核。');
     currentConfig();
     const item=items.find(item=>item.id===id);
@@ -101,8 +104,8 @@ function createArcheryPending({readConfig=readArcheryConfig,createClient=createA
       let sent=false;
       try {
         if(closed||!moduleEnabled||generation!==moduleGeneration)return;
-        // 确认在主进程进行，渲染页面不能跳过逐笔确认直接调用 MCP。
-        const confirmed=await confirmApproval({...item});
+        // 主进程在锁内发起逐笔确认，界面回复后仍须重新校验账号、权限和列表时效。
+        const confirmed=await confirm({...item});
         if(closed)return;
         if(!moduleEnabled||generation!==moduleGeneration){notice='模块已关闭，本次审核已取消。';return;}
         if(confirmed!==true){notice=`已取消审核工单 #${id}。`;return;}
@@ -132,24 +135,59 @@ function createArcheryPending({readConfig=readArcheryConfig,createClient=createA
     }).finally(()=>{approving=false;flight=null;controller=null;schedule();}).then(()=>snapshot());
     return flight;
   }
-  async function action(name,value) {
+  function detail(id,allowLarge=false,force=false){
+    if(flight)throw Error('正在处理 Archery 请求，请稍后查看详情。');
+    // 命中本地缓存也必须先校验当前配置、列表编号及详情权限，不能沿用旧账号的访问资格。
+    currentConfig();
+    const item=items.find(item=>item.id===id);
+    if(!Number.isSafeInteger(id)||!item)throw Error('请从当前待审核列表选择工单。');
+    if(!config.canDetail)throw Error('详情不可用，请刷新列表并确认已开放详情工具。');
+    // 缓存命中只合并当前摘要状态，翻页、刷新或重启不再重复读取完整 SQL。
+    const saved=!force&&!allowLarge&&cache.get(accountKey(),id);
+    if(saved)return {...saved,status:item.status||saved.status};
+    if(!client||state!=='connected')throw Error('详情不可用，请刷新列表并确认已开放详情工具。');
+    const key=`${config.fingerprint}:${id}`,large=largeDetails.get(key),generation=moduleGeneration;
+    if(allowLarge&&!large)throw Error('请先读取工单详情，再确认是否完整展开。');
+    clearTimer();controller=new AbortController();const signal=controller.signal;
+    const cancelled=()=>closed||signal.aborted||!moduleEnabled||generation!==moduleGeneration;
+    flight=Promise.resolve().then(async()=>{
+      try{
+        if(cancelled())throw Error();
+        // 大结果由主进程逐次确认，页面不能直接传 allow_large 绕过 MCP 的询问。
+        if(allowLarge){
+          const confirmed=await confirmLargeDetail({...item,bytes:large.bytes});
+          if(cancelled())throw Error();
+          currentConfig();
+          if(confirmed!==true)return {id,cancelled:true};
+        }
+        const response=await client.detail(id,{signal,allowLarge});
+        if(cancelled())throw Error();
+        currentConfig();
+        const result=orderDetail(response,id);
+        if(result.needsConfirmation)largeDetails.set(key,{bytes:result.bytes});else{
+          largeDetails.delete(key);cache.set(accountKey(),result);
+          return {...(cache.get(accountKey(),id)||result),status:item.status||result.status};
+        }
+        return result;
+      }catch{
+        if(error&&state==='error')throw Error(error);
+        throw Error(cancelled()?'详情读取已取消。':'读取工单详情失败，请稍后重试或刷新列表。');
+      }
+    }).finally(()=>{flight=null;controller=null;schedule();});
+    return flight;
+  }
+  async function action(name,value,confirm) {
     if(closed)throw new Error('Archery 接入已关闭。');
     if(name==='snapshot')return snapshot();
     if(!moduleEnabled)throw Error('Archery 已关闭，请先开启');
     if(name==='refresh')return refresh();
     if(name==='set-enabled')return setEnabled(value);
-    if(name==='approve')return approve(value);
+    if(name==='approve')return approve(value,confirm);
+    if(name==='detail'||name==='detail-large'||name==='detail-refresh')return detail(value,name==='detail-large',name==='detail-refresh');
     if(name==='page') {
       if(flight)throw new Error('正在刷新，请稍后翻页。');
       if(!Number.isSafeInteger(value)||value<1||!(value===page-1||(value===page+1&&hasMore)))throw new Error('请使用上一页或下一页按钮。');
       return refresh(value);
-    }
-    if(name==='open') {
-      const current=currentConfig();
-      if(!Number.isSafeInteger(value)||!items.some(item=>item.id===value))throw new Error('请从当前待审核列表选择工单。');
-      // 链接由全局配置的同源地址与已展示编号生成，不信任服务端提供的任意 URL。
-      await openExternal(new URL(`/detail/${value}/`,current.baseUrl).href);
-      return snapshot();
     }
     throw new Error('不支持的 Archery 操作。');
   }

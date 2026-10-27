@@ -8,8 +8,9 @@ contextBridge.exposeInMainWorld('whale', {
   wechat: (name, value) => ipcRenderer.invoke('wechat', name, value),
   // 仅转发固定邮箱通道，调用者身份与实际操作在主进程校验。
   mail: (name, value) => ipcRenderer.invoke('mail', name, value),
-  // 只转发通道名。Archery 凭据、审批确认和额度 token 都留在主进程。
+  // Archery 凭据留在主进程；界面只接收主进程校验后的逐笔确认请求。
   archery: (name, value) => ipcRenderer.invoke('archery', name, value),
+  onArcheryConfirmation: callback => ipcRenderer.on('archery-confirmation', (_event, data) => callback(data)),
   subscriptions: (name, value) => ipcRenderer.invoke('message-subscriptions', name, value),
   quota: (name, value) => ipcRenderer.invoke('quota', name, value),
   quotaGroup: (name, value) => ipcRenderer.invoke('quota-group', name, value),

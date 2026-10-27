@@ -23,7 +23,9 @@ const {avatarFromImage}=require('../channels/wechat-profile.cjs');
 const {createMailReceiver}=require('../channels/imap-mail.cjs');
 const {createMailStore}=require('../channels/mail-store.cjs');
 const {createArcheryPending}=require('../channels/archery-pending.cjs');
+const {createArcheryCache}=require('../channels/archery-cache.cjs');
 const {createArcheryConnection}=require('./archery-connection.cjs');
+const {createArcheryConfirmation}=require('./archery-confirmation.cjs');
 const {createQuotaPanel}=require('../channels/quota-accounts.cjs');
 const {createGroupUsage}=require('../channels/quota-group-usage.cjs');
 const {createKeyUsage}=require('../channels/quota-key-usage.cjs');
@@ -48,6 +50,7 @@ app.setPath('userData', dataDir);
 app.setName('鲸鱼娘');
 if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   const archeryConnection=createArcheryConnection({dataDir});
+  const archeryConfirmation=createArcheryConfirmation({getWindow:sender=>BrowserWindow.fromWebContents(sender)});
   let bridge,wechat,mail,archery,quota,groupUsage,keyUsage,petQuota,subscriptions;
   let planner,plannerTimer,reports;
   const plannerNotifications=new Map();
@@ -252,7 +255,10 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
       if(!enabled){windows.closeQuotaOverlays();petQuota?.setModuleEnabled(false);}
       for(const item of [quota,groupUsage,keyUsage])item?.setModuleEnabled(enabled);
       if(enabled)petQuota?.setModuleEnabled(true);
-    }else if(id==='archery')archery?.setModuleEnabled(enabled);
+    }else if(id==='archery'){
+      if(!enabled)archeryConfirmation.cancel();
+      archery?.setModuleEnabled(enabled);
+    }
     else if(id==='wechat')wechat?.setModuleEnabled(enabled);
     else if(id==='mail')mail?.setModuleEnabled(enabled);
     else if(id==='subscriptions')subscriptions?.setModuleEnabled(enabled);
@@ -379,17 +385,20 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
       return {value:result};
     }catch(error){return {error:error.message};}
   });
-  // Archery 仅向小屋主框架开放，逐笔审批还须由主进程弹框确认。
+  // Archery 仅向小屋主框架开放，逐笔审批由主进程发起应用内确认。
   ipcMain.handle('archery',async(event,name,value)=>{
     if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋查看 Archery');
     if(!archery)return {error:'Archery 接入正在初始化'};
     if(name==='connection')return {value:archeryConnection.snapshot()};
+    // 回复只接受原小屋页面的一次性令牌，重复、过期或其他窗口的回复均不生效。
+    if(name==='confirm-approval')return {value:archeryConfirmation.reply(event.sender,value)};
     if(!modules.enabled('archery')&&name!=='snapshot')return {error:'Archery 已关闭，请先开启'};
     try{
       if(name==='open-config'){
         const file=archeryConnection.snapshot().configFile;
         if(!fs.existsSync(file))throw Error('配置文件不存在，请先选择已有的 Codex 全局 config.toml。');
-        const error=await shell.openPath(file);if(error)throw Error('无法打开配置文件，请使用文本编辑器打开当前路径。');
+        // 只定位文件，不调用系统默认编辑器，避免 .toml 关联到 Cursor 时意外启动 IDE。
+        shell.showItemInFolder(file);
         return {value:true};
       }
       if(name==='choose-config'){
@@ -403,7 +412,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
         await archery.action('refresh');
         return {value:connection};
       }
-      return {value:await archery.action(name,value)};
+      return {value:await archery.action(name,value,name==='approve'?item=>archeryConfirmation.request(event.sender,item):undefined)};
     }catch(error){return {error:error.message};}
   });
   // 额度页只读网关已保存的快照，token 不进入渲染进程，也不刷新上游额度。
@@ -470,7 +479,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     if(panel)data.accounts=quota.snapshot().accounts.map(({id,name})=>({id,name}));
     return {value:data};
   });
-  app.on('before-quit', () => { subscriptions?.close();petQuota?.close();keyUsage?.close();groupUsage?.close();quota?.close();archery?.close();mail?.close();wechat?.close();codexRuntime.close();bridge?.close(); titles.close();cursorTitles.close(); });
+  app.on('before-quit', () => { archeryConfirmation.cancel();subscriptions?.close();petQuota?.close();keyUsage?.close();groupUsage?.close();quota?.close();archery?.close();mail?.close();wechat?.close();codexRuntime.close();bridge?.close(); titles.close();cursorTitles.close(); });
   app.whenReady().then(async () => {
     // 先确认客户端运行状态，再过滤临时会话、同步已读，避免清掉退出时暂存的提醒。
     await refreshClients();
@@ -512,11 +521,10 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
       }
     }}));
     mail.start();
-    archery=createArcheryPending({readConfig:archeryConnection.read,settingsFile:path.join(dataDir,'archery.json'),openExternal:url=>shell.openExternal(url),confirmApproval:async item=>{
-      const result=await dialog.showMessageBox({type:'question',title:'确认审核通过',
-        message:`审核通过工单 #${item.id}？`,
-        detail:`${item.title}\n提交人：${item.submitter||'—'}\n实例：${item.instance||'—'}\n数据库：${item.database||'—'}\n\n仅审核这一笔工单，不请求执行 SQL。`,
-        buttons:['取消','审核通过'],defaultId:0,cancelId:0,noLink:true});
+    archery=createArcheryPending({readConfig:archeryConnection.read,cache:createArcheryCache({dataDir,safeStorage}),settingsFile:path.join(dataDir,'archery.json'),confirmLargeDetail:async item=>{
+      const result=await dialog.showMessageBox({type:'question',title:'展开完整工单详情',message:`工单 #${item.id} 的详情较大，是否完整加载？`,
+        detail:`${item.title}\n约 ${Math.ceil(item.bytes/1024)} KB，包含工单 SQL 和执行内容。`,
+        buttons:['取消','完整加载'],defaultId:0,cancelId:0,noLink:true});
       return result.response===1;
     }});
     archery.setModuleEnabled(modules.enabled('archery'));

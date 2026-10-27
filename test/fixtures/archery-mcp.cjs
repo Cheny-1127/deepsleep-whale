@@ -10,6 +10,9 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
     const {page,page_size}=request.params.arguments;
     result={structuredContent:{status:'success',data:{items:[{order_id:566,order_type:'work_order',title:'审核测试',submitter:'测试提交人'}],
       pagination:{page,page_size,total:null,source_total:1,has_more:false,next_page:null,scope:'source_page_filtered'}}},content:[]};
+  }else if(request.method==='tools/call'&&request.params.name==='work_order_detail') {
+    const id=request.params.arguments.order_id;
+    result={content:[],structuredContent:{status:'success',data:{workflow_id:id,workflow:{id,is_offline_export:0},sql_content:'SELECT 1;',review_content:'测试审核',execute_result:''}}};
   }else if(request.method==='tools/call'&&request.params.name==='work_order_approve') {
     const [id]=request.params.arguments.order_ids;
     result={content:[],structuredContent:{status:'success',data:{succeeded:[id],failed:[],unknown:[],remaining:[],results:[{order_id:id,status:'success',message:'passed'}]}}};
