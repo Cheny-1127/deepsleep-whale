@@ -116,11 +116,44 @@ button,input{-webkit-app-region:no-drag}.studio{display:flex;background:var(--ui
 .wechat-client-title{max-width:100%;overflow-wrap:anywhere}
 
 /* 邮箱内容只按文本展示，不加载邮件 HTML、远程图片或附件。 */
-#mail-feedback{font-size:12px;color:var(--ui-accent);min-height:18px}.mail-fields{display:grid;grid-template-columns:1fr 1fr;gap:14px}.mail-fields[hidden]{display:none}.mail-fields label{font-size:12px;color:var(--ui-text-muted)}.mail-password{grid-column:1/-1}#mail-server-fields{margin-top:14px}.mail-message{display:block;width:100%;background:transparent;text-align:left;border-top:1px solid #e0e8dd;padding:14px 10px;border-radius:6px;color:var(--ui-text)}.mail-message:hover,.mail-message[aria-pressed=true]{background:#edf5ed}.mail-message strong{display:block;font-size:13px;overflow-wrap:anywhere}.mail-message span{display:block;font-size:11px;color:#71816f;margin-top:7px;overflow-wrap:anywhere}#mail-body{font:inherit;font-size:13px;line-height:1.9;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}#mail-list{font-size:12px;color:#71816f}.mail-detail{padding:14px;margin-bottom:12px;border-radius:8px;background:#f6f8f5;color:var(--ui-text)}#mail-subject{overflow-wrap:anywhere}
+#mail-feedback{font-size:12px;color:var(--ui-accent);min-height:18px}.mail-message{display:block;width:100%;background:transparent;text-align:left;border-top:1px solid #e0e8dd;padding:14px 10px;border-radius:6px;color:var(--ui-text)}.mail-message:hover,.mail-message[aria-pressed=true]{background:#edf5ed}.mail-message strong{display:block;font-size:13px;overflow-wrap:anywhere}.mail-message span{display:block;font-size:11px;color:#71816f;margin-top:7px;overflow-wrap:anywhere}#mail-body{font:inherit;font-size:13px;line-height:1.9;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}#mail-list{font-size:12px;color:#71816f}.mail-detail{padding:14px;margin-bottom:12px;border-radius:8px;background:#f6f8f5;color:var(--ui-text)}
 
-.mail-password-state{display:block;margin-top:7px;font-size:11px;color:var(--ui-accent);line-height:1.8}
+.mail-password-state{display:block;font-size:11px;color:var(--ui-accent);line-height:1.6}
 
-.mail-password-control{display:flex;align-items:stretch;position:relative}.mail-password-control input{padding-right:45px}.mail-password-toggle{position:absolute;right:2px;top:9px;bottom:2px;width:38px;height:auto}
+.mail-password-control{display:flex;align-items:stretch;position:relative}.mail-password-control input{padding-right:45px}.mail-password-toggle{position:absolute;right:2px;top:2px;bottom:2px;width:34px;height:auto}
+
+.mail-message-row{position:relative}.mail-message-row[data-selected=true] .mail-message{padding-right:54px}.mail-message-row>.mail-delete-button{position:absolute;top:10px;right:8px}#mail-body{margin-top:0}.mail-delete-button:hover:not(:disabled){color:var(--ui-danger);background:var(--ui-danger-surface)}
+
+/* 暂停接收时配置卡片置灰，保留表单和恢复接收按钮的可用性。 */
+.mail-config-card[data-paused=true]{background:#f0f2ef;border-color:#dce1db}
+.mail-config-card[data-paused=true] .mail-config-title,.mail-config-card[data-paused=true] .mail-config-account{color:var(--ui-text-muted)}
+.mail-config-card[data-paused=true] .tag{color:#818b82;border-color:#d7ddd6;background:#e6eae4}
+
+/* 配置字段按内容分配宽度；局部清除通用微信表单的上下间距，避免占满收件页面。 */
+#mail-options>summary{display:flex;align-items:center;gap:10px;list-style:none;min-width:0}
+#mail-options>summary::-webkit-details-marker{display:none}
+#mail-options>summary::before{content:"";width:7px;height:7px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(-45deg);flex-shrink:0}
+#mail-options[open]>summary::before{transform:rotate(45deg)}
+.mail-config-title{display:inline-flex;align-items:center;gap:7px;font-size:14px;font-weight:650;white-space:nowrap}
+.mail-config-title .tag{margin:0;font-weight:400}
+.mail-config-account{min-width:0;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--ui-text-muted)}
+.mail-config-toggle{font-size:11px;color:var(--ui-text-muted);white-space:nowrap}
+.mail-config-toggle::after{content:"设置"}#mail-options[open] .mail-config-toggle::after{content:"收起"}
+#mail-settings{margin-top:16px;padding-top:16px;border-top:1px solid var(--ui-divider)}
+.mail-fields{display:grid;grid-template-columns:minmax(0,1fr) 112px;gap:12px}
+.mail-account-fields{grid-template-columns:minmax(0,1fr) 150px 112px}
+.mail-config-card .mail-fields label{display:flex;flex-direction:column;gap:6px;margin:0;min-width:0;font-size:12px;color:var(--ui-text-muted)}
+.mail-config-card .mail-fields input,.mail-config-card .mail-fields select{margin:0;min-width:0}
+.mail-password{grid-column:1/-1}
+#mail-server-fields{margin-top:12px}
+.mail-settings-footer{display:flex;align-items:center;flex-wrap:wrap;gap:8px 16px;margin-top:14px}
+.mail-settings-footer .wechat-buttons{margin:0}
+.mail-settings-footer .wechat-hint{margin:0}
+.mail-help{margin-top:12px;font-size:11px;color:var(--ui-text-muted)}
+.mail-help .wechat-hint{margin:8px 0 0}
+#mail-feedback:empty{display:none}
+@media(max-width:800px){.mail-account-fields{grid-template-columns:minmax(0,1fr) 130px 96px}.mail-config-title{font-size:13px}}
+@media(max-width:700px){#mail-options>summary{flex-wrap:wrap}.mail-config-account{order:1;flex-basis:100%;margin-left:17px}.mail-config-toggle{margin-left:auto}.mail-account-fields{grid-template-columns:minmax(0,1fr) 112px}.mail-account-fields>label:first-child{grid-column:1/-1}}
 
 #mail-inbox>summary{font-size:14px;font-weight:650;color:var(--ui-text-strong)}#mail-inbox[open]>summary{margin-bottom:14px}.mail-inbox-toggle{float:right;font-size:11px;font-weight:400;color:var(--ui-text-muted)}.mail-inbox-toggle::after{content:"展开"}#mail-inbox[open] .mail-inbox-toggle::after{content:"收起"}
 
@@ -202,3 +235,6 @@ button,input{-webkit-app-region:no-drag}.studio{display:flex;background:var(--ui
 /* 禁用状态作用于整条账号选项，避免只有圆点变淡、名称仍看起来可选；保留占用原因的悬停提示。 */
 .quota-pet-settings [role="radiogroup"]>label:has(input:disabled){color:var(--ui-text-subtle);opacity:var(--ui-disabled-opacity);cursor:not-allowed}
 .quota-pet-settings [role="radiogroup"]>label input:disabled{opacity:1;accent-color:var(--ui-text-subtle);cursor:not-allowed}
+
+/* 配置入口默认紧凑展示，长路径只占剩余宽度，避免撑出窗口。 */
+.archery-connection-card{margin-bottom:16px}.archery-connection-card summary{cursor:pointer;font-weight:600}.archery-connection-card form{margin-top:14px}.archery-connection-card label{display:block;margin-bottom:8px;font-size:12px;color:var(--ui-text-subtle)}.archery-config-path,.archery-config-actions{display:flex;align-items:center;gap:8px}.archery-config-path input{flex:1;min-width:0}.archery-config-path button{flex-shrink:0}.archery-config-actions{flex-wrap:wrap}

@@ -23,6 +23,7 @@ const {avatarFromImage}=require('../channels/wechat-profile.cjs');
 const {createMailReceiver}=require('../channels/imap-mail.cjs');
 const {createMailStore}=require('../channels/mail-store.cjs');
 const {createArcheryPending}=require('../channels/archery-pending.cjs');
+const {createArcheryConnection}=require('./archery-connection.cjs');
 const {createQuotaPanel}=require('../channels/quota-accounts.cjs');
 const {createGroupUsage}=require('../channels/quota-group-usage.cjs');
 const {createKeyUsage}=require('../channels/quota-key-usage.cjs');
@@ -46,6 +47,7 @@ fs.mkdirSync(dataDir, { recursive: true });
 app.setPath('userData', dataDir);
 app.setName('鲸鱼娘');
 if (!app.requestSingleInstanceLock()) { app.quit(); } else {
+  const archeryConnection=createArcheryConnection({dataDir});
   let bridge,wechat,mail,archery,quota,groupUsage,keyUsage,petQuota,subscriptions;
   let planner,plannerTimer,reports;
   const plannerNotifications=new Map();
@@ -381,8 +383,28 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   ipcMain.handle('archery',async(event,name,value)=>{
     if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋查看 Archery');
     if(!archery)return {error:'Archery 接入正在初始化'};
+    if(name==='connection')return {value:archeryConnection.snapshot()};
     if(!modules.enabled('archery')&&name!=='snapshot')return {error:'Archery 已关闭，请先开启'};
-    try{return {value:await archery.action(name,value)};}catch(error){return {error:error.message};}
+    try{
+      if(name==='open-config'){
+        const file=archeryConnection.snapshot().configFile;
+        if(!fs.existsSync(file))throw Error('配置文件不存在，请先选择已有的 Codex 全局 config.toml。');
+        const error=await shell.openPath(file);if(error)throw Error('无法打开配置文件，请使用文本编辑器打开当前路径。');
+        return {value:true};
+      }
+      if(name==='choose-config'){
+        const chosen=await dialog.showOpenDialog({title:'选择 Codex 全局 config.toml',defaultPath:archeryConnection.snapshot().configFile,properties:['openFile'],filters:[{name:'Codex 配置',extensions:['toml']}]});
+        return {value:chosen.canceled?null:chosen.filePaths[0]||null};
+      }
+      if(name==='save-config'){
+        if(archery.snapshot().busy)throw Error('正在处理工单，请完成当前操作后切换配置。');
+        const connection=archeryConnection.save(value);
+        // 当前没有在途请求，刷新时重新读取配置并丢弃旧账号连接。
+        await archery.action('refresh');
+        return {value:connection};
+      }
+      return {value:await archery.action(name,value)};
+    }catch(error){return {error:error.message};}
   });
   // 额度页只读网关已保存的快照，token 不进入渲染进程，也不刷新上游额度。
   ipcMain.handle('quota',async(event,name,value)=>{
@@ -484,7 +506,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
       }
     }}));
     mail.start();
-    archery=createArcheryPending({settingsFile:path.join(dataDir,'archery.json'),openExternal:url=>shell.openExternal(url),confirmApproval:async item=>{
+    archery=createArcheryPending({readConfig:archeryConnection.read,settingsFile:path.join(dataDir,'archery.json'),openExternal:url=>shell.openExternal(url),confirmApproval:async item=>{
       const result=await dialog.showMessageBox({type:'question',title:'确认审核通过',
         message:`审核通过工单 #${item.id}？`,
         detail:`${item.title}\n提交人：${item.submitter||'—'}\n实例：${item.instance||'—'}\n数据库：${item.database||'—'}\n\n仅审核这一笔工单，不请求执行 SQL。`,
