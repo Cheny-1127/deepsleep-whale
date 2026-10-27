@@ -33,7 +33,10 @@ test('reads revalidate current policy; corrupt source does not fall back to anot
   fs.writeFileSync(path.join(f.dir,'archery-connection.json'),'broken');fs.writeFileSync(path.join(f.home,'config.toml'),f.text);
   assert.throws(()=>f.create().read(),/来源无法读取/);
 });
-test('missing credentials name required variables without leaking configured values',t=>{
+test('MCP owns credential loading; desktop accepts a launch entry without duplicated credentials',t=>{
   const f=fixture(t);fs.writeFileSync(f.configFile,f.text.replace('ARCHERY_PASSWORD="fixture-secret"\n',''));
-  const source=f.create();assert.throws(()=>source.save(f.configFile),error=>/ARCHERY_PASSWORD/.test(error.message)&&/env_vars/.test(error.message)&&!error.message.includes('fixture-user'));
+  const source=f.create();assert.equal(source.save(f.configFile).valid,true);
+  fs.writeFileSync(f.configFile,'[mcp_servers.archery]\ncommand="/fixture/archery-mcp"\n');
+  assert.equal(source.snapshot().valid,true);assert.deepEqual(source.read().server.env,{});
+  assert.equal(source.read().baseUrl,'');
 });

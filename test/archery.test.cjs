@@ -1,20 +1,21 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os');
-const {readArcheryConfig,createArcheryMcp,pendingPage,approvalResult}=require('../src/channels/archery-mcp.cjs');
+const {readArcheryConfig,createArcheryMcp,pendingPage,approvalResult,orderDetail}=require('../src/channels/archery-mcp.cjs');
 const {createArcheryPending,INTERVAL_MS}=require('../src/channels/archery-pending.cjs');
 const tick=()=>new Promise(setImmediate);
 function response(page=1,{items=[{order_id:566,order_type:'work_order',title:'工单',submitter:'测试人员'}],more=false,total=items.length}={}) {
   return {structuredContent:{status:'success',data:{items,pagination:{page,page_size:20,total:null,source_total:total,has_more:more,next_page:more?page+1:null,scope:'source_page_filtered'}}}};
 }
 function fixture(t,options={}) {
-  let config={fingerprint:'account-a',baseUrl:'https://archery.example.com',canApprove:true},request=async page=>response(page),now=1000,confirm=async()=>false,approval=async id=>approved(id);
-  const jobs=new Set(),calls=[],opened=[],clients=[],confirmations=[],approvalCalls=[];
+  let config={fingerprint:'account-a',baseUrl:'https://archery.example.com',canApprove:true,canDetail:true},request=async page=>response(page),now=1000,confirm=async()=>false,approval=async id=>approved(id),detail=async id=>detailResponse(id),largeConfirm=async()=>false;
+  const jobs=new Set(),calls=[],clients=[],confirmations=[],approvalCalls=[],detailCalls=[],largeConfirmations=[];
   const clock={now:()=>now,setTimeout:(fn,ms)=>{const job={fn,ms};jobs.add(job);return job;},clearTimeout:job=>jobs.delete(job)};
   const receiver=createArcheryPending({clock,readConfig:()=>{if(config instanceof Error)throw config;return config;},
-    createClient:()=>{const client={closed:0,close(){this.closed++;},pending(page,options){calls.push({page,...options});return request(page,options);},approve(id,options){approvalCalls.push({id,...options});return approval(id,options);}};clients.push(client);return client;},
-    openExternal:async url=>opened.push(url),confirmApproval:async item=>{confirmations.push(item);return confirm(item);},settingsFile:options.settingsFile});
+    createClient:()=>{const client={closed:0,close(){this.closed++;},pending(page,options){calls.push({page,...options});return request(page,options);},approve(id,options){approvalCalls.push({id,...options});return approval(id,options);},detail(id,options){detailCalls.push({id,...options});return detail(id,options);}};clients.push(client);return client;},
+    confirmLargeDetail:async item=>{largeConfirmations.push(item);return largeConfirm(item);},
+    confirmApproval:async item=>{confirmations.push(item);return confirm(item);},settingsFile:options.settingsFile});
   t.after(()=>receiver.close());
-  return {receiver,jobs,calls,opened,clients,confirmations,approvalCalls,setConfirm:fn=>confirm=fn,setApproval:fn=>approval=fn,setNow:value=>now=value,setConfig:value=>config=value,setRequest:fn=>request=fn,
+  return {receiver,jobs,calls,clients,confirmations,approvalCalls,detailCalls,largeConfirmations,setDetail:fn=>detail=fn,setLargeConfirm:fn=>largeConfirm=fn,setConfirm:fn=>confirm=fn,setApproval:fn=>approval=fn,setNow:value=>now=value,setConfig:value=>config=value,setRequest:fn=>request=fn,
     async fire(){assert.equal(jobs.size,1);const job=[...jobs][0];assert.equal(job.ms,INTERVAL_MS);jobs.delete(job);now+=job.ms;job.fn();await tick();}};
 }
 
@@ -24,6 +25,60 @@ test('module pause aborts reads without changing auto refresh and late responses
   assert.equal(f.calls[0].signal.aborted,true);assert.equal(f.receiver.snapshot().enabled,true);
   f.receiver.setModuleEnabled(true);release(response());await pending;assert.equal(f.receiver.snapshot().items.length,0);
   f.receiver.setModuleEnabled(false);assert.equal(f.jobs.size,0);await assert.rejects(f.receiver.action('refresh'),/已关闭/);
+});
+
+function detailResponse(id=566){return {structuredContent:{status:'success',data:{workflow_id:id,workflow:{id,is_offline_export:0,workflow_name:'测试工单',engineer_display:'测试人员',db_name:'fixture',status:'workflow_manreviewing'},sql_content:'SELECT 1;',review_content:'审核通过',execute_result:'',password:'private-secret'}}};}
+
+test('detail returns only whitelisted content for the exact work order and handles large-result consent',()=>{
+  const value=orderDetail(detailResponse(),566);assert.equal(value.sql,'SELECT 1;');assert.equal(value.review,undefined);
+  assert.doesNotMatch(JSON.stringify(value),/private-secret|password/);
+  for(const change of [r=>r.structuredContent.data.workflow.id=567,r=>r.structuredContent.data.workflow.is_offline_export=1,
+    r=>r.structuredContent.status='auth_failed']){const raw=detailResponse();change(raw);assert.throws(()=>orderDetail(raw,566));}
+  const large={structuredContent:{status:'needs_confirmation',data:{order_id:566,order_type:'work_order',response_bytes:40000}}};
+  assert.equal(orderDetail(large,566).needsConfirmation,true);assert.throws(()=>orderDetail(large,567));
+});
+
+test('detail reads only a displayed ID through the existing account session; summaries never include SQL',async t=>{
+  const f=fixture(t);await f.receiver.action('refresh');const value=await f.receiver.action('detail',566);
+  assert.equal(value.sql,'SELECT 1;');assert.equal(f.clients.length,1);assert.deepEqual(f.detailCalls.map(c=>[c.id,c.allowLarge]),[[566,false]]);
+  assert.doesNotMatch(JSON.stringify(f.receiver.snapshot()),/SELECT 1|审核通过/);
+  for(const id of [567,'566',true])await assert.rejects(f.receiver.action('detail',id),/当前待审核列表/);
+  f.setConfig({fingerprint:'blocked',canDetail:false});await f.receiver.action('refresh');
+  await assert.rejects(f.receiver.action('detail',566),/详情不可用/);assert.equal(f.detailCalls.length,1);
+});
+
+test('cached details survive refresh and page changes; status updates do not reread SQL',async t=>{
+  const f=fixture(t);await f.receiver.action('refresh');await f.receiver.action('detail',566);
+  f.setRequest(async page=>response(page,{items:[{order_id:566,order_type:'work_order',status:'workflow_review_pass'}]}));
+  await f.receiver.action('refresh');const value=await f.receiver.action('detail',566);
+  assert.equal(value.sql,'SELECT 1;');assert.equal(value.status,'workflow_review_pass');assert.equal(value.cached,true);assert.equal(f.detailCalls.length,1);
+  f.setRequest(async page=>response(page,{items:[{order_id:566,order_type:'work_order'}],more:page===1}));
+  await f.receiver.action('refresh');await f.receiver.action('page',2);await f.receiver.action('page',1);await f.receiver.action('detail',566);
+  assert.equal(f.detailCalls.length,1);
+  f.setDetail(async()=>{const value=detailResponse();value.structuredContent.data.sql_content='SELECT 2;';return value;});
+  assert.equal((await f.receiver.action('detail-refresh',566)).sql,'SELECT 2;');assert.equal(f.detailCalls.length,2);
+});
+
+test('detail is serialized with approvals and discards late responses after account changes or module pause',async t=>{
+  const f=fixture(t);await f.receiver.action('refresh');let release;
+  f.setDetail(()=>new Promise(resolve=>release=resolve));const pending=f.receiver.action('detail',566);await tick();
+  await assert.rejects(f.receiver.action('approve',566),/正在处理/);
+  f.setConfig({fingerprint:'other',canDetail:true});release(detailResponse());await assert.rejects(pending,/配置已变化/);
+  assert.equal(f.receiver.snapshot().items.length,0);
+  await f.receiver.action('refresh');const paused=f.receiver.action('detail',566);await tick();
+  f.receiver.setModuleEnabled(false);f.receiver.setModuleEnabled(true);release(detailResponse());
+  await assert.rejects(paused,/已取消/);
+});
+
+test('large detail requires a prior size signal and explicit confirmation; cancellation never requests full content',async t=>{
+  const f=fixture(t);await f.receiver.action('refresh');
+  await assert.rejects(f.receiver.action('detail-large',566),/先读取/);
+  f.setDetail(async(id,{allowLarge})=>allowLarge?detailResponse(id):{structuredContent:{status:'needs_confirmation',data:{order_id:id,order_type:'work_order',response_bytes:40000}}});
+  assert.equal((await f.receiver.action('detail',566)).needsConfirmation,true);
+  assert.equal((await f.receiver.action('detail-large',566)).cancelled,true);assert.equal(f.detailCalls.length,1);
+  f.setLargeConfirm(async()=>true);assert.equal((await f.receiver.action('detail-large',566)).sql,'SELECT 1;');
+  assert.deepEqual(f.detailCalls.map(c=>c.allowLarge),[false,true]);assert.equal(f.largeConfirmations.length,2);
+  assert.equal(f.approvalCalls.length,0);
 });
 test('module toggle cancels an old confirmation and preserves unknown submitted approvals',async t=>{
   const f=fixture(t);await f.receiver.action('refresh');let confirm;f.setConfirm(()=>new Promise(resolve=>confirm=resolve));
@@ -92,13 +147,13 @@ test('changed accounts and disabled config clear old summaries; late old-account
   assert.match(f.receiver.snapshot().error,/停用/);
 });
 
-test('only displayed real order IDs open same-origin detail links; arbitrary tools and URLs are rejected',async t=>{
-  const f=fixture(t);await f.receiver.action('refresh');await f.receiver.action('open',566);
-  assert.deepEqual(f.opened,['https://archery.example.com/detail/566/']);
-  for(const id of [567,'https://evil.example.com','566',true])await assert.rejects(f.receiver.action('open',id),/当前待审核列表/);
+test('removed browser action and arbitrary tools or URLs are rejected without MCP mutations',async t=>{
+  const f=fixture(t);await f.receiver.action('refresh');
+  for(const value of [566,567,'https://evil.example.com','566',true])await assert.rejects(f.receiver.action('open',value),/不支持/);
   for(const name of ['work_order_execute','work_order_approve','call-tool'])await assert.rejects(f.receiver.action(name,566),/不支持/);
-  f.setConfig({fingerprint:'other',baseUrl:'https://other.example.com'});await assert.rejects(f.receiver.action('open',566),/配置已变化/);
-  assert.equal(f.receiver.snapshot().items.length,0);assert.equal(f.opened.length,1);
+  assert.equal(f.detailCalls.length,0);assert.equal(f.approvalCalls.length,0);
+  f.setConfig({fingerprint:'other',baseUrl:'https://other.example.com'});await assert.rejects(f.receiver.action('detail',566),/配置已变化/);
+  assert.equal(f.receiver.snapshot().items.length,0);
 });
 
 test('MCP summaries omit SQL, audit IDs and credentials and reject malformed or unsuccessful pagination',()=>{
@@ -111,12 +166,11 @@ test('MCP summaries omit SQL, audit IDs and credentials and reject malformed or 
   }
 });
 
-test('opening after global config is removed clears old account rows and reports an unsynchronized state',async t=>{
+test('reading detail after global config is removed clears old account rows and reports an unsynchronized state',async t=>{
   const f=fixture(t);await f.receiver.action('refresh');
   const error=new Error('全局 Archery MCP 已停用');error.archeryConfig=true;f.setConfig(error);
-  await assert.rejects(f.receiver.action('open',566),/停用/);
+  await assert.rejects(f.receiver.action('detail',566),/停用/);
   assert.equal(f.receiver.snapshot().items.length,0);assert.equal(f.receiver.snapshot().state,'error');
-  assert.equal(f.opened.length,0);
 });
 
 test('global config loads stdio credentials privately and validates disabled tools, endpoint and executable form',t=>{
@@ -136,21 +190,58 @@ test('global config loads stdio credentials privately and validates disabled too
   fs.writeFileSync(file,'broken = [');assert.throws(()=>readArcheryConfig({home:dir}),/无法读取/);
 });
 
-test('official MCP client connects over real stdio and calls only pending_list with bounded page size',async t=>{
+test('official MCP client reuses stdio for fixed list and detail tools with bounded page size',async t=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'whale-archery-wire-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
-  const trace=path.join(dir,'trace.jsonl'),client=createArcheryMcp({server:{command:process.execPath,args:[path.join(__dirname,'fixtures/archery-mcp.cjs')],env:{TRACE_FILE:trace}},startupMs:3000,timeoutMs:3000});
-  try {const result=pendingPage(await client.pending(2),2);assert.equal(result.items[0].id,566);await client.pending(1);}
+  const trace=path.join(dir,'trace.jsonl'),configFile=path.join(dir,'config.toml');
+  fs.writeFileSync(configFile,`[mcp_servers.archery]\ncommand=${JSON.stringify(process.execPath)}\nargs=[${JSON.stringify(path.join(__dirname,'fixtures/archery-mcp.cjs'))}]\n[mcp_servers.archery.env]\nTRACE_FILE=${JSON.stringify(trace)}\n`);
+  // 从全局启动配置到真实 stdio 握手，不提供任何 ARCHERY_* 变量，服务仍可自行处理读取。
+  const client=createArcheryMcp({...readArcheryConfig({configFile,env:{}}),startupMs:3000,timeoutMs:3000});
+  try {const result=pendingPage(await client.pending(2),2);assert.equal(result.items[0].id,566);await client.pending(1);
+    assert.equal(orderDetail(await client.detail(566),566).sql,'SELECT 1;');}
   finally {await client.close();}
   const requests=fs.readFileSync(trace,'utf8').trim().split('\n').map(JSON.parse);
   assert.equal(requests.filter(r=>r.method==='initialize').length,1);
   assert.deepEqual(requests.filter(r=>r.method==='tools/call').map(r=>r.params),[
-    {name:'work_order_pending_list',arguments:{page:2,page_size:20}},{name:'work_order_pending_list',arguments:{page:1,page_size:20}}]);
+    {name:'work_order_pending_list',arguments:{page:2,page_size:20}},{name:'work_order_pending_list',arguments:{page:1,page_size:20}},
+    {name:'work_order_detail',arguments:{order_id:566,allow_large:false}}]);
+});
+
+test('installed MCP keeps its own dotenv credentials; account metadata and configuration changes stay isolated',t=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'whale-installed-archery-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  const bin=path.join(dir,'bin');fs.mkdirSync(bin);fs.writeFileSync(path.join(dir,'pyvenv.cfg'),'home = /fixture/python\n');
+  const command=path.join(bin,'archery-mcp'),configFile=path.join(dir,'config.toml'),dotenv=path.join(dir,'.env');
+  fs.writeFileSync(configFile,`[mcp_servers.archery]\ncommand=${JSON.stringify(command)}\n`);
+  const write=(user='owner',password='private-${literal}')=>fs.writeFileSync(dotenv,`ARCHERY_BASE_URL="https://fixture.example.com/base"\nARCHERY_USERNAME='${user}'\nARCHERY_PASSWORD='${password}'\n`);
+  write();const first=readArcheryConfig({configFile,env:{}});
+  assert.deepEqual(first.server.env,{},'不复制 MCP 自己的密码到桌宠启动配置');
+  assert.equal(first.baseUrl,'https://fixture.example.com');assert.doesNotMatch(JSON.stringify(first),/private-|literal/);
+  write('owner','changed');const password=readArcheryConfig({configFile,env:{}});
+  assert.notEqual(password.fingerprint,first.fingerprint);assert.equal(password.accountKey,first.accountKey,'改密码不能解除未知审批防重');
+  write('another');assert.notEqual(readArcheryConfig({configFile,env:{}}).accountKey,first.accountKey);
+  fs.appendFileSync(configFile,'[mcp_servers.archery.env]\nARCHERY_BASE_URL="https://override.example.com"\nARCHERY_USERNAME="override"\n');
+  assert.equal(readArcheryConfig({configFile,env:{}}).baseUrl,'https://override.example.com');
+  fs.unlinkSync(dotenv);assert.equal(readArcheryConfig({configFile,env:{}}).baseUrl,'https://override.example.com');
+});
+
+test('unknown launchers can read pending orders without a guessed external link',async t=>{
+  const f=fixture(t);f.setConfig({fingerprint:'wrapper',baseUrl:'',canApprove:true,canDetail:true});
+  await f.receiver.action('refresh');assert.equal(f.receiver.snapshot().state,'connected');
+  assert.equal(f.receiver.snapshot().canDetail,true);
+  await assert.rejects(f.receiver.action('open',566),/不支持/);
 });
 
 function approved(id,status='success') {
   return {structuredContent:{status,data:{succeeded:status==='success'?[id]:[],failed:[],unknown:[],remaining:[],
     results:status==='success'?[{order_id:id,status:'success',message:'passed'}]:[]}}};
 }
+
+test('the requesting panel confirmation runs under the approval lock and cannot use another default confirmation',async t=>{
+  const f=fixture(t);await f.receiver.action('refresh');let release,shown;
+  const waiting=f.receiver.action('approve',566,item=>{shown=item;return new Promise(resolve=>release=resolve);});await tick();
+  assert.equal(shown.id,566);assert.equal(f.confirmations.length,0);assert.equal(f.approvalCalls.length,0);
+  assert.equal(f.receiver.snapshot().busy,true);await assert.rejects(f.receiver.action('approve',566),/正在处理/);
+  release(true);await waiting;assert.deepEqual(f.approvalCalls.map(call=>call.id),[566]);assert.equal(f.receiver.snapshot().busy,false);
+});
 
 test('approval cancellation never calls MCP and each successful approval confirms exactly one displayed ID',async t=>{
   const f=fixture(t);await f.receiver.action('refresh');

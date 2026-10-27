@@ -1,10 +1,26 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),crypto=require('node:crypto');
 const {parse}=require('smol-toml');
+const {parseEnv}=require('node:util');
 const {Client}=require('@modelcontextprotocol/sdk/client/index.js');
 const {StdioClientTransport}=require('@modelcontextprotocol/sdk/client/stdio.js');
 const PAGE_SIZE=20;
 function configError(message){const error=new Error(message);error.archeryConfig=true;return error;}
+const hash=value=>crypto.createHash('sha256').update(value).digest('hex');
+
+function installedMetadata(command){
+  // 独立安装的服务由自身读取虚拟环境根目录 .env；桌宠只用其地址和账号隔离缓存、检测配置变化。
+  // 不搜索工作目录或源码，不把文件中的密码复制到启动环境，更不要求用户重复填写。
+  const bin=path.dirname(command),root=path.dirname(bin);
+  if(!/^archery-mcp(?:\.exe)?$/.test(path.basename(command))||!['bin','Scripts'].includes(path.basename(bin))||
+    !fs.existsSync(path.join(root,'pyvenv.cfg')))return {values:{},revision:''};
+  try{
+    const file=path.join(root,'.env');
+    if(fs.statSync(file).size>1024*1024)return {values:{},revision:'oversized'};
+    const text=fs.readFileSync(file,'utf8'),values=parseEnv(text);
+    return {values:{ARCHERY_BASE_URL:values.ARCHERY_BASE_URL,ARCHERY_USERNAME:values.ARCHERY_USERNAME},revision:hash(text)};
+  }catch{return {values:{},revision:'unavailable'};}
+}
 
 // 只读取全局 archery 的 stdio 配置；凭据留在主进程，不复制到桌宠数据目录。
 function readArcheryConfig({home=process.env.CODEX_HOME||path.join(os.homedir(),'.codex'),env=process.env,configFile}={}) {
@@ -28,23 +44,25 @@ function readArcheryConfig({home=process.env.CODEX_HOME||path.join(os.homedir(),
   const variables={};
   for(const key of entry.env_vars||[])if(typeof env[key]==='string')variables[key]=env[key];
   Object.assign(variables,entry.env||{});
-  const missing=['ARCHERY_BASE_URL','ARCHERY_USERNAME','ARCHERY_PASSWORD'].filter(key=>!variables[key]);
-  if(missing.length)throw configError(`Archery 配置缺少 ${missing.join('、')}。请到 Archery MCP 配置打开全局 config.toml，在 mcp_servers.archery.env 中补充，或通过 env_vars 提供；不会自动读取 MCP 的 .env。`);
-  let base;
-  try {
-    base=new URL(variables.ARCHERY_BASE_URL);
+  // 启动配置与服务的账号配置分开：缺少 env 不代表 MCP 缺少凭据，连接结果由实际工具调用确认。
+  const installed=installedMetadata(entry.command),metadata={...installed.values,...variables};
+  let baseUrl='';
+  if(metadata.ARCHERY_BASE_URL)try {
+    const base=new URL(metadata.ARCHERY_BASE_URL);
     if(!['http:','https:'].includes(base.protocol)||base.username||base.password)throw new Error();
-    if(!variables.ARCHERY_USERNAME||!variables.ARCHERY_PASSWORD)throw new Error();
-  }catch {throw configError('Archery 服务器地址或账号配置不完整，请检查全局 MCP 配置。');}
+    baseUrl=base.origin;
+  }catch {throw configError('Archery 服务器地址无效，请检查 MCP 的连接配置。');}
   const server={command:entry.command,args:entry.args||[],cwd:entry.cwd,env:variables};
   // 配置指纹包含账号和连接参数，更换账号或密码后必须丢弃旧会话与结果。
   const canApprove=(!Array.isArray(entry.enabled_tools)||entry.enabled_tools.includes('work_order_approve'))&&
     !entry.disabled_tools?.includes('work_order_approve');
   const allowed=name=>(!Array.isArray(entry.enabled_tools)||entry.enabled_tools.includes(name))&&!entry.disabled_tools?.includes(name);
   const canDetail=allowed('work_order_detail'),canExecute=allowed('work_order_execute');
-  const fingerprint=crypto.createHash('sha256').update(JSON.stringify({server,canApprove,canDetail,canExecute})).digest('hex');
-  const accountKey=crypto.createHash('sha256').update(JSON.stringify([base.origin,variables.ARCHERY_USERNAME])).digest('hex');
-  return {server,fingerprint,accountKey,canApprove,canDetail,canExecute,baseUrl:base.origin,
+  const fingerprint=hash(JSON.stringify({server,canApprove,canDetail,canExecute,installed:installed.revision}));
+  // 密码变化只使会话失效；同一账号的未知审批结果继续防重。未知启动器按配置来源保守隔离。
+  const accountKey=hash(JSON.stringify(baseUrl&&metadata.ARCHERY_USERNAME?[baseUrl,metadata.ARCHERY_USERNAME]:
+    [configFile||path.join(home,'config.toml'),entry.command,entry.args||[],entry.cwd||'']));
+  return {server,fingerprint,accountKey,canApprove,canDetail,canExecute,baseUrl,
     startupMs:Math.min(120000,Math.max(1000,(Number(entry.startup_timeout_sec)||30)*1000)),
     timeoutMs:Math.min(180000,Math.max(1000,(Number(entry.tool_timeout_sec)||90)*1000))};
 }
@@ -65,20 +83,48 @@ function createArcheryMcp(config) {
       // 不建新会话、不批量、不重试，更不追加执行 SQL。
       return client.callTool({name:'work_order_approve',arguments:{order_ids:[id],remark:'审核通过'}},undefined,{signal,timeout:config.timeoutMs});
     },
+    async detail(id,{signal,allowLarge=false}={}) {
+      if(!config.canDetail||!connected||!Number.isSafeInteger(id)||id<1||typeof allowLarge!=='boolean')throw new Error('detail_unavailable');
+      return client.callTool({name:'work_order_detail',arguments:{order_id:id,allow_large:allowLarge}},undefined,{signal,timeout:config.timeoutMs});
+    },
     close:()=>client.close()
   };
 }
 
 // 统一读取结构化结果或有长度限制的文本结果，不透传服务端原始错误。
-function payloadOf(response) {
+function payloadOf(response,maxLength=256*1024) {
   if(response?.isError)throw new Error('mcp_failure');
   let payload=response?.structuredContent;
   if(!payload) {
     const text=response?.content?.filter(item=>item.type==='text').map(item=>item.text).join('');
-    if(!text||text.length>256*1024)throw new Error('invalid_response');
+    if(!text||text.length>maxLength)throw new Error('invalid_response');
     payload=JSON.parse(text);
   }
   return payload;
+}
+
+function orderDetail(response,id){
+  const limit=16*1024*1024,payload=payloadOf(response,limit),data=payload?.data;
+  if(Buffer.byteLength(JSON.stringify(payload)||'')>limit)throw Error('invalid_response');
+  if(payload?.status==='needs_confirmation'){
+    if(data?.order_id!==id||data.order_type!=='work_order'||!Number.isSafeInteger(data.response_bytes)||data.response_bytes<1)throw Error('invalid_response');
+    return {id,needsConfirmation:true,bytes:data.response_bytes};
+  }
+  // 内容记录 ID 不是工单号，必须同时核对 workflow 身份与数据工单类型。
+  const workflow=data?.workflow;
+  if(payload?.status!=='success'||workflow?.id!==id||workflow.is_offline_export!==0||
+    (data.workflow_id!==undefined&&data.workflow_id!==id))throw Error('invalid_response');
+  const text=value=>{
+    if(value===null||value===undefined)return '';
+    if(!['string','number','boolean'].includes(typeof value))throw Error('invalid_response');
+    return String(value);
+  };
+  const content=value=>value&&typeof value==='object'?JSON.stringify(value,null,2):text(value);
+  // 仅按需向发起页面返回展示字段；不透传凭据、任意链接或上游新增字段。
+  return {id,needsConfirmation:false,title:text(workflow.workflow_name),submitter:text(workflow.engineer_display||workflow.engineer),
+    instance:text(workflow.instance__instance_name||workflow.instance),database:text(workflow.db_name),
+    status:text(workflow.status),group:text(workflow.group_name),createdAt:text(workflow.create_time),
+    sql:text(data.sql_content),execution:content(data.execute_result)};
 }
 function approvalResult(response,id) {
   const payload=payloadOf(response),data=payload?.data;
@@ -105,8 +151,8 @@ function pendingPage(response,page) {
   const items=data.items.map(item=>{
     if(!Number.isSafeInteger(item.order_id)||item.order_id<1||item.order_type!=='work_order')throw new Error('invalid_response');
     return {id:item.order_id,title:text(item.title)||'（无标题）',submitter:text(item.submitter),
-      instance:text(item.instance),database:text(item.database),createdAt:text(item.created_at)};
+      instance:text(item.instance),database:text(item.database),createdAt:text(item.created_at),status:text(item.status)};
   });
   return {items,hasMore:p.has_more,sourceTotal:p.source_total};
 }
-module.exports={readArcheryConfig,createArcheryMcp,pendingPage,approvalResult,PAGE_SIZE};
+module.exports={readArcheryConfig,createArcheryMcp,pendingPage,approvalResult,orderDetail,PAGE_SIZE};
