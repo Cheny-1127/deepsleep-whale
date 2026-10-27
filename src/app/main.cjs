@@ -433,7 +433,13 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     if((!panel&&!pet)||event.senderFrame!==event.sender.mainFrame)throw Error('不允许读取桌宠额度');
     if(!petQuota)return {error:'桌宠额度正在初始化'};
     if(!modules.enabled('quota'))return name==='snapshot'?{value:{tracking:null,extraTrackings:[]}}:{error:'API 额度已关闭，请先开启'};
-    if(['update','update-config','copy-config','delete-config'].includes(name)) {
+    if(name==='remove-empty-config'&&pet) {
+      try {
+        // 桌宠仅能移除未绑定账号的副配置；重新校验，避免旧界面误删已配置的条目。
+        if(!Number.isSafeInteger(value)||value<2||petQuota.accountIdFor(value)!==null)throw Error('只能删除尚未选择账号的副配置');
+        petQuota.deleteConfig(value);
+      }catch(error){return {error:error.message};}
+    } else if(['update','update-config','copy-config','delete-config'].includes(name)) {
       if(!panel)throw Error('仅允许在小屋修改流量跟踪配置');
       try {
         if(name==='copy-config')petQuota.copyConfig(value ?? 'primary');

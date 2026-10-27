@@ -200,6 +200,7 @@ button,input{-webkit-app-region:no-drag}.studio{display:flex;background:var(--ui
 
 /* 第二条保留榜单和刷新入口，中间展示账号。 */
 .floating .pet-quota-secondary{margin-top:4px;gap:5px}.pet-quota-account-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;font-size:10px;color:#435b4b}.pet-quota-secondary [data-field="percent"]{font-size:9px;color:#788e7f;font-variant-numeric:tabular-nums}
+.pet-quota-secondary [data-field="remove"]{width:14px;padding:0}
 
 .quota-config-action{position:relative;z-index:1}.quota-config-action svg{width:17px;height:17px}.quota-pet-card+.quota-pet-card{margin-top:20px}
 

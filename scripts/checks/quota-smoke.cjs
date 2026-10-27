@@ -57,6 +57,67 @@ let app;
   }
   let {panel,pet,errors}=await launch();
   assert.deepEqual(await panel.locator('.quota-credits').allTextContents(),['62,500','0']);
+  if(process.env.WHALE_QUOTA_DELETE_ONLY==='1') {
+    const snapshot=async()=>(await panel.evaluate(()=>window.whale.petQuota('snapshot'))).value;
+    await panel.evaluate(()=>window.whale.petQuota('update',{accountId:5}));
+    await panel.locator('#quota-pet-copy').click();
+    await panel.locator('#quota-config-2').waitFor();
+    const bar=pet.locator('#pet-quota-config-2'),remove=bar.getByRole('button',{name:'删除流量跟踪配置-2',exact:true});
+    // 窗口保持隐藏；用可见性事件启动原有轮询，不改变正式应用行为。
+    await pet.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
+    await bar.waitFor({state:'attached'});
+    assert.equal(await remove.count(),1,'未绑定账号的额度条应提供真正的删除按钮');
+    assert.equal(await remove.isVisible(),true);
+    assert.equal(await bar.locator('[data-field="percent"]').isVisible(),false,'空配置不再用横线作为额度占位');
+    assert.equal(await bar.locator('[data-field="name"]').evaluate(el=>el.scrollWidth<=el.clientWidth),true,'删除按钮不挤压账号选择提示');
+    await pet.screenshot({path:'/tmp/whale-pet-quota-empty-delete.png'});
+    for(const id of ['primary',999,null]) {
+      const result=await pet.evaluate(id=>window.whale.petQuota('remove-empty-config',id),id);
+      assert.ok(result.error,'桌宠只能删除现有的空副配置');
+    }
+    fs.mkdirSync(path.join(dir,'pet-quota-settings.json.tmp'));
+    await remove.click();
+    await pet.waitForFunction(()=>document.querySelector('#pet-quota-config-2')?.title.includes('保存失败'));
+    assert.equal((await snapshot()).settings.trackingConfigs.length,1,'保存失败保留配置');
+    assert.equal(await remove.isEnabled(),true,'失败后可以重试');
+    fs.rmdirSync(path.join(dir,'pet-quota-settings.json.tmp'));
+    await remove.click();
+    await bar.waitFor({state:'detached'});
+    // 删除后小屋通过原有轮询同步；验证实际 IPC 和持久化结果。
+    await panel.locator('#quota-config-2').waitFor({state:'detached'});
+    assert.equal((await snapshot()).settings.trackingConfigs.length,0);
+    assert.equal((await snapshot()).settings.accountId,5);
+    await panel.locator('#quota-pet-copy').click();await panel.locator('#quota-config-3').waitFor();
+    await panel.evaluate(()=>window.whale.petQuota('update-config',{id:3,patch:{accountId:6}}));
+    await pet.waitForFunction(()=>document.querySelector('#pet-quota-config-3 [data-field="name"]')?.textContent==='another-account');
+    assert.equal(await pet.locator('#pet-quota-config-3 [data-field="remove"]').isVisible(),false);
+    assert.equal(await pet.locator('#pet-quota-config-3 [data-field="percent"]').textContent(),'70%');
+    const denied=await pet.evaluate(()=>window.whale.petQuota('remove-empty-config',3));
+    assert.match(denied.error,/尚未选择账号/,'主进程重新检查账号绑定，防止旧按钮误删');
+    assert.equal(await panel.locator('#quota-config-3 [data-field="title"]').textContent(),'流量跟踪配置-2','删 2 后再新增补回 2');
+    await panel.locator('#quota-pet-copy').click();await panel.locator('#quota-config-4').waitFor();
+    assert.equal(await panel.locator('#quota-config-4 [data-field="title"]').textContent(),'流量跟踪配置-3');
+    await panel.evaluate(()=>window.whale.petQuota('delete-config',3));
+    await panel.locator('#quota-config-3').waitFor({state:'detached'});
+    await panel.locator('#quota-pet-copy').click();await panel.locator('#quota-config-5').waitFor();
+    await pet.waitForFunction(()=>document.querySelector('#pet-quota-config-5 [data-field="remove"]')?.getAttribute('aria-label')==='删除流量跟踪配置-2');
+    assert.deepEqual(await panel.locator('#quota-pet-extra-configs [data-field="title"]').allTextContents(),['流量跟踪配置-2','流量跟踪配置-3']);
+    assert.deepEqual(await pet.locator('#pet-quota-extra-bars > [data-config-number]').evaluateAll(els=>els.map(el=>el.dataset.configNumber)),['2','3'],'桌宠补号后仍按编号排列');
+    const stale=await panel.evaluate(()=>window.whale.petQuota('update-config',{id:3,patch:{accountId:6}}));
+    assert.match(stale.error,/已不可用/,'旧配置操作不能修改补号后的新配置');
+    await panel.evaluate(()=>window.whale.petQuota('update-config',{id:5,patch:{accountId:6}}));
+    await panel.locator('#quota-pet-extra-configs').screenshot({path:'/tmp/whale-quota-numbering.png'});
+    assert.deepEqual(errors,[]);
+    assert.deepEqual(await app.evaluate(()=>global.testWindowPolicy.events),[],'测试窗口没有显示或抢焦点');
+    await app.close();app=null;
+    ({panel,pet,errors}=await launch());
+    assert.deepEqual((await snapshot()).settings.trackingConfigs.map(item=>item.id),[4,5],'删除配置重启后不恢复');
+    assert.equal((await snapshot()).extraTrackings.find(item=>item.id===5).tracking.accountId,6);
+    assert.deepEqual(await panel.locator('#quota-pet-extra-configs [data-field="title"]').allTextContents(),['流量跟踪配置-2','流量跟踪配置-3'],'重启保留补号及显示顺序');
+    assert.deepEqual(errors,[]);
+    console.log('Quota deletion and numbering UI OK: click, failed save and retry, gap reuse, ordering, stale-ID guard and restart');
+    return;
+  }
   if(process.env.WHALE_QUOTA_SYNC_ONLY==='1') {
     const snapshot=async()=>(await panel.evaluate(()=>window.whale.quota('snapshot'))).value;
     async function refresh() {

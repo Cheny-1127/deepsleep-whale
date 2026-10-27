@@ -12,7 +12,8 @@ export function createPetQuotaView({say = () => {}} = {}) {
     const following=Array.from(container.children).find(bar=>Number(bar.dataset.configNumber)>number);
     container.insertBefore(root,following || null);
     const get=name=>root.querySelector(`[data-field="${name}"]`);
-    const bar={slot:id,number,controls:root,refresh:get('refresh'),fill:get('fill'),percent:get('percent'),meter:get('meter'),name:get('name'),ranking:get('ranking'),tracking:null};
+    const bar={slot:id,number,controls:root,refresh:get('refresh'),fill:get('fill'),percent:get('percent'),remove:get('remove'),meter:get('meter'),name:get('name'),ranking:get('ranking'),tracking:null};
+    bar.remove.title=`删除流量跟踪配置-${number}`;bar.remove.setAttribute('aria-label',bar.remove.title);
     bar.ranking.setAttribute('aria-label',`配置${number}今日消费榜`);
     bars.set(id,bar);bindBar(bar);return bar;
   }
@@ -25,6 +26,7 @@ export function createPetQuotaView({say = () => {}} = {}) {
       bar.refresh.disabled = busy || switching || data?.accountId == null || data.paused;
       bar.refresh.setAttribute('aria-busy', String(busy));
       bar.refresh.title = busy ? '正在刷新额度' : data?.accountId == null ? '请先选择跟踪账号' : data.paused ? '跟踪账号已暂停刷新' : data.error ? '额度同步失败，点击重试' : '刷新额度';
+      if (bar.remove) bar.remove.disabled = switching;
     }
   }
   function renderBar(bar, data) {
@@ -34,6 +36,11 @@ export function createPetQuotaView({say = () => {}} = {}) {
     bar.controls.dataset.tone = data.tone;
     bar.fill.style.width = data.remaining == null ? '0%' : `${Math.max(0, Math.min(100, data.remaining))}%`;
     bar.percent.textContent = data.remaining == null ? '—' : `${Math.round(data.remaining)}%`;
+    if (bar.remove) {
+      const empty = data.accountId == null;
+      bar.remove.hidden = !empty;
+      bar.percent.hidden = empty;
+    }
     if (bar.name) bar.name.textContent = data.name || (data.accountId == null ? '双击选择账号' : `账号 #${data.accountId}`);
     let text = data.accountId === null ? '尚未选择跟踪账号' : data.remaining === null ? `${data.name || '跟踪账号'} · 暂无 7d 额度数据` : `${data.name} · 7d 剩余 ${Math.round(data.remaining)}%`;
     if (data.resetAt) text += `\n重置时间：${new Date(data.resetAt).toLocaleString('zh-CN')}`;
@@ -67,6 +74,23 @@ export function createPetQuotaView({say = () => {}} = {}) {
   }
   function bindBar(bar) {
     bar.ranking.addEventListener('click', () => void window.whale.petQuota('ranking',bar.slot));
+    bar.remove?.addEventListener('click', async () => {
+      if (bar.remove.disabled || bar.tracking?.accountId != null) return;
+      switching = true;
+      revision++;
+      renderRefresh();
+      let error = '';
+      try {
+        const result = await window.whale.petQuota('remove-empty-config', bar.slot);
+        if (result.error) error = result.error;
+        else render(result.value);
+      } catch {error = '删除配置失败，请重试';}
+      finally {
+        switching = false;
+        renderRefresh();
+        if (error) {bar.controls.title = error;say(error);}
+      }
+    });
     bar.refresh.addEventListener('click', async () => {
       if (bar.refresh.disabled) return;
       const accountId = bar.tracking.accountId;
