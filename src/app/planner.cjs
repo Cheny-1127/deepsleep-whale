@@ -8,6 +8,22 @@ function categoryOf(value='work') {
   if(!['work','personal'].includes(value))throw Error('请选择工作或个人分类');
   return value;
 }
+function taskStatus(value) {
+  if(!['pending','processing','done'].includes(value))throw Error('请选择待处理、处理中或处理完成状态');
+  return value;
+}
+function completionOf(item,id=randomUUID()) {
+  return {...clone(item),id,taskId:item.id};
+}
+function setTaskStatus(state,item,status,time) {
+  const previous=item.status;
+  item.status=taskStatus(status);
+  item.completedAt=status==='done'?(item.completedAt??time):null;
+  if(status==='done'&&previous!=='done') {
+    if(state.completedTasks.length>=20000)throw Error('完成历史已达 20000 条，请备份并整理历史后重试');
+    state.completedTasks.push(completionOf(item));
+  }
+}
 const isAllDay=schedule=>schedule.periods.length===1&&schedule.periods[0].start==='00:00'&&schedule.periods[0].end==='24:00';
 function dateKey(time) {
   const date=new Date(time),pad=n=>String(n).padStart(2,'0');
@@ -106,10 +122,17 @@ function taskInput(value,now) {
   }
   return {title,category:categoryOf(value.category),notes,dueDate};
 }
+function validateTask(item) {
+  if(!item.title||typeof item.title!=='string'||item.title.length>200||typeof item.notes!=='string'||item.notes.length>4000||item.dueDate!==null&&!validDate(item.dueDate)||item.completedAt!==null&&!Number.isFinite(item.completedAt))throw Error('invalid');
+  item.category=categoryOf(item.category);
+  item.status=taskStatus(item.status===undefined?(item.completedAt===null?'pending':'done'):item.status);
+  if((item.status==='done')!==(item.completedAt!==null))throw Error('invalid');
+}
 function createPlanner({dataDir,now=()=>Date.now(),onChange=()=>{},onDue=()=>{},onFinished=()=>{}}) {
   const file=path.join(dataDir,'planner.json');
-  let state={version:1,workTime:clone(DEFAULT_WORK_TIME),notifications:true,sound:false,reminders:[],tasks:[]},error='',revision=0;
+  let state={version:1,workTime:clone(DEFAULT_WORK_TIME),notifications:true,sound:false,reminders:[],tasks:[],completedTasks:[]},error='',revision=0;
   try {
+    if(fs.statSync(file).size>32*1024*1024)throw Error('invalid');
     const saved=JSON.parse(fs.readFileSync(file,'utf8'));
     if(saved.version!==1||!Array.isArray(saved.reminders)||saved.reminders.length>100||!Array.isArray(saved.tasks)||saved.tasks.length>500||typeof saved.notifications!=='boolean'||typeof saved.sound!=='boolean')throw Error('invalid');
     saved.workTime=workTime(saved.workTime);
@@ -122,23 +145,31 @@ function createPlanner({dataDir,now=()=>Date.now(),onChange=()=>{},onDue=()=>{},
       const run=item.run;
       if(run!==null&&(!run||!['scheduled','waiting','processing'].includes(run.state)||typeof run.token!=='string'||!run.token||![run.dueAt,run.windowStart,run.windowEnd].every(Number.isFinite)||run.windowStart>run.dueAt||run.dueAt>=run.windowEnd||run.state==='processing'&&!Number.isFinite(run.processingEndsAt)))throw Error('invalid');
     }
-    for(const item of saved.tasks) {
-      if(!item.title||typeof item.title!=='string'||item.title.length>200||typeof item.notes!=='string'||item.notes.length>4000||item.dueDate!==null&&!validDate(item.dueDate)||item.completedAt!==null&&!Number.isFinite(item.completedAt))throw Error('invalid');
-      item.category=categoryOf(item.category);
+    for(const item of saved.tasks)validateTask(item);
+    // 旧文件只为现存已完成任务补历史；稳定标识保证未落盘前反复读取不重复。
+    if(saved.completedTasks===undefined)saved.completedTasks=saved.tasks.filter(item=>item.status==='done').map(item=>completionOf(item,`legacy:${item.id}:${item.completedAt}`));
+    if(!Array.isArray(saved.completedTasks)||saved.completedTasks.length>20000)throw Error('invalid');
+    const historyIds=new Set();
+    for(const item of saved.completedTasks) {
+      if(!item||typeof item.id!=='string'||!item.id||historyIds.has(item.id)||typeof item.taskId!=='string'||!item.taskId)throw Error('invalid');
+      historyIds.add(item.id);validateTask(item);
+      if(item.status!=='done')throw Error('invalid');
     }
     state=saved;
   } catch(failure) {if(failure.code!=='ENOENT')error='日程数据无法读取，已保留原文件并停止写入，请恢复有效备份后重启。';}
   let writeError='';
   function save(next) {
     if(error)throw Error(error);
+    const serialized=JSON.stringify(next);
+    if(Buffer.byteLength(serialized)>32*1024*1024)throw Error('日程数据超过 32 MiB，请备份并整理历史后重试');
     // 先写临时文件并替换成功，再发布内存状态；落盘失败不能消费本轮 token 或进度。
-    try {fs.writeFileSync(file+'.tmp',JSON.stringify(next),{mode:0o600});fs.renameSync(file+'.tmp',file);}
+    try {fs.writeFileSync(file+'.tmp',serialized,{mode:0o600});fs.renameSync(file+'.tmp',file);}
     catch {writeError='日程保存失败，已保留上次有效记录，请检查磁盘后重试。';throw Error(writeError);}
     state=next;writeError='';revision++;onChange();
   }
   function tick() {
     if(error)return;
-    const time=now(),next=clone(state),due=[],finished=[];let changed=false;
+    const time=now(),next={...state,reminders:clone(state.reminders)},due=[],finished=[];let changed=false;
     for(const reminder of next.reminders) {
       if(!reminder.enabled)continue;
       let run=reminder.run;
@@ -172,10 +203,16 @@ function createPlanner({dataDir,now=()=>Date.now(),onChange=()=>{},onDue=()=>{},
     const time=now();
     return {revision,now:time,today:dateKey(time),notifications:state.notifications,error:error||writeError,active:error?[]:state.reminders.filter(item=>item.enabled&&item.run&&time>=item.run.windowStart&&time<item.run.windowEnd&&['waiting','processing'].includes(item.run.state)).map(({id,title,processMinutes,run})=>({id,title,processMinutes,...clone(run)}))};
   }
-  function snapshot(){return {...clone(state),...summary(),today:dateKey(now())};}
+  function snapshot(){const {completedTasks,...current}=state;return {...clone(current),historyCount:completedTasks.length,...summary(),today:dateKey(now())};}
   function action(name,value) {
     if(name==='snapshot')return snapshot();
     if(error)throw Error(error);
+    if(name==='history') {
+      const date=value?.date??dateKey(now()),category=value?.category??'all';
+      if(!validDate(date))throw Error('请选择有效的完成日期');
+      if(category!=='all')categoryOf(category);
+      return {date,items:clone(state.completedTasks.filter(item=>dateKey(item.completedAt)===date&&(category==='all'||item.category===category)).sort((a,b)=>b.completedAt-a.completedAt))};
+    }
     tick();
     const time=now(),next=clone(state);
     if(name==='settings') {
@@ -219,12 +256,14 @@ function createPlanner({dataDir,now=()=>Date.now(),onChange=()=>{},onDue=()=>{},
       const old=value?.id?next.tasks.find(item=>item.id===value.id):null;
       if(value?.id&&!old)throw Error('待办不存在');
       if(!old&&next.tasks.length>=500)throw Error('最多保存 500 条待办，请清理已完成记录');
-      const item={...taskInput({...value,category:value?.category??old?.category},time),id:old?.id||randomUUID(),createdAt:old?.createdAt??time,completedAt:old?.completedAt??null};
+      const item={...taskInput({...value,category:value?.category??old?.category},time),id:old?.id||randomUUID(),createdAt:old?.createdAt??time,completedAt:old?.completedAt??null,status:old?.status??'pending'};
+      setTaskStatus(next,item,value.status===undefined?item.status:value.status,time);
       if(old)next.tasks[next.tasks.indexOf(old)]=item;else next.tasks.push(item);
-    } else if(name==='toggle-task'||name==='remove-task') {
+    } else if(name==='toggle-task'||name==='set-task-status'||name==='remove-task') {
       const item=next.tasks.find(item=>item.id===value?.id);if(!item)throw Error('待办不存在');
       if(name==='remove-task')next.tasks=next.tasks.filter(task=>task!==item);
-      else {if(typeof value.completed!=='boolean')throw Error('无效的完成状态');item.completedAt=value.completed?time:null;}
+      else if(name==='set-task-status')setTaskStatus(next,item,value.status,time);
+      else {if(typeof value.completed!=='boolean')throw Error('无效的完成状态');setTaskStatus(next,item,value.completed?'done':'pending',time);}
     } else throw Error('不支持的日程操作');
     save(next);return snapshot();
   }

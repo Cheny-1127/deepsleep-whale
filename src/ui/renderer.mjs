@@ -16,6 +16,7 @@ import { createPetQuotaSettingsView } from './pet-quota-settings-view.mjs';
 import { createPetQuotaView } from './pet-quota-view.mjs';
 import { createPlannerView } from './planner-view.mjs';
 import { createModulesView } from './modules-view.mjs';
+import { createWorkReportsView } from './work-reports-view.mjs';
 
 const $ = id => document.getElementById(id);
 const copy = {
@@ -44,6 +45,7 @@ createSidebarView();
 const hooksView=createHookSettingsView({render});
 const remindersView=createReminderView({render,action,floating});
 const plannerView=createPlannerView({floating});
+createWorkReportsView();
 const wechatView=createWechatView();
 createMailView();
 const subscriptionsView=createMessageSubscriptionsView();

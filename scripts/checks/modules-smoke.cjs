@@ -29,7 +29,7 @@ async function launch(){
   app.on('window',page=>page.on('pageerror',error=>errors.push(error.message)));await app.firstWindow();
   await app.evaluate(async({BrowserWindow})=>{for(let i=0;i<100&&!BrowserWindow.getAllWindows().some(w=>w.webContents.getURL().endsWith('/index.html'));i++)await new Promise(resolve=>setTimeout(resolve,30));});
   panel=app.windows().find(p=>p.url().endsWith('/index.html'));pet=app.windows().find(p=>p.url().endsWith('/pet.html'));
-  await panel.waitForFunction(()=>document.querySelectorAll('.module-toggle:not(:disabled)').length===8);
+  await panel.waitForFunction(()=>document.querySelectorAll('.module-toggle:not(:disabled)').length===9);
 }
 async function toggle(id,enabled){
   await panel.locator('#nav-'+id).click();const button=panel.locator('#'+id+'-module-toggle');await button.click();
@@ -90,5 +90,5 @@ async function toggle(id,enabled){
   assert.equal(await panel.locator('#nav-planner').getAttribute('data-module-enabled'),'true');
   await panel.locator('#nav-wechat').click();await panel.screenshot({path:path.join(root,'out/modules-enabled.png'),fullPage:true});
   assert.deepEqual(await app.evaluate(()=>global.testWindowPolicy.events),[]);assert.deepEqual(errors,[]);
-  console.log('PASS: eight module switches, home excluded, inert/gray content and navigation, runtime stop/restart, persisted disabled startup, IPC guards, save failure rollback, preserved data/account switches, 860px hidden UI');
+  console.log('PASS: nine module switches, home excluded, inert/gray content and navigation, runtime stop/restart, persisted disabled startup, IPC guards, save failure rollback, preserved data/account switches, 860px hidden UI');
 }finally{if(app)await app.close();fs.rmSync(dir,{recursive:true,force:true});}})().catch(error=>{console.error(error);process.exitCode=1;});

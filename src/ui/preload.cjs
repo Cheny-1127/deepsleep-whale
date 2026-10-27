@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('whale', {
   sidebar: value => ipcRenderer.invoke('sidebar-settings', value),
   modules: value => ipcRenderer.invoke('module-settings', value),
   planner: (name,value) => ipcRenderer.invoke('planner',name,value),
+  reports: (name,value) => ipcRenderer.invoke('work-reports',name,value),
   shortcuts: value => ipcRenderer.invoke('shortcut-settings', value),
   drag: (phase, point) => ipcRenderer.send('pet-drag', phase, point),
   petInteractive: value => ipcRenderer.send('pet-interactive', value),
