@@ -394,6 +394,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     if(name==='confirm-approval')return {value:archeryConfirmation.reply(event.sender,value)};
     if(!modules.enabled('archery')&&name!=='snapshot')return {error:'Archery 已关闭，请先开启'};
     try{
+      if(name==='approval-detail')return {value:await archeryConfirmation.detail(event.sender,value)};
       if(name==='open-config'){
         const file=archeryConnection.snapshot().configFile;
         if(!fs.existsSync(file))throw Error('配置文件不存在，请先选择已有的 Codex 全局 config.toml。');
@@ -412,7 +413,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
         await archery.action('refresh');
         return {value:connection};
       }
-      return {value:await archery.action(name,value,name==='approve'?item=>archeryConfirmation.request(event.sender,item):undefined)};
+      return {value:await archery.action(name,value,['approve','execute'].includes(name)?(item,preview)=>archeryConfirmation.request(event.sender,item,preview):undefined)};
     }catch(error){return {error:error.message};}
   });
   // 额度页只读网关已保存的快照，token 不进入渲染进程，也不刷新上游额度。

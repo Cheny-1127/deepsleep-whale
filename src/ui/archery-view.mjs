@@ -15,15 +15,46 @@ export function createArcheryView() {
     confirmationToken=request.token;
     let confirmed=false;
     try{
-      const item=request.item;
-      confirmed=await confirmAction({owner:$('view'),title:`审核通过工单 #${item.id}？`,
-        message:`${item.title}\n提交人：${item.submitter||'—'}\n实例：${item.instance||'—'}\n数据库：${item.database||'—'}\n\n仅审核这一笔工单，不请求执行 SQL。`,confirmLabel:'审核通过'});
+      const item=request.item,executing=request.operation==='execute';
+      confirmed=await confirmAction({owner:$('view'),title:`${executing?'执行':'审核通过'}工单 #${item.id}？`,
+        message:`${item.title}\n提交人：${item.submitter||'—'}\n实例：${item.instance||'—'}\n数据库：${item.database||'—'}${executing?'\n确认后将请求执行这一笔工单的 SQL，受理后请查看最终执行结果。':''}`,
+        content:createApprovalDetail(request),confirmLabel:executing?'执行':'审核通过'});
     }catch{/* 弹窗无法展示时按取消处理，不保留待确认请求。 */}finally{
       if(confirmationToken===request.token)confirmationToken=null;
       // 只回传本次令牌与明确确认结果；账号、工单编号及权限由主进程再次检查。
       try{await invoke('confirm-approval',{token:request.token,confirmed});}catch{}
     }
   });
+  function createApprovalDetail(request){
+    const box=document.createElement('section');box.className='archery-detail archery-approval-detail';
+    let value=request.cachedDetail,loading=false;
+    function display(message=''){
+      box.replaceChildren();
+      if(message){const error=document.createElement('p');error.className='archery-detail-error';error.textContent=message;box.append(error);}
+      // 由主进程随本次令牌提供缓存，命中时直接展示，不再发起详情接口调用。
+      if(value&&!value.needsConfirmation){appendDetailContent(box,value);return;}
+      const hint=document.createElement('p');hint.textContent=request.canDetail?(value?.needsConfirmation?`详情约 ${Math.ceil(value.bytes/1024)} KB，完整加载前需要确认。`:'点击获取此工单的 SQL 和执行结果。'):'详情工具未开放，请检查 Archery MCP 工具权限。';box.append(hint);
+      if(!request.canDetail)return;
+      const button=document.createElement('button');button.type='button';button.className='outline';button.textContent=value?.needsConfirmation?'加载完整详情':message?'重试获取详情':'获取详情';
+      button.addEventListener('click',()=>void load());box.append(button);
+    }
+    async function load(){
+      if(loading||confirmationToken!==request.token)return;
+      loading=true;
+      const approve=box.closest('dialog')?.querySelector('.ui-confirm-actions .primary');
+      if(approve)approve.disabled=true;
+      box.textContent='正在读取工单详情…';
+      try{
+        const data=await invoke('approval-detail',{token:request.token,allowLarge:Boolean(value?.needsConfirmation)});
+        // 关闭确认框后的迟到内容不能写回新弹窗，也不能重新启用已失效的确认。
+        if(confirmationToken!==request.token||box.isConnected===false)return;
+        if(!data.cancelled)value=data;
+        display();
+      }catch(error){if(confirmationToken===request.token&&box.isConnected!==false)display(error.message);}
+      finally{loading=false;if(approve&&confirmationToken===request.token)approve.disabled=false;}
+    }
+    display();return box;
+  }
   function render(data) {
     if(!data)return;latest=data;
     for(const name of ['config-file','choose-config','default-config','save-config','open-config'])$(name).disabled=busy||data.busy||connectionBusy;
@@ -35,22 +66,17 @@ export function createArcheryView() {
     $('status').title=on?'点击暂停自动刷新':'点击开启自动刷新';
     $('error').textContent=data.error||'';$('error').hidden=!data.error;
     $('feedback').textContent=actionError||data.notice||'';
-    const when=data.lastChecked?`上次成功刷新：${new Date(data.lastChecked).toLocaleString('zh-CN')}`:'启动后自动读取待审核列表。';
+    const when=data.lastChecked?`上次成功刷新：${new Date(data.lastChecked).toLocaleString('zh-CN')}`:'启动后自动读取待处理列表。';
     $('checked').textContent=data.busy?`${when} · 正在刷新`:`${when} · ${on?'每 5 分钟自动刷新':'已暂停自动刷新'}`;
     $('count').textContent=`本页 ${data.items.length} 条`;
-    $('pagination').textContent=`来源第 ${data.page} 页 · ${data.hasMore?'还有下一页':'已到最后一页'}。待办按数据工单筛选，匹配总数未知。`;
+    $('pagination').textContent=`来源第 ${data.page} 页 · ${data.hasMore?'还有下一页':'已到最后一页'}。${data.canListExecute?'待我审核与当前账号可见的待执行工单合并展示，匹配总数未知。':'待执行列表工具未开放，当前仅展示待审核工单，匹配总数未知。'}`;
     $('empty').hidden=Boolean(data.items.length);
-    $('empty').textContent=data.lastChecked?(data.hasMore?'本来源页没有待我审核的数据工单，可以继续查看下一页。':'本页暂无待我审核的数据工单。'):data.busy?'正在读取待审核列表…':'尚未取得待审核列表。';
+    $('empty').textContent=data.lastChecked?(data.hasMore?'本来源页没有待处理的数据工单，可以继续查看下一页。':'本页暂无待处理的数据工单。'):data.busy?'正在读取待处理列表…':'尚未取得待处理列表。';
     $('refresh').disabled=busy||data.busy;
     $('previous').disabled=busy||data.busy||data.page<=1;
     $('next').disabled=busy||data.busy||!data.hasMore;
     $('status').disabled=busy||data.busy;
-    for(const {button,id} of approvalButtons){
-      const status=data.items.find(item=>item.id===id)?.approvalStatus;
-      button.disabled=busy||data.busy||!data.canApprove||Boolean(status);
-      button.textContent=({unknown:'结果待核实',failed:'请刷新后核实',success:'已审核通过'})[status]||'审核通过';
-      button.title=status==='unknown'?'请核实此工单的审批结果':data.canApprove?'每笔审核前需要确认':'请刷新列表，并确认全局配置开放审核工具';
-    }
+    for(const {button,id} of approvalButtons)updateAction(button,data.items.find(item=>item.id===id),data);
     for(const entry of detailRows.values()){
       for(const button of [entry.trigger,entry.more,entry.retry,entry.reload].filter(Boolean))button.disabled=busy||data.busy||data.canDetail===false;
     }
@@ -92,14 +118,23 @@ export function createArcheryView() {
       copy.addEventListener('click',()=>void toggleDetail(entry));
       const controls=document.createElement('div');controls.className='archery-actions';
       const approve=document.createElement('button');approve.type='button';approve.className='primary';
-      approve.textContent=({unknown:'结果待核实',failed:'请刷新后核实',success:'已审核通过'})[item.approvalStatus]||'审核通过';
-      approve.disabled=busy||data.busy||!data.canApprove||Boolean(item.approvalStatus);
-      approve.title=item.approvalStatus==='unknown'?'请核实此工单的审批结果':data.canApprove?'每笔审核前需要确认':'请刷新列表，并确认全局配置开放审核工具';
-      approve.addEventListener('click',()=>void act('approve',item.id));
+      updateAction(approve,item,data);
+      // 每次点击读取当前行状态，避免轮询只更新文案却仍触发旧动作。
+      approve.addEventListener('click',()=>{if(!approve.disabled&&!approve.hidden)void act(entry.item.status==='workflow_review_pass'?'execute':'approve',entry.item.id);});
       approvalButtons.push({button:approve,id:item.id});controls.append(approve);
       row.append(copy,controls,box);return row;
     });
     $('list').replaceChildren(...rows);
+  }
+  // 同屏逐行判断动作，结束等状态不显示按钮；未知审核结果也会阻止该工单进入执行。
+  function updateAction(button,item,data){
+    const executing=item?.status==='workflow_review_pass',valid=executing||item?.status==='workflow_manreviewing';
+    const status=executing?(item?.executionStatus|| (item?.approvalStatus==='unknown'?'unknown':'')):item?.approvalStatus;
+    const allowed=executing?data.canExecute:data.canApprove;
+    button.hidden=!valid;
+    button.disabled=busy||data.busy||!allowed||Boolean(status)||!valid;
+    button.textContent=({unknown:'结果待核实',failed:'请刷新后核实',success:executing?'已请求执行':'已审核通过'})[status]||(executing?'执行':'审核通过');
+    button.title=status==='unknown'?'请核实此工单的处理结果':allowed?'每笔操作前需要单独确认':'请刷新列表，并确认全局配置开放对应工具';
   }
   function renderConnection(data){
     if(!data)return;connection=data;
@@ -131,6 +166,16 @@ export function createArcheryView() {
     const status=({workflow_manreviewing:'待人工审核',workflow_review_pass:'审核通过',workflow_finish:'已正常结束'})[data.status]||data.status;
     return [status&&`状态：${status}`,data.group&&`资源组：${data.group}`,data.instance&&`实例：${data.instance}`,data.database&&`数据库：${data.database}`].filter(Boolean).join(' · ');
   }
+  function appendDetailContent(box,data){
+    const meta=document.createElement('p');meta.className='archery-detail-meta';meta.textContent=detailMeta(data);box.append(meta);
+    for(const [label,content] of [['SQL 内容',data.sql],['执行结果',data.execution]]){
+      const heading=document.createElement('h3'),pre=document.createElement('pre');heading.textContent=label;pre.textContent=content||'暂无内容';box.append(heading,pre);
+    }
+    if(data.cached||data.cacheWarning){
+      const hint=document.createElement('p');hint.className='wechat-hint';hint.textContent=data.cacheWarning||'详情已缓存，状态随列表更新。';box.append(hint);
+    }
+    return meta;
+  }
   function showDetail(entry,data,message=''){
     const {box}=entry;box.replaceChildren();entry.more=entry.retry=entry.reload=entry.statusLine=null;
     if(message){
@@ -142,16 +187,7 @@ export function createArcheryView() {
       const more=document.createElement('button');more.type='button';more.className='outline';more.textContent='加载完整详情';
       more.addEventListener('click',()=>void loadDetail(entry,true));entry.more=more;box.append(hint,more);
     }else{
-      const meta=document.createElement('p');meta.className='archery-detail-meta';
-      meta.textContent=detailMeta(data);entry.statusLine=meta;
-      box.append(meta);
-      for(const [label,content] of [['SQL 内容',data.sql],['执行结果',data.execution]]){
-        const heading=document.createElement('h3'),pre=document.createElement('pre');heading.textContent=label;pre.textContent=content||'暂无内容';
-        box.append(heading,pre);
-      }
-      if(data.cached||data.cacheWarning){
-        const hint=document.createElement('p');hint.className='wechat-hint';hint.textContent=data.cacheWarning||'详情已缓存，状态随列表更新。';box.append(hint);
-      }
+      entry.statusLine=appendDetailContent(box,data);
       const reload=document.createElement('button');reload.type='button';reload.className='text-button';reload.textContent='重新加载详情';
       reload.addEventListener('click',()=>void loadDetail(entry,false,true));entry.reload=reload;box.append(reload);
     }

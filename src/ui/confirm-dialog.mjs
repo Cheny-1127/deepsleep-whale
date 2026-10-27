@@ -1,7 +1,7 @@
 let sequence=0;
 
 // 确认框挂在所属模块内，模块关闭时可统一取消；不使用会唤起系统窗口的 window.confirm。
-export function confirmAction({owner,title,message,confirmLabel='确认',danger=false}) {
+export function confirmAction({owner,title,message,confirmLabel='确认',danger=false,content=null}) {
   // 隐藏、停用模块不能发起操作，同一时刻也只允许一个确认框占用焦点。
   if(owner.closest('[hidden],[inert]')||document.querySelector('.ui-confirm-dialog[open]'))return Promise.resolve(false);
   const opener=document.activeElement,dialog=document.createElement('dialog'),id='ui-confirm-'+(++sequence);
@@ -14,7 +14,8 @@ export function confirmAction({owner,title,message,confirmLabel='确认',danger=
   cancel.type=confirm.type='button';cancel.className='outline';cancel.textContent='取消';cancel.autofocus=true;
   confirm.className=danger?'primary ui-confirm-danger':'primary';confirm.textContent=confirmLabel;
   cancel.addEventListener('click',()=>dialog.close());confirm.addEventListener('click',()=>dialog.close('confirmed'));
-  actions.append(cancel,confirm);dialog.append(heading,description,actions);owner.append(dialog);
+  // 额外详情由调用方创建 DOM 节点后传入，不接收 HTML 字符串，沿用相同的取消与焦点管理。
+  actions.append(cancel,confirm);dialog.append(heading,description);if(content)dialog.append(content);dialog.append(actions);owner.append(dialog);
   return new Promise(resolve=>{
     const cancelOnNavigation=()=>{if(owner.closest('[hidden],[inert]'))dialog.close();};
     document.addEventListener('whale-view-changed',cancelOnNavigation);
