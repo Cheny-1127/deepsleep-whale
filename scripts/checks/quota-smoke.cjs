@@ -5,7 +5,8 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
 const root=path.resolve(__dirname,'../..'),dir=fs.mkdtempSync('/tmp/whale-quota-ui-');
 const bootstrap=path.join(dir,'bootstrap.cjs'),tokenFile=path.join(dir,'token');
 fs.writeFileSync(tokenFile,'synthetic-token',{mode:0o600});
-fs.writeFileSync(bootstrap,`const {Notification}=require('electron');Notification.isSupported=()=>false;
+fs.writeFileSync(bootstrap,`require(${JSON.stringify(path.join(__dirname,'test-window-policy.cjs'))}).installTestWindowPolicy();
+const {Notification}=require('electron');Notification.isSupported=()=>false;
 const a=require(${JSON.stringify(path.join(root,'src/channels/archery-pending.cjs'))}),createArchery=a.createArcheryPending;
 a.createArcheryPending=options=>createArchery({...options,readConfig:()=>{throw Error('isolated');}});
 const q=require(${JSON.stringify(path.join(root,'src/channels/quota-accounts.cjs'))}),createQuota=q.createQuotaPanel;
@@ -705,7 +706,7 @@ let app;
   await field(3,'accounts').getByRole('radio',{name:'another-account',exact:true}).check();await field(3,'apply').click();
   await panel.waitForFunction(()=>document.getElementById('quota-config-3-actions').hidden&&!document.getElementById('quota-config-3-toggle').disabled);
   await panel.getByRole('button',{name:'复制流量跟踪配置',exact:true}).click();await card(4).waitFor();
-  assert.equal(await field(4,'title').textContent(),'流量跟踪配置-4');
+  assert.equal(await field(4,'title').textContent(),'流量跟踪配置-2');
   assert.equal((await state()).settings.trackingConfigs[1].groupId,11);
   assert.equal(await pet.evaluate(async()=>{try{await window.whale.petQuota('delete-config',3);return 'allowed';}catch{return 'denied';}}),'denied');
   assert.deepEqual(errors,[]);await app.close();app=null;
@@ -722,7 +723,8 @@ let app;
   await field(5,'delete').click();await card(5).waitFor({state:'detached'});
   await panel.waitForFunction(()=>!document.getElementById('quota-pet-copy').disabled&&document.querySelectorAll('.quota-pet-card [data-field="copy"]:disabled').length===0);
   await field(4,'copy').click();await card(6).waitFor();
-  assert.deepEqual((await state()).settings.trackingConfigs.map(config=>config.id),[3,4,6],'删除后可重新复制，编号不复用');
+  assert.deepEqual((await state()).settings.trackingConfigs.map(config=>config.id),[3,4,6],'删除后可重新复制，内部标识不复用');
+  assert.equal(await field(6,'title').textContent(),'流量跟踪配置-4','显示编号复用已删除的 4');
   assert.deepEqual(errors,[]);
   console.log('Multiple tracking UI OK: exclusive saved and temporary accounts, unrestricted primary, conflict clearing, independent groups, copy/delete, per-account refresh, restart and three-copy limit');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{

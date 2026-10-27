@@ -160,6 +160,33 @@ test('multiple configs have stable IDs and independent temporary accounts, thres
   assert.equal(restored.snapshot().extraTrackings[0].tracking.accountId,7,'重启恢复保存账号');
 });
 
+test('new configs reuse the lowest missing display number without retargeting old config IDs', t => {
+  const f=fixture(t);
+  const options={settings:f.settings,quota:{snapshot:()=>({accounts:[{id:6},{id:7}]})},
+    groups:{snapshot:()=>({groupId:13,groups:[{id:13},{id:14}]}),dailySnapshot:()=>({groups:[],users:[],groupId:13})}};
+  const service=createPetQuota(options);
+  service.copyConfig();service.copyConfig();
+  service.updateConfig(3,{accountId:7,yellowBelow:60,redBelow:20,groupId:14});
+  service.selectAccount(6,2);
+  const kept=f.settings.snapshot().trackingConfigs[1];
+  service.deleteConfig(2);service.copyConfig(3);
+  const configs=f.settings.snapshot().trackingConfigs,replacement=configs.find(config=>config.id!==3);
+  assert.equal(replacement.number,2,'1、2、3 删除 2 后新增应补 2');
+  assert.notEqual(replacement.id,2,'旧窗口不能通过旧标识修改新配置');
+  assert.deepEqual(configs.find(config=>config.id===3),kept,'已有配置的编号、账号和阈值保持不变');
+  assert.equal(service.accountIdFor(replacement.id),null,'新配置不继承已删除配置的临时账号');
+  assert.equal(service.rankingSnapshot(replacement.id).source.configName,'流量跟踪配置-2');
+  assert.equal(service.snapshot().extraTrackings.find(item=>item.id===replacement.id).number,2);
+  assert.throws(()=>service.updateConfig(2,{accountId:6}),/已不可用/);
+  const restarted=createPetQuota({...options,settings:createPetQuotaSettings({dataDir:f.dir})});
+  assert.equal(restarted.rankingSnapshot(replacement.id).source.configName,'流量跟踪配置-2');
+  restarted.copyConfig();
+  const fourth=restarted.snapshot().settings.trackingConfigs.at(-1);
+  assert.equal(fourth.number,4);
+  restarted.deleteConfig(fourth.id);restarted.copyConfig();
+  assert.equal(restarted.snapshot().settings.trackingConfigs.at(-1).number,4,'删除末尾 4 后再新增仍是 4');
+});
+
 test('copy allows three secondary configs, rejects every source at the limit and resumes after deletion', t => {
   const f=fixture(t);
   const options={settings:f.settings,quota:{snapshot:()=>({accounts:[]})},

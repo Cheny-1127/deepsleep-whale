@@ -4,12 +4,16 @@ export function createPetQuotaView({say = () => {}} = {}) {
   const bars = new Map();
   const primaryGet = name => document.getElementById('pet-quota-' + name);
   bars.set('primary',{slot:'primary',controls:primaryGet('controls'),refresh:primaryGet('refresh'),fill:primaryGet('fill'),percent:primaryGet('percent'),meter:primaryGet('meter'),name:null,ranking:document.getElementById('pet-ranking-button'),tracking:null});
-  function makeBar(id) {
+  function makeBar(id, number = id) {
     const root=document.getElementById('pet-quota-bar-template').content.cloneNode(true).firstElementChild;
     root.dataset.configId=String(id);root.id=`pet-quota-config-${id}`;
-    document.getElementById('pet-quota-extra-bars').append(root);
+    root.dataset.configNumber=String(number);
+    const container=document.getElementById('pet-quota-extra-bars');
+    const following=Array.from(container.children).find(bar=>Number(bar.dataset.configNumber)>number);
+    container.insertBefore(root,following || null);
     const get=name=>root.querySelector(`[data-field="${name}"]`);
-    const bar={slot:id,controls:root,refresh:get('refresh'),fill:get('fill'),percent:get('percent'),meter:get('meter'),name:get('name'),ranking:get('ranking'),tracking:null};
+    const bar={slot:id,number,controls:root,refresh:get('refresh'),fill:get('fill'),percent:get('percent'),meter:get('meter'),name:get('name'),ranking:get('ranking'),tracking:null};
+    bar.ranking.setAttribute('aria-label',`配置${number}今日消费榜`);
     bars.set(id,bar);bindBar(bar);return bar;
   }
   let polling = false, switching = false, revision = 0;
@@ -36,7 +40,7 @@ export function createPetQuotaView({say = () => {}} = {}) {
     if (data.error) text += '\n同步失败，当前为上次数据';
     if (data.paused) text += '\n账号已暂停刷新';
     text += '\n双击进度条选择跟踪账号';
-    if (bar.slot !== 'primary') text += `\n临时切换，重启后恢复流量跟踪配置-${bar.slot}`;
+    if (bar.slot !== 'primary') text += `\n临时切换，重启后恢复流量跟踪配置-${bar.number}`;
     bar.controls.title = text;
     bar.meter.setAttribute('aria-label', text);
     if (data.remaining == null) bar.meter.removeAttribute('aria-valuenow');
@@ -46,7 +50,7 @@ export function createPetQuotaView({say = () => {}} = {}) {
     renderBar(bars.get('primary'), data.tracking);
     const extras=data.extraTrackings || [];
     for(const [id,bar] of bars)if(id!=='primary'&&!extras.some(item=>item.id===id)){bar.controls.remove();bars.delete(id);}
-    for(const item of extras)renderBar(bars.get(item.id)||makeBar(item.id),item.tracking);
+    for(const item of extras)renderBar(bars.get(item.id)||makeBar(item.id,item.number ?? item.id),item.tracking);
     renderRefresh();
   }
   async function sync() {
