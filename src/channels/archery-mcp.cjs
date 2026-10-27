@@ -7,10 +7,10 @@ const PAGE_SIZE=20;
 function configError(message){const error=new Error(message);error.archeryConfig=true;return error;}
 
 // 只读取全局 archery 的 stdio 配置；凭据留在主进程，不复制到桌宠数据目录。
-function readArcheryConfig({home=process.env.CODEX_HOME||path.join(os.homedir(),'.codex'),env=process.env}={}) {
+function readArcheryConfig({home=process.env.CODEX_HOME||path.join(os.homedir(),'.codex'),env=process.env,configFile}={}) {
   let data;
   try {
-    const file=path.join(home,'config.toml');
+    const file=configFile||path.join(home,'config.toml');
     if(fs.statSync(file).size>1024*1024)throw new Error();
     data=parse(fs.readFileSync(file,'utf8'));
   }catch {throw configError('无法读取全局 Codex 配置，请检查 config.toml。');}
@@ -28,6 +28,8 @@ function readArcheryConfig({home=process.env.CODEX_HOME||path.join(os.homedir(),
   const variables={};
   for(const key of entry.env_vars||[])if(typeof env[key]==='string')variables[key]=env[key];
   Object.assign(variables,entry.env||{});
+  const missing=['ARCHERY_BASE_URL','ARCHERY_USERNAME','ARCHERY_PASSWORD'].filter(key=>!variables[key]);
+  if(missing.length)throw configError(`Archery 配置缺少 ${missing.join('、')}。请到 Archery MCP 配置打开全局 config.toml，在 mcp_servers.archery.env 中补充，或通过 env_vars 提供；不会自动读取 MCP 的 .env。`);
   let base;
   try {
     base=new URL(variables.ARCHERY_BASE_URL);
@@ -38,9 +40,11 @@ function readArcheryConfig({home=process.env.CODEX_HOME||path.join(os.homedir(),
   // 配置指纹包含账号和连接参数，更换账号或密码后必须丢弃旧会话与结果。
   const canApprove=(!Array.isArray(entry.enabled_tools)||entry.enabled_tools.includes('work_order_approve'))&&
     !entry.disabled_tools?.includes('work_order_approve');
-  const fingerprint=crypto.createHash('sha256').update(JSON.stringify({server,canApprove})).digest('hex');
+  const allowed=name=>(!Array.isArray(entry.enabled_tools)||entry.enabled_tools.includes(name))&&!entry.disabled_tools?.includes(name);
+  const canDetail=allowed('work_order_detail'),canExecute=allowed('work_order_execute');
+  const fingerprint=crypto.createHash('sha256').update(JSON.stringify({server,canApprove,canDetail,canExecute})).digest('hex');
   const accountKey=crypto.createHash('sha256').update(JSON.stringify([base.origin,variables.ARCHERY_USERNAME])).digest('hex');
-  return {server,fingerprint,accountKey,canApprove,baseUrl:base.origin,
+  return {server,fingerprint,accountKey,canApprove,canDetail,canExecute,baseUrl:base.origin,
     startupMs:Math.min(120000,Math.max(1000,(Number(entry.startup_timeout_sec)||30)*1000)),
     timeoutMs:Math.min(180000,Math.max(1000,(Number(entry.tool_timeout_sec)||90)*1000))};
 }

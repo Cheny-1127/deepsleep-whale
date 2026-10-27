@@ -109,7 +109,10 @@ function createMailReceiver({store,imap=createImapMail(),onNew=()=>{},intervalMs
   // 兼容没有 cache 字段的旧记录，只恢复当前收件箱和数量限制内的正文。
   function restoreCache() {
     const cache=saved.cache;
-    messages=Array.isArray(cache?.messages)?cache.messages.filter(item=>item&&typeof item.id==='string'&&item.id.startsWith(`${saved.uidValidity}:`)).slice(0,saved.config.limit):[];
+    if(saved.removedIds!==undefined&&(!Array.isArray(saved.removedIds)||saved.removedIds.some(id=>typeof id!=='string'||!/^\d+:\d+$/.test(id))))throw Error('本地邮件删除记录无效。');
+    // 重启恢复同样应用删除记录，防止旧缓存重新显示已移除的邮件。
+    const removed=new Set(saved.removedIds||[]);
+    messages=Array.isArray(cache?.messages)?cache.messages.filter(item=>item&&typeof item.id==='string'&&item.id.startsWith(`${saved.uidValidity}:`)&&!removed.has(item.id)).slice(0,saved.config.limit):[];
     const ids=new Set(messages.map(item=>item.id));
     saved.cache={messages,details:Array.isArray(cache?.details)?cache.details.filter(item=>validDetail(item)&&ids.has(item.id)):[],
       lastChecked:Number.isFinite(cache?.lastChecked)?cache.lastChecked:null,hasMore:Boolean(cache?.hasMore)};
@@ -120,7 +123,7 @@ function createMailReceiver({store,imap=createImapMail(),onNew=()=>{},intervalMs
   // 快照只返回配置标记、列表和计数；密码与正文必须由受限 IPC 主动读取。
   function snapshot(){const config=saved.config;return {state,error,enabled:saved.enabled,email:config?.email||'',
     config:config?{type:config.type,email:config.email,host:config.host,port:config.port,limit:config.limit,hasPassword:true}:null,
-    messages,lastChecked,hasMore,cacheCount:saved.cache?.details.length||0,busy:Boolean(flight)};}
+    messages:messages.map(item=>({...item})),lastChecked,hasMore,cacheCount:saved.cache?.details.length||0,busy:Boolean(flight)};}
   function clearTimer(){clearTimeout(timer);timer=null;}
   function schedule(){clearTimer();if(!closed&&saved.enabled){timer=setTimeout(()=>void refresh().catch(()=>{}),intervalMs);timer.unref?.();}}
   function abortAll(){for(const controller of controllers)controller.abort();}
@@ -161,12 +164,14 @@ function createMailReceiver({store,imap=createImapMail(),onNew=()=>{},intervalMs
         if(closed||stamp!==version)return snapshot();
         // 账号、服务器和 UIDVALIDITY 均一致时才复用正文与去重记录。
         const same=saved.config&&identity(saved.config)===identity(target)&&saved.uidValidity===result.uidValidity,seen=new Set(same?saved.seen:[]);
-        const recent=result.messages.slice(0,target.limit),ids=new Set(recent.map(item=>item.id));
+        // 本地删除记录跟随账号与 UIDVALIDITY，刷新时过滤，避免已移除的邮件反复出现。
+        const removed=new Set(same?saved.removedIds||[]:[]);
+        const recent=result.messages.slice(0,target.limit).filter(item=>!removed.has(item.id)),ids=new Set(recent.map(item=>item.id));
         // 扩大保留数量会读到更早的邮件，仅更高的新 UID 才触发新邮件提醒。
         const lastUid=Math.max(0,...[...seen].map(id=>Number(id.split(':')[1])));
         const fresh=recent.filter(item=>!seen.has(item.id)&&Number(item.id.split(':')[1])>lastUid);
         const cache={messages:recent,details:same?(saved.cache?.details||[]).filter(item=>ids.has(item.id)):[],lastChecked:Date.now(),hasMore:Boolean(result.hasMore)||result.messages.length>target.limit};
-        const next={version:1,enabled:true,config:target,uidValidity:result.uidValidity,seen:[...new Set([...recent.map(item=>item.id),...seen])].slice(0,1000),cache};
+        const next={version:1,enabled:true,config:target,uidValidity:result.uidValidity,seen:[...new Set([...recent.map(item=>item.id),...seen])].slice(0,1000),removedIds:[...removed],cache};
         // 先保存列表，再补齐正文；断网或单封读取失败时仍有可用的本地列表。
         store.save(next);saved=next;messages=recent;hasMore=cache.hasMore;lastChecked=cache.lastChecked;
         if(same&&fresh.length)onNew(fresh.length);
@@ -198,7 +203,7 @@ function createMailReceiver({store,imap=createImapMail(),onNew=()=>{},intervalMs
       if(flight||controllers.size)throw new Error('正在连接或收取邮件，请稍后重试。');
       const config=validateConfig(value,saved.config),same=saved.config&&identity(saved.config)===identity(config);
       // 更换目标先清理旧缓存并暂停；新目标连接失败时也不能展示旧账号邮件。
-      const next={...saved,enabled:false,config,...(!same?{cache:undefined,uidValidity:undefined,seen:[]}:{})};
+      const next={...saved,enabled:false,config,...(!same?{cache:undefined,uidValidity:undefined,seen:[],removedIds:[]}:{})};
       if(same&&next.cache) {
         const recent=messages.slice(0,config.limit),ids=new Set(recent.map(item=>item.id));
         next.cache={...next.cache,messages:recent,details:next.cache.details.filter(item=>ids.has(item.id)),hasMore:hasMore||messages.length>config.limit};
@@ -207,6 +212,17 @@ function createMailReceiver({store,imap=createImapMail(),onNew=()=>{},intervalMs
       store.save(next);version++;abortAll();clearTimer();saved=next;restoreCache();return refresh(config);
     }
     if(name==='refresh')return refresh();
+    if(name==='delete-message') {
+      const stamp=version;
+      if(flight)await flight;
+      // 确认窗口可能跨过重连或切换账号，必须重新校验目标，不能只凭相同的邮件 UID 删除。
+      if(closed||stamp!==version||!saved.config||!value?.account||identity(value.account)!==identity(saved.config))throw new Error('邮箱连接已变化，请重新选择邮件。');
+      if(typeof value.id!=='string'||!messages.some(item=>item.id===value.id))throw new Error('请从收件箱选择邮件。');
+      const recent=messages.filter(item=>item.id!==value.id);
+      const next={...saved,removedIds:[...new Set([...(saved.removedIds||[]),value.id])],cache:{...saved.cache,messages:recent,details:(saved.cache?.details||[]).filter(item=>item.id!==value.id)}};
+      // 先落盘再更新列表；仅删除本地缓存，IMAP 始终保持只读。
+      store.save(next);saved=next;messages=recent;version++;return snapshot();
+    }
     if(name==='pause') {
       // 暂停只停止网络接收，已缓存的列表和正文继续支持离线查看。
       version++;abortAll();clearTimer();saved={...saved,enabled:false};state='paused';error='';

@@ -18,6 +18,40 @@ function fixture(t) {
   const receiver=createMailReceiver({store:s.store,imap,onNew:n=>alerts.push(n)});t.after(()=>receiver.close());
   return {...s,receiver,imap,alerts,reads,setMessages:value=>messages=value,setValidity:value=>uidValidity=value};
 }
+test('local message deletion removes cached body, survives refresh and restart, and never changes server mail',async t=>{
+  const f=fixture(t);f.setMessages([{id:'10:2'},{id:'10:1'}]);await f.receiver.action('connect',config);
+  await f.receiver.action('delete-message',{id:'10:2',account:config});
+  assert.deepEqual(f.receiver.snapshot().messages.map(item=>item.id),['10:1']);
+  assert.deepEqual(f.store.load().cache.details.map(item=>item.id),['10:1']);
+  await assert.rejects(f.receiver.action('read','10:2'),/选择邮件/);
+  await f.receiver.action('refresh');assert.deepEqual(f.receiver.snapshot().messages.map(item=>item.id),['10:1']);
+  assert.deepEqual((await f.imap.list()).messages.map(item=>item.id),['10:2','10:1']);assert.deepEqual(f.alerts,[]);
+  const reads=f.reads.length;f.receiver.close();const restarted=createMailReceiver({store:f.store,imap:f.imap});t.after(()=>restarted.close());
+  assert.deepEqual(restarted.snapshot().messages.map(item=>item.id),['10:1']);
+  await restarted.action('refresh');assert.equal(f.reads.length,reads);
+  await restarted.action('pause');await restarted.action('delete-message',{id:'10:1',account:config});
+  assert.deepEqual(restarted.snapshot().messages,[]);assert.equal(restarted.snapshot().cacheCount,0);
+});
+test('message deletion validates the account and selection, preserves state on save failure, and resets across mailboxes',async t=>{
+  const f=fixture(t);await f.receiver.action('connect',config);const before=f.receiver.snapshot(),save=f.store.save;
+  await assert.rejects(f.receiver.action('delete-message',{id:'10:1',account:{...config,email:'other@example.com'}}),/邮箱.*变化/);
+  await assert.rejects(f.receiver.action('delete-message',{id:'10:99',account:config}),/选择邮件/);
+  f.store.save=()=>{throw Error('fixture write failed');};
+  await assert.rejects(f.receiver.action('delete-message',{id:'10:1',account:config}),/fixture write failed/);
+  assert.deepEqual(f.receiver.snapshot(),before);f.store.save=save;
+  await f.receiver.action('delete-message',{id:'10:1',account:config});
+  await f.receiver.action('connect',{...config,email:'other@example.com'});assert.equal(f.receiver.snapshot().messages.length,1);
+  await f.receiver.action('delete-message',{id:'10:1',account:{...config,email:'other@example.com'}});
+  f.setValidity('11');f.setMessages([{id:'11:1'}]);await f.receiver.action('refresh');assert.equal(f.receiver.snapshot().messages[0].id,'11:1');
+});
+test('a deletion waiting for synchronization cannot act on a changed connection',async t=>{
+  const f=fixture(t);await f.receiver.action('connect',config);let finish;
+  f.imap.list=()=>new Promise(resolve=>finish=resolve);
+  const refresh=f.receiver.action('refresh'),deleting=f.receiver.action('delete-message',{id:'10:1',account:config});
+  const rejected=assert.rejects(deleting,/邮箱.*变化/);await f.receiver.action('pause');
+  finish({messages:[{id:'10:1'}],uidValidity:'10'});await refresh;await rejected;
+  assert.equal(f.receiver.snapshot().messages.length,1);assert.equal(f.store.load().cache.details.length,1);
+});
 test('recent messages and bodies persist encrypted, restore offline and do not download twice',async t=>{
   const f=fixture(t);await f.receiver.action('connect',config);
   assert.deepEqual(f.reads,['10:1'],'synchronization must cache the body without a click');

@@ -4,8 +4,10 @@ const $=id=>document.getElementById('archery-'+id);
 export function createArcheryView() {
   if(!$('view'))return;
   let latest=null,busy=false,listKey='',sequence=0,approvalButtons=[],actionError='';
+  let connection=null,connectionBusy=false,connectionDirty=false,connectionSeen=false;
   function render(data) {
     if(!data)return;latest=data;
+    for(const name of ['config-file','choose-config','default-config','save-config','open-config'])$(name).disabled=busy||data.busy||connectionBusy;
     updateSidebarStatus('archery',data);
     // 「已连接 / 已暂停」只控制本地定时读取，不表示 Archery 服务端会话状态。
     const on=data.enabled!==false;
@@ -50,11 +52,24 @@ export function createArcheryView() {
     });
     $('list').replaceChildren(...rows);
   }
+  function renderConnection(data){
+    if(!data)return;connection=data;
+    $('connection-state').textContent=data.valid?'已配置':'未配置';
+    // 后台轮询只更新已保存状态，不能覆盖用户尚未提交的路径草稿。
+    if(!connectionDirty)$('config-file').value=data.configFile;
+    if(!connectionSeen&&!data.valid)$('connection-options').open=true;
+    connectionSeen=true;
+    if(data.error)$('connection-feedback').textContent=data.error;
+    else if(!connectionDirty){
+      const allowed=data.permissions||{};
+      $('connection-feedback').textContent=`工具权限：详情${allowed.detail?'已开放':'未开放'} · 审核${allowed.approve?'已开放':'未开放'} · 执行${allowed.execute?'已开放':'未开放'}`;
+    }
+  }
   async function invoke(name,value){const result=await window.whale.archery(name,value);if(result.error)throw new Error(result.error);return result.value;}
   async function sync() {
     if(busy)return;
     const stamp=++sequence;
-    try {const data=await invoke('snapshot');if(stamp===sequence)render(data);}
+    try {const [data,source]=await Promise.all([invoke('snapshot'),invoke('connection')]);if(stamp===sequence){render(data);renderConnection(source);}}
     catch {if(stamp===sequence){$('error').textContent='无法读取 Archery 状态，请稍后重试。';$('error').hidden=false;}}
   }
   async function act(name,value) {
@@ -64,6 +79,32 @@ export function createArcheryView() {
     catch(error){actionError=error.message;}
     finally {busy=false;render(latest);await sync();}
   }
+  $('open-config').addEventListener('click',async()=>{
+    try{await invoke('open-config');}catch(error){$('connection-feedback').textContent=error.message;}
+  });
+  $('config-file').addEventListener('input',()=>{connectionDirty=true;});
+  $('default-config').addEventListener('click',()=>{if(connection){$('config-file').value=connection.defaultFile;connectionDirty=true;}});
+  $('choose-config').addEventListener('click',async()=>{
+    if(busy||connectionBusy||latest?.busy)return;
+    connectionBusy=true;render(latest);
+    try{const file=await invoke('choose-config');if(file){$('config-file').value=file;connectionDirty=true;}}
+    catch(error){$('connection-feedback').textContent=error.message;}
+    finally{connectionBusy=false;render(latest);}
+  });
+  $('connection-form').addEventListener('submit',async event=>{
+    event.preventDefault();if(busy||connectionBusy||latest?.busy)return;
+    sequence++;busy=true;connectionBusy=true;render(latest);
+    let saved=false;
+    try{
+      const source=await invoke('save-config',$('config-file').value.trim());
+      connectionDirty=false;renderConnection(source);saved=true;
+    }catch(error){$('connection-feedback').textContent=error.message;}
+    finally{
+      connectionBusy=false;busy=false;render(latest);
+      // 保存失败时保留用户草稿和校验说明；成功后再同步连接结果。
+      if(saved){await sync();$('connection-feedback').textContent=latest?.error?`路径已保存，连接失败：${latest.error}`:'配置已保存，已按所选文件连接。';}
+    }
+  });
   $('status').addEventListener('click',()=>{if(latest)void act('set-enabled',latest.enabled===false);});
   $('refresh').addEventListener('click',()=>void act('refresh'));
   $('previous').addEventListener('click',()=>void act('page',latest.page-1));

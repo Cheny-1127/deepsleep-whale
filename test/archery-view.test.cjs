@@ -16,11 +16,14 @@ function fixture() {
   const calls=[],timers=[];
   const window={whale:{archery:async(name,value)=>{
     calls.push({name,value});if(fail)throw new Error('raw transport failure');
+    if(name==='connection')return {value:{valid:true,configFile:'/fixture/config.toml',defaultFile:'/default/config.toml',permissions:{detail:true,approve:true,execute:false}}};
+    if(name==='choose-config')return {value:'/chosen/config.toml'};
+    if(name==='save-config')return {value:{valid:true,configFile:value,defaultFile:'/default/config.toml',permissions:{detail:true,approve:true,execute:true}}};
     if(name==='page')data={...data,page:value};
     if(name==='set-enabled')data={...data,enabled:value};return {value:data};
   }}};
-  const source=fs.readFileSync(path.join(__dirname,'../src/ui/archery-view.mjs'),'utf8').replace('export function','function');
-  vm.runInNewContext(source+'\ncreateArcheryView();',{window,document:{getElementById:id=>elements.get(id),createElement:()=>new Element()},Date,setInterval:fn=>timers.push(fn)});
+  const source=fs.readFileSync(path.join(__dirname,'../src/ui/archery-view.mjs'),'utf8').replace(/^import .*;\n/gm,'').replace('export function','function');
+  vm.runInNewContext(source+'\ncreateArcheryView();',{window,document:{getElementById:id=>elements.get(id),createElement:()=>new Element()},Date,updateSidebarStatus:()=>{},setInterval:fn=>timers.push(fn)});
   const get=id=>elements.get('archery-'+id);
   return {get,calls,timers,set:value=>data={...data,...value},fail:()=>fail=true,async sync(){elements.get('nav-archery').click();await tick();}};
 }
@@ -37,12 +40,12 @@ test('titles render as text and row, page and refresh controls call only fixed I
   f.get('next').click();await tick();assert.ok(f.calls.some(c=>c.name==='page'&&c.value===2));
   assert.equal(f.get('previous').disabled,false);f.get('previous').click();await tick();
   f.get('refresh').click();await tick();assert.ok(f.calls.some(c=>c.name==='refresh'));
-  assert.ok(f.calls.every(c=>['snapshot','open','page','refresh'].includes(c.name)));
+  assert.ok(f.calls.every(c=>['snapshot','connection','open','page','refresh'].includes(c.name)));
 });
 test('view polling reads only snapshots, preserves rows and hides raw transport errors',async()=>{
   const f=fixture();f.set({items:[{id:566,title:'待审核'}]});await f.sync();const row=f.get('list').children[0];
   f.get('view').hidden=false;f.timers[0]();await tick();assert.equal(f.get('list').children[0],row);
-  assert.ok(f.calls.every(c=>c.name==='snapshot'));
+  assert.ok(f.calls.every(c=>['snapshot','connection'].includes(c.name)));
   f.fail();await f.sync();assert.equal(f.get('list').children[0],row);assert.equal(f.get('error').hidden,false);
   assert.ok(!f.get('error').textContent.includes('raw transport'));
   const count=f.calls.length;f.get('view').hidden=true;f.timers[0]();await tick();assert.equal(f.calls.length,count);
@@ -75,7 +78,16 @@ test('the header switch shows 已连接 or 已暂停 and only toggles automatic 
 test('navigation preserves menu order and Archery name with decorative SVG icons',()=>{
   const html=fs.readFileSync(path.join(__dirname,'../src/ui/index.html'),'utf8');
   const nav=[...html.matchAll(/id="nav-([a-z]+)"[^>]*>([\s\S]*?)<\/button>/g)];
-  assert.deepEqual(nav.map(match=>match[1]),['home','subscriptions','archery','hooks','wechat','mail','quota','shortcuts']);
+  assert.deepEqual(nav.map(match=>match[1]),['home','subscriptions','archery','hooks','wechat','mail','quota','shortcuts','planner','reports']);
   assert.equal(nav[2][2].replace(/<[^>]*>/g,'').trim(),'Archery');
   assert.ok(html.includes('<h1 id="archery-heading">Archery</h1>'));
+});
+
+test('connection settings preserve draft across polling and save only the chosen path',async()=>{
+  const f=fixture();await f.sync();assert.equal(f.get('config-file').value,'/fixture/config.toml');
+  f.get('config-file').value='/draft/config.toml';f.get('config-file').handlers.input();await f.sync();assert.equal(f.get('config-file').value,'/draft/config.toml');
+  await f.get('choose-config').handlers.click();assert.equal(f.get('config-file').value,'/chosen/config.toml');
+  await f.get('connection-form').handlers.submit({preventDefault(){}});
+  assert.ok(f.calls.some(call=>call.name==='save-config'&&call.value==='/chosen/config.toml'));
+  f.get('default-config').click();assert.equal(f.get('config-file').value,'/default/config.toml');
 });
