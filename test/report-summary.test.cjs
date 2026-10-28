@@ -2,7 +2,7 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const {workSummary}=require('../src/reports/work-summary.cjs');
 const {dailyContent,weekContent,settingsInput}=require('../src/reports/model.cjs');
-const mr=(iid,project='business/service')=>({iid,title:'事项 '+iid,url:`https://gitlab.example.test/${project}/-/merge_requests/${iid}`});
+const mr=(iid,project='business/service')=>({iid,title:'事项 '+iid,url:`https://gitlab.example.test/${project}/-/merge_requests/${iid}`,state:'merged',sourceBranch:'feat-cy-task-'+iid,targetBranch:'main',mergedAt:Date.parse('2026-10-26T08:00:00+08:00')});
 const at=hour=>Date.parse(`2026-10-26T${hour}:00:00+08:00`);
 function entry(id,changes={}){return {id,sourceKey:id,date:'2026-10-26',title:id,details:'',project:'business/service',status:'done',source:'gitlab',included:true,sourceActive:true,sourceMeta:{},...changes};}
 function commits(iid){return [0,1,2].map(n=>entry('commit-'+iid+'-'+n,{title:n===1?"Merge branch feature into main":'原始提交 '+iid,sourceMeta:{committedAt:at('10')+n,sha:String(n).repeat(40),mrChecked:true,mergeRequests:[mr(iid)]}}));}

@@ -29,12 +29,54 @@ test('editing one MR in a shared deployment never changes the other work or its 
   const restarted=f.create().snapshot({date});assert.equal(restarted.error,'');assert.equal(restarted.work.items.length,2);assert.equal(restarted.work.items.find(item=>item.groupId).description,'只调整第一项工作');
 });
 
+test('removing an MR work removes its current commits together and survives restart and recollection',async t=>{
+  const f=fixture(t),date='2026-10-26',mr={iid:119,title:'别人的支付功能',url:'https://gitlab.example.test/business/pay/-/merge_requests/119'};
+  const reports=f.create({gitlabStore:{load:()=>({url:'https://gitlab.example.test',token:'fixture'})},gitlabCollector:async()=>Array.from({length:2},(_,i)=>({source:'gitlab',sourceKey:'gitlab:remove:'+i,title:'提交 '+i,date,project:'business/pay',status:'done',sourceMeta:{mrChecked:true,mergeRequests:[mr]}}))});
+  await reports.action('settings',{gitlabProjects:[{host:'https://gitlab.example.test',projectId:1,project:'business/pay'}],gitlabAuthors:'cy@example.test'});await reports.action('collect');await reports.action('save-entry',{date,title:'我自己的工作',status:'done'});
+  const before=reports.snapshot({date}),work=before.work.items.find(item=>item.mr),remaining=before.entries.filter(entry=>!work.entryIds.includes(entry.id));
+  const removed=await reports.action('remove-work',{date,key:work.key});assert.equal(removed.work.items.length,1);assert.deepEqual(removed.entries,remaining);assert.equal(f.create().snapshot({date}).work.items.length,1);
+  await reports.action('collect');assert.deepEqual(reports.snapshot({date}).entries,remaining);assert.doesNotMatch((await reports.action('preview-day',{date})).content,/别人的支付功能|提交/);
+});
+
+test('removing a merged work is atomic and preserves other dates and saved drafts',async t=>{
+  const f=fixture(t),reports=f.create(),date='2026-10-26';
+  for(const title of ['需求讨论','方案整理'])await reports.action('save-entry',{date,title,status:'done'});
+  const merged=await reports.action('merge-work',{date,keys:reports.snapshot({date}).work.items.map(item=>item.key),title:'需求与方案',description:''}),work=merged.work.items[0];
+  await reports.action('save-entry',{date:'2026-10-27',title:'下一天的工作',status:'done'});await reports.action('save-week',{date,content:'已保存的手工周报'});
+  const before=reports.snapshot({date});await assert.rejects(reports.action('remove-work',{date:'2026-10-27',key:work.key}),/事项已变化/);
+  fs.mkdirSync(path.join(f.dir,'work-reports.json.tmp'));await assert.rejects(reports.action('remove-work',{date,key:work.key}),/保存失败/);fs.rmdirSync(path.join(f.dir,'work-reports.json.tmp'));assert.deepEqual(reports.snapshot({date}).entries,before.entries);assert.equal(reports.snapshot({date}).work.items.length,1);
+  const removed=await reports.action('remove-work',{date,key:work.key});assert.equal(removed.entries.length,0);assert.equal(removed.work.items.length,0);assert.equal(reports.snapshot({date:'2026-10-27'}).work.items.length,1);assert.equal((await reports.action('get-week',{date})).content,'已保存的手工周报');
+  await assert.rejects(reports.action('remove-work',{date,key:work.key}),/事项已变化/);
+});
+
+test('removing a work cannot delete a deployment source shared with another MR',async t=>{
+  const f=fixture(t),date='2026-10-26',reports=f.create();await reports.action('save-entry',{date,title:'共享发布',status:'done'});reports.close();
+  const file=path.join(f.dir,'work-reports.json'),saved=JSON.parse(fs.readFileSync(file,'utf8'));
+  Object.assign(saved.entries[0],{source:'jenkins',edited:false,sourceMeta:{release:true,rangeVerified:true,direction:'forward',releasedAt:NOW,mergeRequests:[1,2].map(iid=>({iid,title:'事项 '+iid,url:'https://gitlab.example.test/business/service/-/merge_requests/'+iid}))}});fs.writeFileSync(file,JSON.stringify(saved));
+  const current=f.create(),before=current.snapshot({date});await assert.rejects(current.action('remove-work',{date,key:before.work.items[0].key}),/共用来源/);assert.deepEqual(current.snapshot({date}),before);
+});
+
 test('a merged work stays a merge when one source is excluded',async t=>{
   const f=fixture(t),reports=f.create(),date='2026-10-26';
   for(const title of ['需求访谈','方案整理'])await reports.action('save-entry',{date,title,status:'done'});
   const before=reports.snapshot({date}),merged=await reports.action('merge-work',{date,keys:before.work.items.map(item=>item.key),title:'需求与方案',description:'整理处理结果'});
   await reports.action('set-entry-included',{id:before.entries[0].id,included:false});
   const current=reports.snapshot({date});assert.equal(current.work.items.length,1);assert.equal(current.work.items[0].groupId,merged.work.items[0].groupId);assert.equal(current.work.items[0].editOnly,false);assert.equal(f.create().snapshot({date}).work.items[0].editOnly,false);
+});
+
+test('collection carries a feature from branch development through main merge to production without rewriting past days',async t=>{
+  const f=fixture(t),host='https://gitlab.example.test',project='business/pay',branch='feat-cy-pay',mergedAt=Date.parse('2026-10-27T17:00:00+08:00'),releasedAt=Date.parse('2026-10-28T16:00:00+08:00');let stage=0,currentTime=NOW;
+  const raw={iid:1,project_id:1,title:'新增支付方式',state:'merged',source_branch:branch,target_branch:'main',merged_at:new Date(mergedAt).toISOString()},mr={iid:1,title:raw.title,url:host+'/'+project+'/-/merge_requests/1',state:'merged',sourceBranch:branch,targetBranch:'main',mergedAt};
+  const reports=f.create({now:()=>currentTime,gitlabStore:{load:()=>({url:host,token:'fixture'})},gitlabFetchImpl:async url=>{
+    const path=new URL(url).pathname;
+    return Response.json(path.endsWith('/repository/commits')?[{id:'a'.repeat(40),title:'开发支付方式',message:'开发支付方式\n补充支付处理',author_name:'cy',author_email:'cy@example.test',committed_date:'2026-10-26T10:00:00+08:00'}]:path.endsWith('/refs')?[{type:'branch',name:branch}]:path.endsWith('/merge_requests/1')?raw:stage?[raw]:[],{headers:{'x-next-page':''}});
+  },jenkinsCollector:async()=>stage<2?[]:[{source:'jenkins',sourceKey:'jenkins:feature:42',date:'2026-10-28',title:'发布完成',project,status:'done',sourceMeta:{release:true,environment:'prod',direction:'forward',rangeVerified:true,releasedAt,completedAt:releasedAt,mergeRequests:[mr]}}]});
+  await reports.action('settings',{gitlabProjects:[{host,projectId:1,project}],gitlabAuthors:'cy@example.test',jenkinsJobs:[{job:'prod/pay',project,environment:'prod',target:'EKS',userIds:'cy'}]});await reports.action('collect');assert.equal(reports.snapshot({date:'2026-10-26'}).work.items[0].badge,'开发中');
+  const initial=reports.snapshot({date:'2026-10-26'});await reports.action('save-work',{date:initial.date,key:initial.work.items[0].key,title:raw.title,description:'保留开发说明'});assert.deepEqual(reports.snapshot({date:initial.date}).entries,initial.entries);
+  stage=1;currentTime=Date.parse('2026-10-27T18:00:00+08:00');await reports.action('collect');assert.equal(reports.snapshot({date:'2026-10-27'}).work.items[0].badge,'待发布');assert.equal(reports.snapshot({date:'2026-10-26'}).work.items[0].badge,'开发中');await reports.action('save-week',{date:'2026-10-26',content:'保留人工周报'});
+  stage=2;currentTime=Date.parse('2026-10-28T18:00:00+08:00');await reports.action('collect');
+  assert.equal(reports.snapshot({date:'2026-10-28'}).work.items[0].badge,'已完成');assert.equal(reports.snapshot({date:'2026-10-28'}).work.items[0].completedAt,releasedAt);assert.equal(reports.snapshot({date:'2026-10-27'}).work.items[0].badge,'待发布');assert.equal(reports.snapshot({date:'2026-10-26'}).work.items[0].badge,'开发中');assert.equal((await reports.action('get-week',{date:'2026-10-28'})).content,'保留人工周报');
+  const week=await reports.action('generate-week',{date:'2026-10-28',force:true});assert.equal((week.content.match(/\*\*新增支付方式\*\*/g)||[]).length,1);assert.match(week.content,/已完成/);assert.match(week.content,/保留开发说明/);assert.equal(f.create().snapshot({date:'2026-10-27'}).work.items[0].badge,'待发布');
 });
 
 test('work merging keeps planner and MR evidence intact through restart, recollection, editing and unmerge',async t=>{
@@ -126,13 +168,26 @@ test('dismissed source pairs remain separate after MR enrichment and joining ano
   assert.equal(merged.work.items.length,2);assert.equal(merged.workMatches.items.length,0);
 });
 
-test('unmerge remembers all partitions beyond the twenty visible suggestions and supports legacy MR links',async t=>{
+test('grouped planner and cross-repository MRs accept, dismiss and unmerge together without changing sources',async t=>{
+  const f=fixture(t),date='2026-10-26',mrs=[{project:'business/admin',title:'应用管理支持客户端类型配置与筛选'},{project:'business/api',title:'应用管理支持客户端类型并修复跨应用列表查询'}];let count=1;
+  const reports=f.create({gitlabStore:{load:()=>({url:'https://gitlab.example.test',token:'fixture'})},gitlabCollector:async()=>mrs.flatMap(({project,title},index)=>Array.from({length:count},(_,i)=>({source:'gitlab',sourceKey:'gitlab:grouped:'+index+':'+i,title:'代码提交',date,project,status:'done',sourceMeta:{mrChecked:true,mergeRequests:[{iid:index+1,title,url:'https://gitlab.example.test/'+project+'/-/merge_requests/'+(index+1)}]}})))});
+  await reports.action('settings',{gitlabProjects:mrs.map(({project},index)=>({host:'https://gitlab.example.test',projectId:index+1,project})),gitlabAuthors:'cy@example.test'});
+  const task=f.planner.action('save-task',{title:'APP应用类型新增',notes:'h5、app、tiktok',deadline:'none',category:'work'}).tasks[0];f.planner.action('set-task-status',{id:task.id,status:'done'});await reports.action('collect');
+  const before=reports.snapshot({date}),match=before.workMatches.items[0];assert.equal(before.workMatches.items.length,1);assert.equal(match.keys.length,3);
+  await reports.action('dismiss-work-match',{date,id:match.id});assert.equal(reports.snapshot({date}).workMatches.items.length,0);assert.equal(f.create().snapshot({date}).workMatches.items.length,0);
+  count=2;await reports.action('collect');assert.equal(reports.snapshot({date}).workMatches.items.length,0);
+  const restored=await reports.action('restore-work-matches',{date});assert.equal(restored.workMatches.items.length,1);assert.equal(restored.workMatches.items[0].id,match.id);
+  const merged=await reports.action('accept-work-match',{date,id:match.id});assert.equal(merged.work.items.length,1);assert.equal(merged.work.items[0].entryIds.length,5);assert.equal(merged.work.items[0].title,task.title);assert.equal(merged.work.items[0].description,task.notes);assert.deepEqual(merged.entries,restored.entries);assert.equal(f.create().snapshot({date}).work.items.length,1);
+  const separated=await reports.action('unmerge-work',{date,id:merged.work.items[0].groupId});assert.equal(separated.work.items.length,3);assert.equal(separated.workMatches.items.length,0);assert.deepEqual(separated.entries,restored.entries);assert.equal(f.create().snapshot({date}).workMatches.items.length,0);
+});
+
+test('unmerge remembers every partition in a grouped suggestion and supports legacy MR links',async t=>{
   const f=fixture(t),date='2026-10-26',reports=f.create();
   for(let i=0;i<8;i++)await reports.action('save-entry',{date,title:'会员缓存永久有效修复 '+i,status:'done'});
-  const before=reports.snapshot({date});assert.equal(before.workMatches.items.length,20);assert.equal(before.workMatches.limited,true);
+  const before=reports.snapshot({date});assert.equal(before.workMatches.items.length,1);assert.equal(before.workMatches.items[0].keys.length,8);assert.equal(before.workMatches.limited,false);
   const merged=await reports.action('merge-work',{date,keys:before.work.items.map(item=>item.key),title:'会员缓存修复',description:''});
   const restored=await reports.action('unmerge-work',{date,id:merged.work.items[0].groupId});assert.equal(restored.work.items.length,8);assert.equal(restored.workMatches.items.length,0);assert.deepEqual(restored.entries,before.entries);assert.equal(f.create().snapshot({date}).workMatches.items.length,0);
-  await reports.action('restore-work-matches',{date});assert.equal(reports.snapshot({date}).workMatches.items.length,20);
+  await reports.action('restore-work-matches',{date});assert.equal(reports.snapshot({date}).workMatches.items.length,1);assert.equal(reports.snapshot({date}).workMatches.items[0].keys.length,8);
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'whale-legacy-match-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
   const mr={iid:1,title:'会员缓存永久有效修复',url:'https://gitlab.example.test/business/play/-/merge_requests/1'},legacy=createWorkReports({dataDir:dir,now:()=>NOW,readEnvironment:()=>({}),gitlabStore:{load:()=>({url:'https://gitlab.example.test',token:'fixture'})},gitlabCollector:async()=>[{source:'gitlab',sourceKey:'gitlab:legacy',date,title:mr.title,project:'business/play',status:'done',sourceMeta:{mrChecked:true,mergeRequests:[mr]}}]});t.after(()=>legacy.close());
   await legacy.action('settings',{gitlabProjects:[{host:'https://gitlab.example.test',projectId:1,project:'business/play'}],gitlabAuthors:'cy@example.test'});await legacy.action('collect');
@@ -280,6 +335,18 @@ test('preparing a legacy day backfills only existing metadata, deduplicates requ
   const second=reports.action('prepare-day',{date:old.date}),entry=reports.snapshot({date:old.date}).entries[0];await reports.action('save-entry',{...entry,title:'人工整理标题',included:false});finish();await Promise.all([pending,second]);
   let snapshot=reports.snapshot({date:old.date});assert.equal(snapshot.entries.length,1);assert.equal(snapshot.entries[0].title,'人工整理标题');assert.equal(snapshot.entries[0].included,false);assert.equal(snapshot.entries[0].sourceMeta.mrChecked,true);assert.deepEqual(snapshot.entries[0].sourceMeta.mergeRequests,[mr]);assert.equal(snapshot.settings.autoCollect,false);assert.equal(calls,2);
   await reports.action('prepare-day',{date:old.date});assert.equal(calls,2);
+});
+
+test('already-associated legacy MRs refresh lifecycle metadata without changing sources or saved work',async t=>{
+  const f=fixture(t),date='2026-10-26',project='ossv/d-minitv-admin',url='https://gitlab.example.test/'+project+'/-/merge_requests/20',legacy={iid:20,title:'应用类型新增',url};let repair=false,calls=0;
+  const complete={...legacy,state:'merged',sourceBranch:'feat-cy-client-type',targetBranch:'v3.10.0',mergedAt:NOW-1000};
+  const old={source:'gitlab',sourceKey:'gitlab:legacy:20',date,project,title:'提交说明',details:'原始正文',status:'done',sourceMeta:{projectId:77,sha:'a'.repeat(40),mrChecked:true,mergeRequests:[legacy],committedAt:NOW-2000}};
+  const reports=f.create({gitlabStore:{load:()=>({url:'https://gitlab.example.test',token:'fixture'})},gitlabCollector:async()=>{calls++;return [{...old,sourceMeta:{...old.sourceMeta,...(repair?{mrLifecycleChecked:true,mergeRequests:[complete]}:{})}}];}});
+  await reports.action('settings',{gitlabProjects:[{host:'https://gitlab.example.test',projectId:77,project}],gitlabAuthors:'cy@example.test'});await reports.action('collect');
+  const before=reports.snapshot({date});assert.equal(before.needsMrRefresh,true);assert.equal(before.work.items[0].badge,'待核对');
+  await reports.action('save-work',{date,key:before.work.items[0].key,title:'人工整理的应用类型',description:'保留说明'});await reports.action('save-week',{date,content:'人工周报'});repair=true;
+  const after=await reports.action('prepare-day',{date});assert.equal(after.needsMrRefresh,false);assert.equal(after.entries.length,1);assert.equal(after.entries[0].title,'提交说明');assert.equal(after.entries[0].details,'原始正文');assert.equal(after.work.items[0].title,'人工整理的应用类型');assert.equal(after.work.items[0].badge,'待发布');assert.equal((await reports.action('get-week',{date})).content,'人工周报');
+  await reports.action('prepare-day',{date});assert.equal(calls,2);assert.equal(f.create().snapshot({date}).needsMrRefresh,false);
 });
 
 test('legacy association is atomic across sources and discards results after module disable',async t=>{

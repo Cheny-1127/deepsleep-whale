@@ -1,4 +1,5 @@
 'use strict';
+const {mrReference,createLifecycle,applyPhases}=require('./work-lifecycle.cjs');
 const active=e=>!e.removed&&e.sourceActive!==false&&e.included!==false;
 const eventTime=e=>[e.sourceMeta?.releasedAt,e.sourceMeta?.completedAt,e.sourceMeta?.committedAt].find(Number.isFinite)||Date.parse(e.date+'T00:00:00+08:00');
 const order=(a,b)=>a.time-b.time||a.key.localeCompare(b.key);
@@ -37,24 +38,26 @@ function releaseDescription(entry,mr){
   }
   return businessLines(lines.join('\n'),mr.title);
 }
-function mrReference(value){
-  if(!value||!Number.isSafeInteger(value.iid)||value.iid<1||typeof value.title!=='string')return null;
-  try{const url=new URL(value.url);if(url.protocol!=='https:'||url.username||url.password||url.search||url.hash||!url.pathname.endsWith('/-/merge_requests/'+value.iid))return null;return {iid:value.iid,title:value.title,url:url.href};}catch{return null;}
-}
-function workSummary(entries,workGroups=[]){
-  const records=entries.filter(active),groups=new Map(),linked=[];
+function workSummary(entries,workGroups=[],{context=entries,periodEnd}={}){
+  const records=entries.filter(active),groups=new Map(),linked=[],lifecycle=createLifecycle(context);
   function attach(item,entry){if(!item.entryIds.includes(entry.id))item.entryIds.push(entry.id);}
   function mrItem(entry,mr){
     const key=entry.date+'|'+mr.url;
-    if(!groups.has(key))groups.set(key,{key,date:entry.date,title:businessTitle(mr.title,entry.details),project:entry.project,status:'done',kind:'mr',badge:'已推进',mr,time:eventTime(entry),description:'',entryIds:[],releases:[],warnings:[]});
+    if(!groups.has(key))groups.set(key,{key,date:entry.date,title:businessTitle(mr.title,entry.details),project:entry.project,status:'done',kind:'mr',...lifecycle.state(mr,entry.date),mr,featureKeys:['mr:'+mr.url],time:eventTime(entry),description:'',entryIds:[],releases:[],warnings:[]});
     const item=groups.get(key);item.time=Math.min(item.time,eventTime(entry));attach(item,entry);
+    if(item.phase==='unverified'&&!item.warnings.length)item.warnings.push('MR 合并信息不完整，请核对来源');
     const description=entry.source==='gitlab'?entry.details:entry.source==='jenkins'?releaseDescription(entry,mr):'';
     if(description)item.description=businessLines([item.description,description].filter(Boolean).join('\n'),item.title);
     return item;
   }
+  function branchItem(entry,feature){
+    const key=entry.date+'|'+feature.key;
+    if(!groups.has(key))groups.set(key,{key,date:entry.date,title:businessTitle(feature.title||entry.title,feature.details||entry.details),project:entry.project,status:'done',kind:'branch',...lifecycle.state(feature,entry.date),featureKeys:[feature.key],time:eventTime(entry),description:'',entryIds:[],releases:[],warnings:[]});
+    const item=groups.get(key);attach(item,entry);if(entry.source==='gitlab')item.description=businessLines([item.description,entry.details].filter(Boolean).join('\n'),item.title);item.time=Math.min(item.time,eventTime(entry));return item;
+  }
   function standalone(entry,kind=entry.source){
     const meta=entry.sourceMeta||{},release=entry.source==='jenkins'&&meta.release===true;
-    const badge=entry.status==='blocked'?'待解决':entry.status==='planned'?'计划':release?'已完成':['git','gitlab'].includes(entry.source)?'已推进':'已完成';
+    const badge=entry.status==='blocked'?'待解决':entry.status==='planned'?'计划':release?'已完成':['git','gitlab'].includes(entry.source)?'开发中':'已完成';
     const automatic=!entry.edited&&['git','gitlab','jenkins'].includes(entry.source);
     const title=automatic?(release?releaseTitle(entry):businessTitle(entry.title,entry.details)):entry.title;
     const item={key:entry.id||entry.sourceKey,date:entry.date,title,project:entry.project,status:entry.status,kind:release?'release':kind,badge,time:eventTime(entry),description:release&&!entry.edited?'':automatic?businessLines(entry.details,title):entry.details||'',entryIds:[entry.id],releases:[],warnings:[]};
@@ -67,10 +70,14 @@ function workSummary(entries,workGroups=[]){
   function releaseEvent(entry){const meta=entry.sourceMeta||{};return {id:entry.id,time:eventTime(entry),target:meta.target||meta.environment||'生产',buildNumber:meta.buildNumber,url:entry.evidence,kind:meta.direction==='rollback'?'回退':meta.direction==='same'?'重复发布':'发布'};}
   for(const entry of records){
     if(entry.relatedMr&&['manual','planner'].includes(entry.source)&&entry.status==='done'){linked.push(entry);continue;}
-    const meta=entry.sourceMeta||{},mrs=(meta.mergeRequests||[]).map(mrReference).filter(Boolean);
-    if(!entry.edited&&entry.status==='done'&&entry.source==='jenkins'&&meta.release===true&&meta.rangeVerified===true&&meta.direction==='forward'&&mrs.length){
-      for(const mr of mrs){const item=mrItem(entry,mr);item.releases.push(releaseEvent(entry));item.badge='已完成';if(meta.directCommitCount)item.warnings.push('本次发布另含 '+meta.directCommitCount+' 条直接提交，见原始明细');}
-    }else if(!entry.edited&&entry.status==='done'&&entry.source==='gitlab'&&mrs.length===1){mrItem(entry,mrs[0]);}
+    const meta=entry.sourceMeta||{};
+    if(!entry.edited&&entry.status==='done'&&entry.source==='jenkins'&&lifecycle.releaseFeatures(entry).length){
+      for(const feature of lifecycle.releaseFeatures(entry)){const item=feature.mr?mrItem(entry,feature.mr):branchItem(entry,feature);item.releases.push(releaseEvent(entry));if(meta.directCommitCount)item.warnings.push('本次发布另含 '+meta.directCommitCount+' 条直接提交，见原始明细');}
+    }else if(!entry.edited&&entry.status==='done'&&entry.source==='gitlab'&&lifecycle.feature(entry)){
+      const feature=lifecycle.feature(entry);
+      if(feature.mr)mrItem(entry,feature.mr);
+      else branchItem(entry,feature);
+    }
     else standalone(entry);
   }
   for(const entry of linked){
@@ -95,15 +102,34 @@ function workSummary(entries,workGroups=[]){
     }
     const group=[...matches.values()][0];
     // 将保存时的修改意图带到界面，区分“还原修改”和“解除合并”。
-    if(!combined.has(group.id))combined.set(group.id,{key:'work:'+group.id,groupId:group.id,editOnly:group.editOnly===true,date:item.date,title:group.title,description:group.description,project:item.project,status:'done',kind:'work',badge:'已推进',time:item.time,entryIds:[],releases:[],warnings:[],memberKeys:[...group.members]});
+    if(!combined.has(group.id))combined.set(group.id,{key:'work:'+group.id,groupId:group.id,editOnly:group.editOnly===true,date:item.date,title:group.title,description:group.description,project:item.project,status:'done',kind:'work',badge:'已完成',time:item.time,entryIds:[],releases:[],warnings:[],memberKeys:[...group.members],featureKeys:[],phases:[]});
     const target=combined.get(group.id);target.time=Math.min(target.time,item.time);
     target.entryIds=[...new Set([...target.entryIds,...item.entryIds])];
     target.releases=[...new Map([...target.releases,...item.releases].map(release=>[release.id,release])).values()];
-    target.warnings.push(...item.warnings);if(item.badge==='已完成')target.badge='已完成';
+    target.warnings.push(...item.warnings);target.featureKeys.push(...(item.featureKeys||[]));if(item.phase)target.phases.push(item);
   }
+  for(const item of combined.values()){item.featureKeys=[...new Set(item.featureKeys)];applyPhases(item,item.phases);delete item.phases;}
   items=[...separate,...combined.values()];
   for(const item of items){item.releases.sort((a,b)=>a.time-b.time||String(a.id).localeCompare(String(b.id)));if(item.releases.length)item.time=item.releases[0].time;item.warnings=[...new Set(item.warnings)];}
   items.sort(order);
+  if(periodEnd){
+    const memberships=new Map(),period=[];
+    for(const item of items){
+      const keys=item.featureKeys||[],existing=[...new Set(keys.map(key=>memberships.get(key)).filter(Boolean))],target=existing[0]||{...item,entryIds:[],releases:[],warnings:[],featureKeys:[]};
+      if(!existing.length)period.push(target);
+      for(const source of [...existing.slice(1),item]){
+        target.entryIds=[...new Set([...target.entryIds,...source.entryIds])];target.releases=[...new Map([...target.releases,...source.releases].map(release=>[release.id,release])).values()];target.warnings=[...new Set([...target.warnings,...source.warnings])];target.featureKeys=[...new Set([...target.featureKeys,...(source.featureKeys||[])])];
+        if(source.groupId){target.title=source.title;target.description=source.description;target.groupId=source.groupId;}
+        else if(!target.groupId&&source.description&&source.description!==target.description)target.description=businessLines([target.description,source.description].filter(Boolean).join('\n'),target.title);
+        if(source!==item)period.splice(period.indexOf(source),1);
+      }
+      for(const key of target.featureKeys)memberships.set(key,target);
+    }
+    for(const item of period){
+      const phases=item.featureKeys.map(key=>lifecycle.state(key.startsWith('mr:')?{url:key.slice(3)}:{key},periodEnd));applyPhases(item,phases);
+    }
+    items=period;
+  }
   return {items,releaseCount:new Set(items.flatMap(i=>i.releases.map(r=>r.id))).size,rawCount:records.length};
 }
 module.exports={workSummary,eventTime,mrReference};

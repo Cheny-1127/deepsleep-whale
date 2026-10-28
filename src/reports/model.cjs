@@ -104,15 +104,15 @@ function workLine(item){
 }
 function grouped(items){return items.length?items.map(workLine).join('\n'):'暂无记录。';}
 function weekContent(entries,date,template=DEFAULT_TEMPLATE,workGroups=[]){
-  const {start,end}=weekRange(date),nextEnd=addDays(end,7),current=workSummary(entries.filter(e=>e.date>=start&&e.date<=end),workGroups).items;
+  const {start,end}=weekRange(date),nextEnd=addDays(end,7),records=entries.filter(e=>e.date>=start&&e.date<=end),current=workSummary(records,workGroups,{context:entries,periodEnd:end}).items,daily=workSummary(records,workGroups,{context:entries}).items;
   const values={week_start:start,week_end:end,count:String(current.filter(e=>e.status==='done').length),
     summary:grouped(current.filter(e=>e.status==='done')),releases:grouped(current.filter(e=>e.releases.length)),
     blockers:grouped(current.filter(e=>e.status==='blocked')),next_week:grouped(workSummary(entries.filter(e=>e.status==='planned'&&e.date>end&&e.date<=nextEnd),workGroups).items),
-    details:current.map(item=>`${item.date}\n${workLine(item)}`).join('\n\n')||'暂无记录。'};
+    details:daily.map(item=>`${item.date}\n${workLine(item)}`).join('\n\n')||'暂无记录。'};
   return {start,end,content:template.replace(/\{\{([a-z_]+)\}\}/g,(match,key)=>values[key]??match)};
 }
 function dailyContent(entries,date,workGroups=[]){
-  requireDate(date);const summary=workSummary(entries.filter(e=>e.date===date),workGroups),items=summary.items,done=items.filter(e=>e.status==='done');
+  requireDate(date);const summary=workSummary(entries.filter(e=>e.date===date),workGroups,{context:entries}),items=summary.items,done=items.filter(e=>e.status==='done');
   const sections=[['今日工作',done],['问题与风险',items.filter(e=>e.status==='blocked')],['工作计划',items.filter(e=>e.status==='planned')]];
   return `# 工作日报 · ${date}\n\n今日工作 ${done.length} 项\n\n`+(sections.filter(([,items])=>items.length).map(([title,items])=>'## '+title+'\n'+grouped(items)).join('\n\n')||'暂无工作记录。')+'\n';
 }

@@ -6,7 +6,7 @@ const environment={jenkinsUrl:'https://jenkins.example.test/ci',jenkinsUser:'rea
 const source={job:'prod/pay',project:'ossv/pay',environment:'prod',target:'EKS',userIds:'cy',deploySuccess:false};
 const project={projectId:7,host:'https://gitlab.example.test',project:'ossv/pay',path:'ossv/pay'},connection={url:project.host,token:'fixture-gitlab-secret'};
 const commit=(id,title,author_name='其他作者')=>({id,title,message:title,author_name,committed_date:'2026-10-20T12:00:00+08:00'});
-const mr={iid:11,project_id:7,state:'merged',title:'修复支付超时',merge_commit_sha:B,sha:C};
+const mr={iid:11,project_id:7,state:'merged',title:'修复支付超时',merge_commit_sha:B,sha:C,source_branch:'feat-cy-pay',target_branch:'main',merged_at:'2026-10-26T09:00:00+08:00'};
 function build(number,overrides={}){return {number,building:false,result:'SUCCESS',timestamp:number===1?start-86400000:start,duration:600000,actions:[{causes:[{userId:number===1?'other':'cy'}]},{remoteUrls:['https://gitlab.example.test/devops/pipeline.git'],lastBuiltRevision:{SHA1:D}},{remoteUrls:['https://legacy.gitlab.test/ossv/pay.git'],lastBuiltRevision:{SHA1:number===1?A:B}}],...overrides};}
 function fixture({builds=[build(2),build(1)],stages={},compare,mergeRequests=[mr],mrCommits=[commit(C,'修复超时重试','Alice'),commit(D,'补充支付回归','Bob')]}={}){
   const calls=[];
@@ -31,7 +31,8 @@ test('actual production deployment time, business SHA and previous deployment de
   const f=fixture(),items=await collectJenkins(source,f.options);assert.equal(items.length,1);const item=items[0];
   assert.match(item.title,/发布完成/);assert.equal(item.sourceMeta.release,true);assert.equal(item.sourceMeta.completedAt,start+180000);assert.equal(item.sourceMeta.previousSha,A);assert.equal(item.sourceMeta.sha,B);assert.equal(item.sourceMeta.previousBuild,1);assert.equal(item.sourceMeta.rangeVerified,true);
   assert.match(item.details,/MR !11/);assert.match(item.details,/Alice/);assert.match(item.details,/Bob/);assert.doesNotMatch(JSON.stringify(items),/fixture-private-token|fixture-gitlab-secret|pipeline\.git/);
-  assert.equal(item.sourceMeta.mergeRequests.length,1);assert.equal(f.calls.filter(c=>c.url.pathname.endsWith('/merge_requests/11/commits')).length,1);
+  assert.equal(item.sourceMeta.mergeRequests.length,1);assert.equal(item.sourceMeta.mergeRequests[0].targetBranch,'main');assert.equal(item.sourceMeta.mergeRequests[0].mergedAt,Date.parse(mr.merged_at));assert.equal(f.calls.filter(c=>c.url.pathname.endsWith('/merge_requests/11/commits')).length,1);
+  assert.deepEqual(item.sourceMeta.commitShas,[B,C]);assert.equal(item.sourceMeta.repositoryUrl,'https://gitlab.example.test/ossv/pay');
 });
 test('build-only, skipped deployment, failures, non-production and other publishers are not releases',async()=>{
   const onlyBuild=build(3,{actions:[{causes:[{userId:'cy'}],parameters:[{name:'ACTION',value:'build'}]}]});
