@@ -17,34 +17,51 @@ function words(value){
   return result;
 }
 const identity=item=>item.groupId?'work:'+item.groupId:item.mr?'mr:'+item.mr.url:[...item.memberKeys].sort()[0];
-function matchId(a,b){return createHash('sha256').update(JSON.stringify([a.date,...[identity(a),identity(b)].sort()])).digest('hex');}
+function matchId(...items){return createHash('sha256').update(JSON.stringify([items[0].date,...items.map(identity).sort()])).digest('hex');}
 function workMatches(items,entries=[],dismissed=[]){
   // 否认按来源身份分区保存；补全 MR 或加入其他事项后仍能识别原来的两侧。
   const denials=new Map();
   for(const decision of dismissed)for(const [part,members] of (decision.members||[]).entries())for(const member of members){
     const key=decision.date+'|'+member;if(!denials.has(key))denials.set(key,[]);denials.get(key).push([decision.id,part]);
   }
-  const eligible=items.filter(item=>item.status==='done'&&!item.conflictingGroups?.length),profiles=eligible.slice(-500).map(item=>{
+  const eligible=items.filter(item=>item.status==='done'&&!item.conflictingGroups?.length),profiles=eligible.slice(-500).map((item,index)=>{
     const decisions=new Map();for(const member of item.memberKeys)for(const [id,part] of denials.get(item.date+'|'+member)||[]){if(!decisions.has(id))decisions.set(id,new Set());decisions.get(id).add(part);}
-    return {item,words:words(item.title+'\n'+item.description.slice(0,1600)),decisions};
+    return {item,index,words:words(item.title+'\n'+item.description.slice(0,1600)),decisions};
   });
   let limited=eligible.length>profiles.length;const postings=new Map(),pairs=new Set(),candidates=[],hidden=new Set(dismissed.map(item=>item.id)),sources=new Map(entries.map(entry=>[entry.id,entry]));
+  const separated=(a,b)=>hidden.has(matchId(a.item,b.item))||[...a.decisions].some(([id,parts])=>b.decisions.has(id)&&[...parts].some(part=>[...b.decisions.get(id)].some(other=>part!==other)));
   for(let i=0;i<profiles.length;i++)for(const word of profiles[i].words){if(!postings.has(word))postings.set(word,[]);const list=postings.get(word);if(list.length<60)list.push(i);else limited=true;}
   for(const list of postings.values())for(let i=0;i<list.length;i++)for(let j=i+1;j<list.length;j++){
     if(pairs.size>=20000){limited=true;break;}
     const key=list[i]+':'+list[j];if(pairs.has(key))continue;pairs.add(key);
     const a=profiles[list[i]],b=profiles[list[j]];
     if(a.item.date!==b.item.date)continue;
-    if([...a.decisions].some(([id,parts])=>b.decisions.has(id)&&[...parts].some(part=>[...b.decisions.get(id)].some(other=>part!==other))))continue;
+    if(dismissed.length&&separated(a,b))continue;
     const known=project=>project&&!['未分类','日程工作'].includes(project);
     if(known(a.item.project)&&known(b.item.project)&&a.item.project!==b.item.project)continue;
     const shared=[...a.words].filter(word=>b.words.has(word));
     if(shared.length<2||shared.length/Math.min(a.words.size,b.words.size)<0.35)continue;
-    const id=matchId(a.item,b.item);if(hidden.has(id))continue;
-    const planner=[a.item,b.item].find(item=>item.entryIds.some(id=>sources.get(id)?.source==='planner')),preferred=planner||a.item;
-    candidates.push({id,keys:[a.item.key,b.item.key],titles:[a.item.title,b.item.title],title:preferred.title,description:preferred.description,reason:'内容共同涉及：'+shared.slice(0,5).join('、'),score:shared.length/Math.min(a.words.size,b.words.size)+shared.length/20});
+    candidates.push({id:matchId(a.item,b.item),profiles:[a,b],shared,score:shared.length/Math.min(a.words.size,b.words.size)+shared.length/20});
   }
-  candidates.sort((a,b)=>b.score-a.score||a.id.localeCompare(b.id));if(candidates.length>20)limited=true;
-  return {items:candidates.slice(0,20).map(({score,...item})=>item),limited};
+  candidates.sort((a,b)=>b.score-a.score||a.id.localeCompare(b.id));
+  // 共享事项的候选归入同一待确认组；已否认的关系不能通过第三项间接归组。
+  const memberships=new Map(profiles.map(profile=>[profile,{profiles:[profile],shared:new Set(),score:0}])),separate=[];
+  for(const candidate of candidates){
+    const [a,b]=candidate.profiles,left=memberships.get(a),right=memberships.get(b);
+    if(left!==right){
+      if(dismissed.length&&left.profiles.some(a=>right.profiles.some(b=>separated(a,b)))){separate.push(candidate);continue;}
+      if(left.profiles.length+right.profiles.length>50){limited=true;continue;}
+      left.profiles.push(...right.profiles);for(const profile of right.profiles)memberships.set(profile,left);
+      for(const word of right.shared)left.shared.add(word);left.score=Math.max(left.score,right.score);
+    }
+    for(const word of candidate.shared)left.shared.add(word);left.score=Math.max(left.score,candidate.score);
+  }
+  const grouped=[...new Set(memberships.values())].filter(group=>group.profiles.length>1).concat(separate).map(group=>{
+    const members=[...group.profiles].sort((a,b)=>a.index-b.index),works=members.map(profile=>profile.item),preferred=works.find(item=>item.entryIds.some(id=>sources.get(id)?.source==='planner'))||works[0];
+    const common=[...members[0].words].filter(word=>members.every(profile=>profile.words.has(word))),shared=common.length>=2?common:[...group.shared];
+    return {id:matchId(...works),keys:works.map(item=>item.key),titles:works.map(item=>item.title),title:preferred.title,description:preferred.description,reason:(common.length>=2?'内容共同涉及：':'关联内容涉及：')+shared.slice(0,5).join('、'),score:group.score};
+  }).filter(group=>!hidden.has(group.id));
+  grouped.sort((a,b)=>b.score-a.score||a.id.localeCompare(b.id));if(grouped.length>20)limited=true;
+  return {items:grouped.slice(0,20).map(({score,...item})=>item),limited};
 }
 module.exports={workMatches};

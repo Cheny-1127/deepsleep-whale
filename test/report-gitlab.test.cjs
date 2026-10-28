@@ -17,6 +17,7 @@ test('GitLab connection, cross-group selection and remote commits survive restar
     if(url.pathname.endsWith('/groups/10/projects'))return reply([project]);
     if(url.pathname.endsWith('/repository/commits'))return reply([commit('a'),commit('b','colleague@example.test')]);
     if(url.pathname.endsWith('/merge_requests'))return reply([]);
+    if(url.pathname.endsWith('/refs'))return reply([]);
     throw Error('unexpected request');});
   const connected=await f.reports.action('gitlab-connect',{url:host,token});assert.equal(connected.username,'cy');assert.equal(connected.authors,'cy@example.test');
   assert.equal((await f.reports.action('gitlab-groups')).items[0].fullPath,'business');
@@ -43,7 +44,7 @@ test('GitLab pagination supports missing headers, validates IDs, and bounds comm
   let count=0;const source={host,projectId:21,project:'business/orders'};
   await assert.rejects(collectGitlab(source,{since:NOW-86400000,until:NOW,connection:{url:host,token},authors:'cy@example.test',fetchImpl:async()=>{count++;return reply(Array.from({length:100},()=>commit('a')));}}),/2000/);
   assert.equal(count,21);
-  const result=await collectGitlab(source,{since:NOW-86400000,until:NOW,connection:{url:host,token},authors:'cy@example.test',fetchImpl:async()=>reply([commit('a'),commit('a'),commit('b','other@example.test')])});assert.equal(result.length,1);
+  const result=await collectGitlab(source,{since:NOW-86400000,until:NOW,connection:{url:host,token},authors:'cy@example.test',fetchImpl:async raw=>reply(new URL(raw).pathname.endsWith('/repository/commits')?[commit('a'),commit('a'),commit('b','other@example.test')]:[])});assert.equal(result.length,1);
 });
 
 test('GitLab authentication and response failures are safe and never replace a working connection',async t=>{
@@ -87,7 +88,7 @@ test('malformed GitLab user, group, project and commit items return safe errors'
 
 test('GitLab connection and collection use their own transport when the Electron transport fails',async t=>{
   let generalCalls=0,gitlabCalls=0;
-  const f=fixture(t,async()=>{generalCalls++;return new Response('server error',{status:500});},{gitlabFetchImpl:async raw=>{gitlabCalls++;const p=new URL(raw).pathname;return reply(p.endsWith('/user')?user:p.endsWith('/groups')?[group]:[commit('a')]);}});
+  const f=fixture(t,async()=>{generalCalls++;return new Response('server error',{status:500});},{gitlabFetchImpl:async raw=>{gitlabCalls++;const p=new URL(raw).pathname;return reply(p.endsWith('/user')?user:p.endsWith('/groups')?[group]:p.endsWith('/repository/commits')?[commit('a')]:[]);}});
   await f.reports.action('gitlab-connect',{url:host,token});await f.reports.action('gitlab-groups');
   await f.reports.action('settings',{gitlabProjects:[{host,projectId:21,project:'business/orders'}],gitlabAuthors:user.email});
   await f.reports.action('collect');assert.equal(f.reports.snapshot({date:'2026-10-26'}).entries.length,1);
@@ -122,7 +123,7 @@ test('GitLab author-name selection includes email mistakes, excludes other autho
     {...commit('e','old@example.test'),author_name:'YUCHAoyuan'},
     {...commit('a','old-invalid-email'),author_name:'yuchaoyuan'}
   ];
-  const f=fixture(t,async raw=>reply(new URL(raw).pathname.endsWith('/user')?user:new URL(raw).pathname.endsWith('/groups')?[group]:items));
+  const f=fixture(t,async raw=>reply(new URL(raw).pathname.endsWith('/user')?user:new URL(raw).pathname.endsWith('/groups')?[group]:new URL(raw).pathname.endsWith('/repository/commits')?items:[]));
   await f.reports.action('gitlab-connect',{url:host,token});
   await f.reports.action('settings',{gitlabProjects:[{host,projectId:21,project:'business/orders'}],gitlabAuthorMode:'name',gitlabAuthorNames:' yuchaoyuan，余朝元\nYUCHAoyuan ',gitlabAuthors:user.email});
   await f.reports.action('collect');await f.reports.action('collect');
@@ -147,15 +148,45 @@ test('GitLab validates only the active author filter and migrates existing email
   assert.equal(restarted.snapshot().settings.gitlabAuthors,user.email);assert.equal(restarted.snapshot().settings.gitlabAuthorNames,'余朝元,yuchaoyuan');
 });
 
-test('commit MR associations use exact project identity, paginate and deduplicate merged MRs',async()=>{
+test('commit MR associations use exact project identity, paginate and deduplicate opened and merged MRs',async()=>{
   const {collectGitlab}=require('../src/reports/gitlab.cjs');const calls=[];
   const source={host,projectId:21,project:'business/orders'},merged={iid:9,project_id:21,state:'merged',title:'订单修复'};
   const result=await collectGitlab(source,{since:NOW-86400000,until:NOW,connection:{url:host,token},authors:user.email,fetchImpl:async raw=>{
     const url=new URL(raw);calls.push(url);if(url.pathname.endsWith('/repository/commits'))return reply([commit('a'),commit('a')]);
     const page=Number(url.searchParams.get('page'));return reply(page===1?[merged,{...merged,project_id:99},{...merged,iid:10,state:'opened'}]:[merged],{'x-next-page':page===1?'2':''});
   }});
-  assert.equal(result.length,1);assert.equal(result[0].sourceMeta.mrChecked,true);assert.deepEqual(result[0].sourceMeta.mergeRequests,[{iid:9,title:'订单修复',url:host+'/business/orders/-/merge_requests/9'}]);
+  assert.equal(result.length,1);assert.equal(result[0].sourceMeta.mrChecked,true);assert.deepEqual(result[0].sourceMeta.mergeRequests,[{iid:9,title:'订单修复',url:host+'/business/orders/-/merge_requests/9',state:'merged'},{iid:10,title:'订单修复',url:host+'/business/orders/-/merge_requests/10',state:'opened'}]);
   assert.equal(calls.length,3);
+});
+
+test('unmerged commits retain one unambiguous feature branch and opened MR lifecycle metadata',async()=>{
+  const {collectGitlab}=require('../src/reports/gitlab.cjs'),source={host,projectId:21,project:'business/orders'},options={since:NOW-86400000,until:NOW,connection:{url:host,token},authors:user.email};
+  const opened={iid:9,project_id:21,state:'opened',title:'订单功能',source_branch:'feat-cy-orders',target_branch:'main'};
+  for(const refs of [[{type:'branch',name:'feat-cy-orders'}],[{type:'branch',name:'main'},{type:'branch',name:'feat-cy-orders'}],[{type:'branch',name:'feat-cy-orders'},{type:'branch',name:'feat-cy-other'}]]){
+    const entries=await collectGitlab(source,{...options,fetchImpl:async raw=>{const p=new URL(raw).pathname;return reply(p.endsWith('/repository/commits')?[commit('a')]:p.endsWith('/refs')?refs:[],{'x-next-page':''});}});
+    assert.equal(entries[0].sourceMeta.featureBranch,refs.length===1?'feat-cy-orders':undefined);
+  }
+  const entries=await collectGitlab(source,{...options,fetchImpl:async raw=>reply(new URL(raw).pathname.endsWith('/repository/commits')?[commit('a')]:[opened],{'x-next-page':''})});
+  assert.equal(entries[0].sourceMeta.mergeRequests[0].state,'opened');assert.equal(entries[0].sourceMeta.mergeRequests[0].sourceBranch,'feat-cy-orders');assert.equal(entries[0].sourceMeta.mergeRequests[0].targetBranch,'main');
+});
+
+test('tracked old commits refresh outside the lookback and create an exact main merge event',async()=>{
+  const {collectGitlab}=require('../src/reports/gitlab.cjs'),source={host,projectId:21,project:'business/orders'},mergedAt=NOW-3600000,calls=[];
+  const mr={iid:9,project_id:21,state:'merged',title:'订单功能',source_branch:'feat-cy-orders',target_branch:'main'},url=host+'/business/orders/-/merge_requests/9';
+  const old={source:'gitlab',sourceKey:'gitlab:'+host+':21:'+'a'.repeat(40),title:'开发订单功能',project:source.project,date:'2026-10-01',status:'done',sourceMeta:{projectId:21,sha:'a'.repeat(40),email:user.email,committedAt:Date.parse('2026-10-01T10:00:00+08:00'),mergeRequests:[{iid:9,title:mr.title,url,state:'opened',sourceBranch:mr.source_branch,targetBranch:'main'}]}};
+  const entries=await collectGitlab(source,{since:NOW-86400000,until:NOW,connection:{url:host,token},authors:user.email,trackedEntries:[old],fetchImpl:async raw=>{const p=new URL(raw).pathname;calls.push(p);return reply(p.endsWith('/repository/commits')?[]:p.endsWith('/merge_requests/9')?{...mr,merged_at:new Date(mergedAt).toISOString()}:[mr],{'x-next-page':''});}});
+  assert.equal(entries.length,2);assert.equal(entries[0].sourceKey,old.sourceKey);assert.equal(entries[0].date,old.date);assert.equal(entries[0].sourceMeta.mergeRequests[0].mergedAt,mergedAt);
+  const event=entries.find(entry=>entry.sourceMeta.event==='merged');assert.ok(event);assert.equal(event.date,'2026-10-26');assert.equal(event.sourceMeta.mergeRequests[0].targetBranch,'main');assert.ok(calls.some(path=>path.endsWith('/merge_requests/9')));
+});
+
+test('frontend merge events preserve a variable target branch without allowing it for backend repositories',async()=>{
+  const {collectGitlab}=require('../src/reports/gitlab.cjs'),mergedAt=NOW-1000;
+  const mr={iid:20,project_id:21,state:'merged',title:'应用类型新增',source_branch:'feat-cy-client-type',target_branch:'v3.10.0',merged_at:new Date(mergedAt).toISOString()};
+  for(const project of ['ossv/d-minitv-admin','ossv/d-ossv-operate']){
+    const result=await collectGitlab({host,projectId:21,project},{since:NOW-86400000,until:NOW,connection:{url:host,token},authors:user.email,fetchImpl:async raw=>reply(new URL(raw).pathname.endsWith('/repository/commits')?[commit('a')]:[mr],{'x-next-page':''})});
+    const event=result.find(entry=>entry.sourceMeta.event==='merged');
+    if(project==='ossv/d-minitv-admin'){assert.ok(event);assert.equal(event.details,'代码已合并 v3.10.0。');assert.equal(event.sourceMeta.mergeRequests[0].targetBranch,'v3.10.0');}else assert.equal(event,undefined);
+  }
 });
 
 test('MR association failures and truncated pages cannot save half-associated source results',async t=>{

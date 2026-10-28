@@ -4,6 +4,7 @@ const {text,dateKey,requireDate,addDays,weekRange,defaultSettings,settingsInput,
 const {archiveReport}=require('../reports/archive.cjs');
 const {readReportEnvironment}=require('../reports/environment.cjs');
 const {workSummary,eventTime}=require('../reports/work-summary.cjs');
+const {needsMrRefresh}=require('../reports/work-lifecycle.cjs');
 const {workMatches}=require('../reports/work-matches.cjs');
 const {collectGit}=require('../reports/git.cjs');
 const {collectJenkins}=require('../reports/jenkins.cjs');
@@ -43,8 +44,9 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
     state=next;writeError='';onChange();
   }
   function dirty(next,...dates){next.dirtyDates=[...new Set([...next.dirtyDates,...dates.filter(Boolean)])];}
+  function dayWork(date,next=state){return workSummary(next.entries.filter(entry=>entry.date===date),next.workGroups,{context:next.entries});}
   function rememberSeparateWorks(next,date,members,id){
-    const restored=workSummary(next.entries.filter(e=>e.date===date),next.workGroups).items.filter(item=>item.memberKeys.some(key=>members.includes(key)));
+    const restored=dayWork(date,next).items.filter(item=>item.memberKeys.some(key=>members.includes(key)));
     if(restored.length<2)return;
     const decision={date,id:fingerprint('unmerge:'+date+':'+id),members:restored.map(item=>item.memberKeys)};
     next.dismissedMatches=dismissedMatchesInput([...next.dismissedMatches.filter(item=>item.id!==decision.id),decision]);
@@ -58,16 +60,17 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
   }
   function snapshot({date=dateKey(now())}={}){
     requireDate(date);
-    const entries=state.entries.filter(e=>e.date===date),work=workSummary(entries,state.workGroups),dismissed=state.dismissedMatches.filter(item=>item.date===date);
+    const entries=state.entries.filter(e=>e.date===date),work=dayWork(date),dismissed=state.dismissedMatches.filter(item=>item.date===date);
     return {...summary(),date,gitlab:gitlabStatus(),settings:clone(state.settings),entries:clone(entries.filter(e=>!e.removed).sort((a,b)=>eventTime(a)-eventTime(b)||a.sourceKey.localeCompare(b.sourceKey))),work,workMatches:{...workMatches(work.items,entries,dismissed),dismissedCount:dismissed.length},
-      sources:clone(state.sources),weeks:Object.keys(state.weeks).sort().reverse().slice(0,104),total:state.entries.filter(e=>!e.removed).length,
+      sources:clone(state.sources),needsMrRefresh:entries.some(needsMrRefresh),weeks:Object.keys(state.weeks).sort().reverse().slice(0,104),total:state.entries.filter(e=>!e.removed).length,
       archiveReady:Boolean(state.settings.archiveDir&&fs.existsSync(state.settings.archiveDir)),templateTokens:['week_start','week_end','summary','releases','blockers','next_week','details','count']};
   }
   function ingest(next,items){
     for(const item of items){
       const fields=entryInput(item),old=next.entries.find(e=>e.sourceKey===item.sourceKey);
       // 同一事实只占一条记录；人工修改、排除或删除的结果不被下一次采集恢复。
-      if(old){if(old.removed)continue;const updated={...old,...(old.edited?{}:fields),included:old.included,sourceActive:item.sourceActive!==false,sourceMeta:item.sourceMeta||old.sourceMeta};
+      if(old){if(old.removed)continue;const metadata=item.sourceMeta?{...item.sourceMeta,...(!item.sourceMeta.featureBranch&&old.sourceMeta.featureBranch?{featureBranch:old.sourceMeta.featureBranch}:{})}:old.sourceMeta;
+        const updated={...old,...(old.edited?{}:fields),included:old.included,sourceActive:item.sourceActive!==false,sourceMeta:metadata};
         if(JSON.stringify(updated)!==JSON.stringify(old)){dirty(next,old.date,updated.date);Object.assign(old,updated,{updatedAt:now()});}}
       else{next.entries.push({...fields,id:randomUUID(),source:item.source,sourceKey:item.sourceKey,sourceMeta:item.sourceMeta||{},sourceActive:item.sourceActive!==false,removed:false,edited:false,createdAt:now(),updatedAt:now()});dirty(next,fields.date);}
     }
@@ -98,7 +101,7 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
       for(const [kind,sources,collector] of [['git',settings.repositories,gitCollector],['gitlab',settings.gitlabProjects,gitlabCollector],['jenkins',settings.jenkinsJobs,jenkinsCollector]])for(const source of sources){
         if(signal.aborted||closed||epoch!==generation)return;
         const key=kind+':'+(source.path||source.job||source.host+':'+source.projectId);
-        try{const options={since,until,signal,environment,fetchImpl};if(kind==='jenkins'){options.connection=gitlabStore?.load();options.gitlabProjects=settings.gitlabProjects;options.gitlabFetchImpl=gitlabFetchImpl;}if(kind==='gitlab'){options.connection=gitlabStore?.load();options.authors=settings.gitlabAuthors;options.authorMode=settings.gitlabAuthorMode;options.authorNames=settings.gitlabAuthorNames;options.fetchImpl=gitlabFetchImpl;}
+        try{const options={since,until,signal,environment,fetchImpl};if(kind==='jenkins'){options.connection=gitlabStore?.load();options.gitlabProjects=settings.gitlabProjects;options.gitlabFetchImpl=gitlabFetchImpl;}if(kind==='gitlab'){options.connection=gitlabStore?.load();options.authors=settings.gitlabAuthors;options.authorMode=settings.gitlabAuthorMode;options.authorNames=settings.gitlabAuthorNames;options.trackedEntries=clone(state.entries);options.fetchImpl=gitlabFetchImpl;}
           const entries=await collector(source,options);
           if(signal.aborted||closed||epoch!==generation)return;
           if(!Array.isArray(entries)||entries.length>2000)throw Error('采集返回的记录过多，请缩小回溯范围');
@@ -121,7 +124,7 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
   function prepareDay(date){
     if(preparations.has(date))return preparations.get(date);
     if(flight)return flight.then(()=>prepareDay(date));
-    const legacy=state.entries.filter(e=>e.date===date&&e.source==='gitlab'&&!e.removed&&e.sourceActive!==false&&!e.sourceMeta.mrChecked);
+    const legacy=state.entries.filter(e=>e.date===date&&needsMrRefresh(e));
     if(!legacy.length)return Promise.resolve(snapshot({date}));
     const fail=message=>Object.assign(Error(message),{reportSafe:true});
     if(legacy.length>200)return Promise.reject(fail('当天待关联的历史提交超过 200 条，请分批核对'));
@@ -144,7 +147,7 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
         for(const old of entries){
           const fresh=items.find(item=>item.sourceKey===old.sourceKey&&item.sourceMeta?.sha===old.sourceMeta.sha&&item.sourceMeta.mrChecked===true);
           if(!fresh)throw fail('部分历史提交未在当前账号筛选中找到，请核对作者或仓库配置');
-          metadata.set(old.id,{mergeRequests:fresh.sourceMeta.mergeRequests||[],mrChecked:true,parentShas:fresh.sourceMeta.parentShas||[],...(fresh.sourceMeta.mrAssociation?{mrAssociation:fresh.sourceMeta.mrAssociation}:{})});
+          metadata.set(old.id,{mergeRequests:fresh.sourceMeta.mergeRequests||[],mrChecked:true,mrLifecycleChecked:true,parentShas:fresh.sourceMeta.parentShas||[],...(fresh.sourceMeta.repositoryUrl?{repositoryUrl:fresh.sourceMeta.repositoryUrl}:{}),...(fresh.sourceMeta.featureBranch?{featureBranch:fresh.sourceMeta.featureBranch}:{}),...(fresh.sourceMeta.mrAssociation?{mrAssociation:fresh.sourceMeta.mrAssociation}:{})});
         }
       }
       if(signal.aborted||closed||!enabled||epoch!==generation)throw fail('历史提交关联已取消');
@@ -152,7 +155,7 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
       const next=clone(state);let changed=false;
       for(const original of legacy){
         const entry=next.entries.find(e=>e.id===original.id&&e.sourceKey===original.sourceKey&&!e.removed&&e.sourceMeta.sha===original.sourceMeta.sha);
-        if(!entry||entry.sourceMeta.mrChecked)continue;
+        if(!entry||!needsMrRefresh(entry))continue;
         Object.assign(entry.sourceMeta,metadata.get(original.id));dirty(next,entry.date);changed=true;
       }
       if(changed)save(next);return snapshot({date});
@@ -228,7 +231,7 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
     if(name==='merge-work'){
       const date=requireDate(value.date),keys=value.keys;
       if(!Array.isArray(keys)||keys.length<2||keys.length>50||keys.some(key=>typeof key!=='string')||new Set(keys).size!==keys.length)throw Error('请至少选择两项不同工作，最多合并 50 项');
-      const current=workSummary(state.entries.filter(e=>e.date===date),state.workGroups).items,selected=keys.map(key=>current.find(item=>item.key===key));
+      const current=dayWork(date).items,selected=keys.map(key=>current.find(item=>item.key===key));
       if(selected.some(item=>!item))throw Error('事项已变化，请关闭窗口刷新后重新选择');
       if(selected.some(item=>item.status!=='done'))throw Error('工作计划或待解决事项不能直接合并为已完成工作');
       const members=[...new Set(selected.flatMap(item=>item.memberKeys))],existing=new Set(selected.map(item=>item.groupId).filter(Boolean));
@@ -238,7 +241,7 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
     if(name==='save-work'||name==='unmerge-work'){
       const date=requireDate(value.date),next=clone(state);
       if(name==='unmerge-work'&&!value.id&&typeof value.key==='string'){
-        const item=workSummary(state.entries.filter(e=>e.date===date),state.workGroups).items.find(item=>item.key===value.key);
+        const item=dayWork(date).items.find(item=>item.key===value.key);
         if(!item?.legacyLinkIds?.length)throw Error('合并事项不存在，请刷新后重试');
         for(const entry of next.entries)if(item.legacyLinkIds.includes(entry.id))entry.relatedMr='';
         rememberSeparateWorks(next,date,item.memberKeys,item.key);
@@ -247,7 +250,7 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
       let group=next.workGroups.find(group=>group.id===value.id&&group.date===date);
       // 未分组的自动事项也通过独立覆盖层保存修改，保留采集事实并接住后续同 MR 来源。
       if(name==='save-work'&&!value.id&&typeof value.key==='string'){
-        const item=workSummary(state.entries.filter(e=>e.date===date),state.workGroups).items.find(item=>item.key===value.key);
+        const item=dayWork(date).items.find(item=>item.key===value.key);
         if(!item||item.groupId||item.conflictingGroups?.length)throw Error('事项已变化，请关闭窗口刷新后重新选择');
         if(item.status!=='done')throw Error('请在原始工作记录中修改计划或待解决事项');
         group={id:randomUUID(),date,title:value.title,description:value.description,members:[...item.memberKeys],editOnly:true};next.workGroups.push(group);
@@ -271,6 +274,14 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
       if(typeof value.included!=='boolean')throw Error('请选择是否纳入报告');
       const next=clone(state),entry=next.entries.find(e=>e.id===value.id&&!e.removed);if(!entry)throw Error('工作记录不存在');
       entry.included=value.included;entry.updatedAt=now();dirty(next,entry.date);save(next);return snapshot({date:entry.date});
+    }
+    if(name==='remove-work'){
+      const date=requireDate(value.date),items=dayWork(date).items,item=items.find(item=>item.key===value.key);
+      if(!item)throw Error('事项已变化，请刷新后重新操作');
+      const ids=new Set(item.entryIds);
+      if(items.some(other=>other.key!==item.key&&other.entryIds.some(id=>ids.has(id))))throw Error('这项工作与其他工作共用来源，请先在来源记录中核对');
+      const next=clone(state);for(const entry of next.entries)if(ids.has(entry.id))entry.removed=true;
+      dirty(next,date);save(next);return snapshot({date});
     }
     if(name==='remove-entry'){
       const next=clone(state),entry=next.entries.find(e=>e.id===value.id);if(!entry)throw Error('工作记录不存在');entry.removed=true;dirty(next,entry.date);save(next);return snapshot({date:entry.date});
