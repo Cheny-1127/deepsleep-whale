@@ -42,3 +42,19 @@ test('pending save resists broadcast overwrite and failed save restores the conf
   f.setSave(async tripleClick=>({shortcuts:{tripleClick}}));await f.change('none');
   assert.equal(f.get('status').textContent,'未启用');assert.equal(f.get('error').hidden,true);
 });
+
+test('threshold save previews pending value and restores on failure',async()=>{
+  const f=fixture();let reject;
+  f.setSave(()=>new Promise((_resolve,fail)=>reject=fail));
+  f.get('threshold').value='2';const task=f.get('threshold').handlers.change();
+  assert.equal(f.get('threshold').disabled,true);assert.match(f.get('preview').textContent,/从 3 条/);
+  f.render({shortcuts:{tripleClick:'panel',reminderCollapseThreshold:3}});
+  assert.equal(f.get('threshold').value,'2');
+  reject(Error('disk'));await task;
+  assert.equal(f.get('threshold').value,'3');assert.equal(f.get('error').hidden,false);
+  f.setSave(async value=>({shortcuts:{tripleClick:'panel',...value}}));
+  f.get('threshold').value='2';await f.get('threshold').handlers.change();
+  assert.equal(f.get('threshold').value,'2');assert.equal(f.get('error').hidden,true);
+  f.get('threshold').value='0';await f.get('threshold').handlers.change();
+  assert.equal(f.get('threshold').value,'2');assert.equal(f.get('error').hidden,false);
+});

@@ -23,7 +23,7 @@ const codexBin = path.join(dir, 'codex-fixture');
 fs.writeFileSync(codexBin, '#!' + process.execPath + '\n' + `require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(m.id)process.stdout.write(JSON.stringify({id:m.id,result:m.id===1?{}:m.id===3?{config:{}}:m.id===4?{requirements:null}:{data:[{hooks:${JSON.stringify(hooks)},errors:[]}]}})+'\\n');});`, { mode:0o700 });
 // 只替换测试进程的客户端检测，不要求用户打开或退出真实客户端。
 const bootstrap = path.join(dir, 'bootstrap.cjs');
-fs.writeFileSync(bootstrap, `const cp=require('node:child_process'),original=cp.execFile;cp.execFile=function(file,args,options,callback){if(file==='/bin/ps'&&args.join(' ')==='-axo comm='){setImmediate(()=>callback(null,'/Applications/Codex.app/Contents/MacOS/Codex'));return;}return original.apply(this,arguments);};require(${JSON.stringify(path.join(root, 'src/main.cjs'))});`);
+fs.writeFileSync(bootstrap, `require(${JSON.stringify(path.join(__dirname,'test-window-policy.cjs'))}).installTestWindowPolicy();const cp=require('node:child_process'),original=cp.execFile;cp.execFile=function(file,args,options,callback){if(file==='/bin/ps'&&args.join(' ')==='-axo comm='){setImmediate(()=>callback(null,'/Applications/Codex.app/Contents/MacOS/Codex'));return;}return original.apply(this,arguments);};require(${JSON.stringify(path.join(root, 'src/main.cjs'))});`);
 let app, panel, pet;
 const errors = [], failedAssets = [];
 const snapshot = () => panel.evaluate(() => window.whale.snapshot());
@@ -35,7 +35,7 @@ async function wait(predicate) {
   }
 }
 async function launch() {
-  app = await electron.launch({ executablePath:require('electron'), args:[bootstrap], env:{ ...process.env, CODEX_HOME:codexHome, WHALE_CODEX_BIN:codexBin, WHALE_DATA_DIR:dir } });
+  app = await electron.launch({ executablePath:require('electron'), args:[bootstrap], env:{ ...process.env, WHALE_TEST_WINDOWS:'hidden', CODEX_HOME:codexHome, WHALE_CODEX_BIN:codexBin, WHALE_DATA_DIR:dir } });
   app.on('window', page => {
     page.on('pageerror', error => errors.push(error.message));
     page.on('requestfailed', request => failedAssets.push(request.url()));
@@ -69,6 +69,30 @@ async function send(name, index, turn = 'turn-1') {
 }
 (async () => { try {
   await launch();
+  await panel.locator('#nav-shortcuts').click();
+  for(const width of [860,1060]) {
+    await app.evaluate(({BrowserWindow},width)=>BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/index.html')).setSize(width,770),width);
+    assert.ok(await panel.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'快捷操作页不横向溢出');
+    for(const id of ['shortcuts-help','shortcuts-reminder-help']) {
+    const help=panel.locator('button[aria-describedby="'+id+'"]'),tip=panel.locator('#'+id);
+    assert.equal(await tip.isVisible(),false,'说明默认收起');
+    await help.hover();assert.equal(await tip.isVisible(),true,'悬停问号显示说明');
+    const bounds=await tip.boundingBox();assert.ok(bounds.x>=0&&bounds.x+bounds.width<=width,'说明不超出窗口');
+    await panel.screenshot({path:`/tmp/whale-${id}-${width}.png`});
+    await panel.locator('#shortcuts-heading').hover();assert.equal(await tip.isVisible(),false,'移出后隐藏');
+    await help.focus();assert.equal(await tip.isVisible(),true,'键盘聚焦显示说明');
+    await panel.keyboard.press('Tab');assert.equal(await tip.isVisible(),false,'失焦后隐藏');
+    const icon=await help.boundingBox();assert.ok(Math.abs(bounds.x-icon.x)<2&&Math.abs(bounds.y-icon.y-icon.height-4)<2,'Tooltip aligns with help icon');
+    const heading=await help.locator('xpath=ancestor::div[contains(@class,"shortcuts-title")]/h2').boundingBox();
+    assert.ok(Math.abs(icon.x-heading.x-heading.width-4)<2&&icon.y<heading.y,'Help icon sits immediately above the title right edge');
+    }
+    await panel.screenshot({path:`/tmp/whale-shortcuts-settings-${width}.png`});
+    await panel.locator('#shortcuts-triple').click();
+    const menu=await panel.locator('#shortcuts-picker .ui-select-menu').boundingBox();
+    assert.ok(menu.x>=0&&menu.x+menu.width<=width&&menu.y+menu.height<=770,'快捷菜单不裁切');
+    await panel.keyboard.press('Escape');
+  }
+  if(process.env.WHALE_SHORTCUTS_LAYOUT_ONLY==='1'){assert.deepEqual(errors,[]);console.log('PASS: 快捷操作问号提示悬停、移出、聚焦、失焦及 860/1060 布局');return;}
   // 覆盖一、三、四条边界及四→三→四切换，防止手动展开状态残留。
   await send('UserPromptSubmit', 0, 'busy-preview');
   await wait(() => !document.querySelector('#completion-shell').hidden && !document.querySelector('#completion-bubble').hidden);
@@ -76,8 +100,19 @@ async function send(name, index, turn = 'turn-1') {
   assert.equal((await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(win=>win.webContents.getURL().endsWith('/pet.html')).getBounds())).height, 380);
   for (const i of [1, 2]) await send('UserPromptSubmit', i, 'busy-preview');
   await wait(() => !document.querySelector('#completion-bubble').hidden && document.querySelectorAll('.completion-row').length === 3);
+  const threshold=panel.locator('#shortcuts-threshold');
+  await threshold.fill('2');await threshold.press('Tab');
+  await wait(()=>document.querySelector('#completion-bubble').hidden);
+  assert.equal((await snapshot()).shortcuts.reminderCollapseThreshold,2);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir,'shortcuts.json'),'utf8')).reminderCollapseThreshold,2);
   await pet.locator('#busy-alert').click();
-  assert.equal(await pet.locator('#completion-bubble').isVisible(), true, '三条以内点击分类不折叠');
+  await wait(()=>!document.querySelector('#completion-bubble').hidden);
+  await pet.locator('#busy-alert').click();
+  await wait(()=>document.querySelector('#completion-bubble').hidden);
+  await threshold.fill('3');await threshold.press('Tab');
+  await wait(()=>!document.querySelector('#completion-bubble').hidden);
+  await pet.locator('#busy-alert').click();
+  assert.equal(await pet.locator('#completion-bubble').isVisible(), true, '阈值内点击分类不折叠');
   await pet.locator('#busy-alert').focus(); await pet.keyboard.press('ArrowDown');
   assert.equal(await pet.locator('.completion-row').first().evaluate(el => el === document.activeElement), true);
   await pet.screenshot({ path:path.join(root, 'out/busy-three.png'), omitBackground:true });
@@ -116,6 +151,15 @@ async function send(name, index, turn = 'turn-1') {
   await wait(() => document.querySelector('#unread-label').textContent === '已完成：3');
   assert.deepEqual(await app.evaluate(() => global.openedChats), [`codex://threads/${ids[0]}`]);
   assert.equal(await pet.locator('#completion-bubble').isVisible(), true, '回到三条后自动展示');
+  await threshold.fill('2');await threshold.press('Tab');
+  await wait(()=>document.querySelector('#completion-bubble').hidden);
+  assert.equal(await pet.locator('#unread-label').textContent(),'已完成：3');
+  await pet.locator('#completion-alert').click();
+  await wait(()=>!document.querySelector('#completion-bubble').hidden);
+  await pet.locator('#completion-alert').click();
+  await wait(()=>document.querySelector('#completion-bubble').hidden);
+  await threshold.fill('3');await threshold.press('Tab');
+  await wait(()=>!document.querySelector('#completion-bubble').hidden);
 
   await send('PermissionRequest', 4); await send('PermissionRequest', 5); await send('PermissionRequest', 4);
   await send('UserPromptSubmit', 6);
@@ -123,6 +167,19 @@ async function send(name, index, turn = 'turn-1') {
   await wait(() => document.querySelectorAll('.pending-row').length === 2);
   assert.deepEqual(await pet.locator('.completion-row').allTextContents(), [titles[4], titles[5]], '重复权限事件不改变首次到达顺序');
   assert.equal(await pet.locator('#pending-alert').textContent(), '待处理：2');
+  await threshold.fill('1');await threshold.press('Tab');
+  await wait(()=>document.querySelector('#completion-bubble').hidden);
+  assert.equal((await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/pet.html')).getBounds())).height,320);
+  await pet.locator('#pending-alert').click();
+  await wait(()=>!document.querySelector('#completion-bubble').hidden);
+  assert.equal(await pet.locator('#pending-alert').getAttribute('aria-expanded'),'true');
+  assert.deepEqual(await pet.locator('.completion-row').allTextContents(),[titles[4],titles[5]],'合并展开后保持收到顺序');
+  await pet.locator('#pending-alert').click();
+  await wait(()=>document.querySelector('#completion-bubble').hidden);
+  await threshold.fill('2');await threshold.press('Tab');
+  await wait(()=>!document.querySelector('#completion-bubble').hidden);
+  await threshold.fill('3');await threshold.press('Tab');
+  await panel.waitForFunction(async()=>(await window.whale.snapshot()).shortcuts.reminderCollapseThreshold===3);
   assert.equal(await pet.locator('#busy-alert').textContent(), '执行中：1');
   assert.equal(await pet.locator('#speech').isHidden(), true, '权限状态不额外显示冗余提示气泡');
   await pet.locator('#busy-alert').click();
@@ -153,5 +210,5 @@ async function send(name, index, turn = 'turn-1') {
   await wait(() => document.querySelector('#completion-shell').hidden);
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'reminders.json'), 'utf8')).notices.length, 0);
   assert.deepEqual(errors, []); assert.deepEqual(failedAssets, []);
-  console.log('PASS: 提醒分类、1～3 条直显、超过三条折叠、交替悬停、按序待处理、跳转消费、失败保留及重启恢复');
+  console.log('PASS: 三类共用可配置阈值、边界直显、合并后展开收起、交替悬停、按序待处理、跳转消费、失败保留及重启恢复');
 } finally { if (app) await app.close(); } })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -5,13 +5,13 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('n
 const root=path.resolve(__dirname,'../..'),dir=fs.mkdtempSync('/tmp/whale-sidebar-ui-'),bootstrap=path.join(dir,'bootstrap.cjs');
 fs.writeFileSync(path.join(dir,'archery.json'),JSON.stringify({enabled:false}));
 fs.writeFileSync(path.join(dir,'settings.json'),JSON.stringify({sources:{codex:false,cursor:false}}));
-fs.writeFileSync(bootstrap,`const {Notification}=require('electron');Notification.isSupported=()=>false;
+fs.writeFileSync(bootstrap,`require(${JSON.stringify(path.join(__dirname,'test-window-policy.cjs'))}).installTestWindowPolicy();const {Notification}=require('electron');Notification.isSupported=()=>false;
 const channel=require(${JSON.stringify(path.join(root,'src/channels/archery-pending.cjs'))}),create=channel.createArcheryPending;
 channel.createArcheryPending=options=>create({...options,readConfig:()=>{throw Object.assign(new Error('测试隔离'),{archeryConfig:true});}});
 require(${JSON.stringify(path.join(root,'src/main.cjs'))});`);
 let app,panel;const errors=[];
 async function launch() {
-  app=await electron.launch({executablePath:require('electron'),args:[bootstrap],env:{...process.env,WHALE_DATA_DIR:dir,CODEX_HOME:dir,WHALE_QUOTA_TOKEN_FILE:path.join(dir,'missing-token')}});
+  app=await electron.launch({executablePath:require('electron'),args:[bootstrap],env:{...process.env,WHALE_TEST_WINDOWS:'hidden',WHALE_DATA_DIR:dir,CODEX_HOME:dir,WHALE_QUOTA_TOKEN_FILE:path.join(dir,'missing-token')}});
   await app.firstWindow();
   for(let i=0;i<100;i++){panel=app.windows().find(page=>page.url().endsWith('/index.html'));if(panel)break;await new Promise(resolve=>setTimeout(resolve,50));}
   assert.ok(panel);panel.on('pageerror',error=>errors.push(error.message));
@@ -81,7 +81,7 @@ async function hold(id) {
       const a=common.getBoundingClientRect(),b=child.getBoundingClientRect();
       return {fonts:[common,child,heading].map(el=>getComputedStyle(el).fontSize),weights:[common,child,heading].map(el=>getComputedStyle(el).fontWeight),indent:b.left-a.left,heights:[common,child,document.querySelector('#nav-hooks')].map(el=>el.getBoundingClientRect().height)};
     });
-    assert.equal(new Set(metrics.fonts).size,1,'更多标题与菜单字号一致');assert.equal(new Set(metrics.weights).size,1,'未选中菜单与更多标题字重一致');assert.ok(metrics.indent>=24,'收纳项有清晰缩进');
+    assert.deepEqual(metrics.fonts,['15px','13px','13px'],'常用菜单更醒目，收纳菜单保持原尺寸');assert.deepEqual(metrics.weights,['500','500','500']);assert.ok(metrics.indent>=24,'收纳项保留原缩进');
     assert.equal(new Set(metrics.heights).size,1,'缩进后长菜单保持单行 '+JSON.stringify(metrics));
     for(const mode of ['editing','normal']) {
       if(mode==='normal')await panel.locator('#sidebar-organize').click();
@@ -93,6 +93,7 @@ async function hold(id) {
       assert.notEqual(await panel.locator('#nav-archery').evaluate(el=>getComputedStyle(el).backgroundColor),await panel.locator('#nav-home').evaluate(el=>getComputedStyle(el).backgroundColor),'收纳区通过背景区分暂停状态');
       assert.equal(await panel.locator('#nav-hooks').getAttribute('title'),'已暂停 · 点击查看或设置 · 长按整理菜单');
       assert.equal(await panel.locator('#nav-hooks .sidebar-menu-label').evaluate(el=>el.scrollWidth<=el.clientWidth),true,'收纳菜单名保持完整');
+      assert.ok(await panel.locator('#sidebar-visible .sidebar-menu-label').evaluateAll(labels=>labels.every(el=>el.scrollWidth<=el.clientWidth)),'常用菜单长名称完整显示');
       if(mode==='normal')await panel.locator('#sidebar-organize').click();
     }
   }
