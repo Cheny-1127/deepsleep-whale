@@ -27,5 +27,6 @@ contextBridge.exposeInMainWorld('whale', {
   subscribe: callback => ipcRenderer.on('snapshot', (_event, data) => callback(data)),
   showReminders: callback => ipcRenderer.on('show-reminders', callback),
   showPlanner: callback => ipcRenderer.on('show-planner',callback),
+  showSubscriptions: callback => ipcRenderer.on('show-subscriptions',callback),
   chime: callback => ipcRenderer.on('chime', callback)
 });

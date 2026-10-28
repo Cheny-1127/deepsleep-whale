@@ -39,6 +39,7 @@ const rice = {idle:'idle',thinking:'thinking',working:'coding',approval:'approva
 // 预加载本地动画，降低首次切换等待；实际播放仍使用完整动画文件。
 for (const file of new Set(Object.values(rice))) { const image=new Image(); image.src=`../../assets/rice-rendered/${file}.webp`; }
 let current='idle',visualKey='',speechUntil=0,phrase=0,lastData;
+let subscriptionsUnread=null,subscriptionsEnabled=false,subscriptionsTimer=null;
 const floating=document.body.classList.contains('floating');
 createPetHitTest();
 createSidebarView();
@@ -104,6 +105,27 @@ function render(data) {
   wechatView.render(data.wechat);
   shortcutsView.render(data);
   subscriptionsView?.renderSummary(data.subscriptions);
+  const subscriptionsBadge=$('pet-subscriptions-badge');
+  if(subscriptionsBadge) {
+    const enabled=data.modules?.subscriptions!==false;
+    const unread=data.subscriptions?.unread||0;
+    const collapse=()=>{
+      clearTimeout(subscriptionsTimer);subscriptionsTimer=null;
+      subscriptionsBadge.classList.remove('expanded');
+      subscriptionsBadge.textContent=unread>99?'99+':String(unread);
+    };
+    subscriptionsBadge.hidden=!enabled||unread===0;
+    // 缓存恢复、开关切换和重复广播不当作新消息；只有新增未读才短暂展开。
+    if(enabled&&subscriptionsEnabled&&subscriptionsUnread!==null&&unread>subscriptionsUnread) {
+      clearTimeout(subscriptionsTimer);
+      subscriptionsBadge.classList.add('expanded');
+      subscriptionsBadge.textContent=`有 ${unread} 条未读消息`;
+      subscriptionsTimer=setTimeout(collapse,3000);
+    } else if(!enabled||unread===0||unread!==subscriptionsUnread||subscriptionsUnread===null) collapse();
+    subscriptionsUnread=unread;subscriptionsEnabled=enabled;
+    subscriptionsBadge.title=`消息订阅：${unread} 条未读`;
+    subscriptionsBadge.setAttribute('aria-label',`消息订阅，${unread} 条未读，点击查看`);
+  }
   // 主进程频繁广播状态，只有动作或播放版本变化才重置动画与气泡。
   const nextKey=`${data.state}:${data.revision}:${data.demo}`;
   const previous=current;

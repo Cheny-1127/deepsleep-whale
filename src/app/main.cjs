@@ -239,6 +239,10 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     } else if (action === 'close-completions') { completionExpanded=false;busyExpanded=false;reminderView=null; }
     else if (action === 'reminders') showReminders();
     else if (action === 'planner') showPlanner();
+    else if (action === 'subscriptions-unread') {
+      if(!modules.enabled('subscriptions'))throw Error('消息订阅已关闭，请先开启');
+      windows.showSubscriptions();
+    }
     else if (action === 'read-notice' && typeof value === 'string') { activity.markRead(value);saveReminders(); }
     else if (action === 'panel') showPanel();
     else if (action === 'toggle-pet') windows.isPetVisible()?windows.hidePet():windows.showPet();

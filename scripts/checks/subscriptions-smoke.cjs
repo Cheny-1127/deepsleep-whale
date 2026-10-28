@@ -3,7 +3,8 @@ const {_electron:electron}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
 const root=path.resolve(__dirname,'../..'),dir=fs.mkdtempSync('/tmp/whale-subscriptions-ui-'),bootstrap=path.join(dir,'bootstrap.cjs');
 // 隔离主进程保留真实 IPC/持久化，只替换网络采集、翻译并拦截外部跳转。
-fs.writeFileSync(bootstrap,`const {shell,Notification,Menu,clipboard}=require('electron');Notification.isSupported=()=>false;
+fs.writeFileSync(bootstrap,`require(${JSON.stringify(path.join(__dirname,'test-window-policy.cjs'))}).installTestWindowPolicy();
+const {shell,Notification,Menu,clipboard}=require('electron');Notification.isSupported=()=>false;
 global.subscriptionsFixture={step:1,base:String((BigInt(Date.now()-600000)-1288834974657n)<<22n),calls:[],opened:[],fail:false,hold:false,translationCalls:[],translationFail:false,translationHold:false};shell.openExternal=async url=>global.subscriptionsFixture.opened.push(url);
 // 仅拦截复制菜单与剪贴板，不改动用户系统剪贴板；其他原生菜单仍走真实实现。
 global.subscriptionCopies=[];global.subscriptionCopyMenus=[];clipboard.writeText=text=>global.subscriptionCopies.push(text);
@@ -24,7 +25,7 @@ require(${JSON.stringify(path.join(root,'src/channels/subscription-translation.c
 require(${JSON.stringify(path.join(root,'src/main.cjs'))});`);
 let app;
 async function launch() {
-  app=await electron.launch({executablePath:require('electron'),args:[bootstrap],env:{...process.env,WHALE_DATA_DIR:dir,CODEX_HOME:dir,WHALE_CURSOR_HOME:dir,WHALE_QUOTA_TOKEN_FILE:path.join(dir,'missing-token')}});
+  app=await electron.launch({executablePath:require('electron'),args:[bootstrap],env:{...process.env,WHALE_TEST_WINDOWS:'hidden',WHALE_DATA_DIR:dir,CODEX_HOME:dir,WHALE_CURSOR_HOME:dir,WHALE_QUOTA_TOKEN_FILE:path.join(dir,'missing-token')}});
   await app.firstWindow();
   let panel;
   for(let i=0;i<100;i++){panel=app.windows().find(page=>page.url().endsWith('/index.html'));if(panel)break;await new Promise(resolve=>setTimeout(resolve,50));}
@@ -200,7 +201,12 @@ async function launch() {
   assert.equal((await app.evaluate(()=>global.subscriptionsFixture.opened)).length,0,'点击正文不打开外部原文');
   assert.equal(await body.evaluate(el=>el.classList.contains('is-collapsed')),false);
   await body.click();
-  assert.equal(await body.evaluate(el=>el.classList.contains('is-collapsed')),false,'已展开的正文保持展开');
+  assert.equal(await body.evaluate(el=>el.classList.contains('is-collapsed')),true,'再次点击正文收起');
+  assert.equal(await body.getAttribute('aria-expanded'),'false');
+  await body.press('Enter');
+  assert.equal(await body.getAttribute('aria-expanded'),'true','Enter 展开正文');
+  await body.press(' ');
+  assert.equal(await body.getAttribute('aria-expanded'),'false','空格收起正文');
 
   await panel.getByRole('button',{name:'翻译',exact:true}).click();
   await panel.waitForFunction(()=>document.querySelector('.subscriptions-translation')?.textContent.includes('额度即将重置'));

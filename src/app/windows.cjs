@@ -48,6 +48,11 @@ function createWindows({ snapshot, performAction, collapseReminders, rankingSnap
     const reveal=()=>panel.webContents.send('show-planner');
     if(panel.webContents.isLoadingMainFrame())panel.webContents.once('did-finish-load',reveal);else reveal();
   }
+  function showSubscriptions() {
+    showPanel();
+    const reveal=()=>panel.webContents.send('show-subscriptions');
+    if(panel.webContents.isLoadingMainFrame())panel.webContents.once('did-finish-load',reveal);else reveal();
+  }
   function restartApp() { app.relaunch(); app.quit(); }
   function closeAccountMenu(accountId = null) {
     accountSequence++;
@@ -171,7 +176,7 @@ function createWindows({ snapshot, performAction, collapseReminders, rankingSnap
   app.on('before-quit', () => { quitting = true;closeAccountMenu();petMenu.close();petRanking.close(); });
 
   return {
-    showPanel, showReminders, showPlanner, chooseTrackingAccount,
+    showPanel, showReminders, showPlanner, showSubscriptions, chooseTrackingAccount,
     isPetVisible:()=>Boolean(pet&&!pet.isDestroyed()&&pet.isVisible()),
     isPanel:sender=>sender===panel?.webContents,
     isPet:sender=>sender===pet?.webContents,
