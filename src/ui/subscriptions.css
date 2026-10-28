@@ -102,3 +102,5 @@ button.subscriptions-post-heading:hover:not(:disabled) { background: var(--ui-ho
 /* 固定头像尺寸，图片加载和回退均不改变标题高度或阅读位置。 */
 .subscriptions-avatar { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; flex: 0 0 32px; overflow: hidden; border-radius: 50%; background: var(--ui-selected); color: var(--ui-accent); font-weight: 600; font-size: 16px; }
 .subscriptions-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+
+.subscriptions-translation-error{display:flex;flex-direction:column;gap:4px;font-size:12px;line-height:1.6}
