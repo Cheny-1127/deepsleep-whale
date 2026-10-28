@@ -276,8 +276,16 @@ async function launch() {
   await panel.waitForFunction(()=>document.querySelector('.subscriptions-post .ui-alert'));
   assert.ok(!(await panel.locator('#subscriptions-posts').textContent()).includes('secret translation'));
   assert.equal(await panel.locator('.subscriptions-unread-dot').count(),1,'点击中文翻译即设为已读，翻译失败仍保留已读');
+  const failedCard=panel.locator('.subscriptions-post').filter({has:panel.locator('.subscriptions-translation-error')});
+  assert.equal(await failedCard.locator('.subscriptions-translation').count(),0,'失败不能生成译文区域');
+  assert.match(await failedCard.getByRole('alert').textContent(),/未生成译文/);
+  assert.equal(await failedCard.getByRole('button',{name:'重试翻译',exact:true}).getAttribute('aria-expanded'),'false');
+  assert.equal(await failedCard.getByRole('button',{name:'收起翻译',exact:true}).count(),0);
+  const failedId=await failedCard.getAttribute('data-post-id');
+  const failedSnapshot=(await panel.evaluate(()=>window.whale.subscriptions('snapshot'))).value.posts.find(post=>post.id===failedId);
+  assert.equal(failedSnapshot.translation,undefined,'失败状态不保存为译文');
   await app.evaluate(()=>{const f=global.subscriptionsFixture;f.translationFail=false;f.translationHold=true;});
-  await panel.getByRole('button',{name:'翻译',exact:true}).first().click();
+  await failedCard.getByRole('button',{name:'重试翻译',exact:true}).click();
   await panel.waitForFunction(()=>[...document.querySelectorAll('.subscriptions-post button')].some(el=>el.textContent==='翻译中…'));
   assert.ok(await panel.locator('#subscriptions-clear').isEnabled());assert.ok(await panel.locator('#subscriptions-refresh').isEnabled());
   // 翻译请求跨页完成也只保存缓存，返回时仍默认收起。
@@ -404,6 +412,29 @@ async function launch() {
   const afterRefresh=await next.evaluate(el=>({top:el.getBoundingClientRect().top,y:scrollY}));
   assert.ok(Math.abs(afterRefresh.top-beforeRefresh.top)<=2 && afterRefresh.y>500,'顶部新增动态不会打断当前阅读位置');
 
+
+  // 删除全部、取消并恢复关注后，在仅未读列表翻译新消息。
+  await panel.evaluate(async()=>{
+    const snapshot=(await window.whale.subscriptions('snapshot')).value;
+    for(const post of snapshot.posts)await window.whale.subscriptions('delete-post',{username:post.username,id:post.id});
+    await window.whale.subscriptions('set-enabled',{username:'thsottiaux',enabled:false});
+    await window.whale.subscriptions('set-enabled',{username:'thsottiaux',enabled:true});
+  });
+  await app.evaluate(()=>{global.subscriptionsFixture.step=27;global.subscriptionsFixture.translationHold=true;});
+  await panel.locator('#subscriptions-refresh').click();
+  await panel.locator('#subscriptions-unread').check();
+  await panel.waitForFunction(()=>document.querySelectorAll('.subscriptions-post').length===1);
+  await panel.getByRole('button',{name:'翻译',exact:true}).click();
+  await panel.waitForFunction(async()=>(await window.whale.subscriptions('snapshot')).value.unread===0);
+  assert.equal(await panel.locator('.subscriptions-post').count(),1,'仅未读列表应保留正在翻译的消息');
+  await app.evaluate(()=>{const f=global.subscriptionsFixture;f.translationHold=false;f.releaseTranslation();});
+  await panel.waitForFunction(()=>document.querySelector('.subscriptions-translation')?.textContent.includes('额度即将重置'));
+  assert.equal(await panel.locator('.subscriptions-translation').isVisible(),true,'已读后仍可阅读译文');
+  await panel.getByRole('button',{name:'收起翻译',exact:true}).click();
+  assert.equal(await panel.locator('.subscriptions-post').count(),1,'收起译文不突然移除正在阅读的消息');
+  await panel.locator('#subscriptions-unread').uncheck();await panel.locator('#subscriptions-unread').check();
+  assert.equal(await panel.locator('.subscriptions-post').count(),0,'重新筛选后排除已读消息');
+  assert.equal((await panel.evaluate(()=>window.whale.subscriptions('snapshot'))).value.posts.length,1,'原文仍保存在缓存');
 
   await panel.locator('#subscriptions-tab-manage').click();
   await panel.evaluate(username=>window.whale.subscriptions('remove',username),'thsottiaux');await panel.waitForFunction(username=>!document.querySelector('#subscriptions-managed-accounts tr[data-username="'+username+'"]'),'thsottiaux');assert.ok(await panel.locator('#subscriptions-recommend-tibo').isEnabled());

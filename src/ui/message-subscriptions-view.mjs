@@ -18,7 +18,7 @@ export function createMessageSubscriptionsView() {
       item.setAttribute('aria-selected',String(selected));item.tabIndex = selected ? 0 : -1;
       $(item.getAttribute('aria-controls')).hidden = !selected;
     }
-    if (tab.id !== 'subscriptions-tab-feed') expandedTranslations.clear();
+    if (tab.id !== 'subscriptions-tab-feed') {expandedTranslations.clear();readingTranslations.clear();}
     lastContent = '';render();
     if (focus) tab.focus();
   }
@@ -34,6 +34,8 @@ export function createMessageSubscriptionsView() {
   const remarkDrafts = new Map();
   const translationRequests = new Set();
   const expandedTranslations = new Set();
+  // 仅当前阅读范围保留点击翻译的消息，避免标为已读后被未读筛选立即移除。
+  const readingTranslations = new Set();
   const expandedBodies = new Set();
   let data, filter = '', pending = false, loading = false, lastContent = '', revision = 0;
   function renderSummary(summary) {
@@ -72,6 +74,7 @@ export function createMessageSubscriptionsView() {
   }
   async function call(name, value, message) {
     if (pending) return false;
+    if (name==='refresh'||name==='clear-cache'||(name==='mark-read'&&value===null)) readingTranslations.clear();
     pending = true;revision++;render();error();feedback('');
     try {
       const result = await window.whale.subscriptions(name, value);
@@ -94,6 +97,7 @@ export function createMessageSubscriptionsView() {
   function toggleTranslation(post) {
     // 翻译和阅读状态独立：点击即记为已读，翻译失败也不回滚阅读记录。
     const key = `${post.username}/${post.id}`;
+    if ($('subscriptions-unread').checked && post.unread) readingTranslations.add(key);
     // 收起仅改变当前页面的展开状态，不删除已保存译文；再次展开直接读取缓存。
     if (post.translation) {
       if (expandedTranslations.has(key)) expandedTranslations.delete(key);else expandedTranslations.add(key);
@@ -104,6 +108,7 @@ export function createMessageSubscriptionsView() {
   const picker = $('subscriptions-picker'), pickerButton = $('subscriptions-picker-button');
   function select(username) {
     // 选定后清空候选搜索，下一次展开可重新查看全部账号；焦点回到入口方便继续键盘操作。
+    readingTranslations.clear();
     filter = username;picker.open = false;$('subscriptions-search').value = '';
     lastContent = '';render();pickerButton.focus();
   }
@@ -165,7 +170,7 @@ export function createMessageSubscriptionsView() {
     if (data.storeError) error(data.storeError);
     if (filter && !data.accounts.some(a => a.username === filter)) filter = '';
     const cachedKeys = new Set(data.posts.map(post => `${post.username}/${post.id}`));
-    for (const set of [expandedTranslations,expandedBodies]) for (const key of set) if (!cachedKeys.has(key)) set.delete(key);
+    for (const set of [expandedTranslations,expandedBodies,readingTranslations]) for (const key of set) if (!cachedKeys.has(key)) set.delete(key);
     // 头像随账号资料传输一次，各条消息复用，避免大量动态在 IPC 中重复传输图片。
     const avatars = new Map(data.accounts.map(a=>[a.username,a.avatar]));
     const names = new Map(data.accounts.map(a=>[a.username,a.displayName || data.posts.find(p=>p.username===a.username && p.displayName)?.displayName || `@${a.username}`]));
@@ -220,7 +225,7 @@ export function createMessageSubscriptionsView() {
       status.append(' ',button('打开主页',()=>call('open-profile',account.username),'text-button'));
       $('subscriptions-account-status').append(status);
     }
-    const posts = data.posts.filter(p => (!filter || p.username === filter) && (!$('subscriptions-unread').checked || p.unread));
+    const posts = data.posts.filter(p => (!filter || p.username === filter) && (!$('subscriptions-unread').checked || p.unread || readingTranslations.has(`${p.username}/${p.id}`)));
     const fragment = document.createDocumentFragment();
     for (const post of posts) {
       const card = node('article','','ui-card subscriptions-post');card.dataset.postId = post.id;
@@ -245,7 +250,7 @@ export function createMessageSubscriptionsView() {
       }
       const actions = node('div','','subscriptions-post-actions');
       const translating = post.translating || translationRequests.has(key);
-      const translateButton = button(translating ? '翻译中…' : expanded ? '收起翻译' : '翻译',()=>toggleTranslation(post),'text-button subscriptions-translate');
+      const translateButton = button(translating ? '翻译中…' : expanded ? '收起翻译' : !post.translation && post.translationError ? '重试翻译' : '翻译',()=>toggleTranslation(post),'text-button subscriptions-translate');
       translateButton.title = '翻译为中文';
       translateButton.disabled = pending || translating || (!post.translation && Boolean(data.storeError));
       translateButton.setAttribute('aria-expanded',String(expanded));
@@ -291,7 +296,12 @@ export function createMessageSubscriptionsView() {
         copyMenu(translated,{...value,translation:true});
         translated.append(node('p',post.translation.text));card.append(translated);
       }
-      if (post.translationError) card.append(node('p',post.translationError,'ui-alert'));
+      if (post.translationError && !post.translation && !translating) {
+        const failure = node('div','','ui-alert subscriptions-translation-error');
+        failure.setAttribute('role','alert');
+        failure.append(node('strong','未生成译文'),node('span',post.translationError));
+        card.append(failure);
+      }
       fragment.append(card);
     }
     // 在离屏片段中构建完成后一次替换，避免清空列表触发页面高度塌缩。
@@ -367,12 +377,13 @@ export function createMessageSubscriptionsView() {
   document.addEventListener('click',event=>{if (picker.open && !picker.contains(event.target)) picker.open = false;});
   // macOS 鼠标点击按钮时焦点可能暂时回到 body，不能提前关闭并吞掉随后的 click。
   picker.addEventListener('focusout',event=>{if (event.relatedTarget && !picker.contains(event.relatedTarget)) picker.open = false;});
-  $('subscriptions-unread').addEventListener('change',render);
+  $('subscriptions-unread').addEventListener('change',()=>{readingTranslations.clear();lastContent='';render();});
   // 账号筛选仅影响阅读范围，手动刷新仍由主进程检查所有已开启的订阅。
   $('subscriptions-refresh').addEventListener('click',()=>call('refresh'));
   $('subscriptions-read-all').addEventListener('click',()=>call('mark-read',null,'已全部标为已读。'));
   $('subscriptions-clear').addEventListener('click',()=>call('clear-cache',undefined,'缓存已清除，订阅、已读状态和去重进度已保留。'));
   window.whale.showSubscriptions(()=>{
+    readingTranslations.clear();lastContent='';
     showView('subscriptions');
     filter='';picker.open=false;$('subscriptions-search').value='';
     $('subscriptions-unread').checked=true;
@@ -381,7 +392,7 @@ export function createMessageSubscriptionsView() {
   // 只缓存译文，不记住展开状态；再次进入或重启后均需主动点击才显示。
   // 离开时也清空，防止尚未完成的翻译在返回页面后自动展开。
   new MutationObserver(()=>{
-    expandedTranslations.clear();expandedBodies.clear();lastContent = '';
+    expandedTranslations.clear();expandedBodies.clear();readingTranslations.clear();lastContent = '';
     if (view.hidden && addDialog.open) addDialog.close();
     if (view.hidden) picker.open = false;
     if (!view.hidden) {selectTab(tabs[0]);render();void load();}
