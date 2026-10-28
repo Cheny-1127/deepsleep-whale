@@ -1,5 +1,5 @@
 /* 侧栏独立滚动，展开更多时底部入口不会覆盖菜单。 */
-.studio .sidebar{width:220px;display:flex;flex-direction:column;position:sticky;top:0;height:100vh;box-sizing:border-box;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#b5c7ba transparent;overscroll-behavior:contain}
+.studio .sidebar{width:200px;padding-left:15px;padding-right:15px;display:flex;flex-direction:column;position:sticky;top:0;height:100vh;box-sizing:border-box;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#b5c7ba transparent;overscroll-behavior:contain}
 .studio .sidebar .side-bottom{position:static;margin-top:auto;padding-top:20px;flex-shrink:0}
 .sidebar .brand,.sidebar .nav-label,.sidebar nav,.sidebar .sidebar-copy{flex-shrink:0}
 .sidebar .nav-label{display:flex;align-items:center;justify-content:space-between;gap:6px}
@@ -33,7 +33,7 @@
 .sidebar-more-list .nav-item,.sidebar-editing .sidebar-row .nav-item{padding-right:28px}
 /* 菜单使用同一套字号；层级只通过箭头、28px 缩进与细引导线表达。 */
 /* 窄窗口也保留足够宽度，收纳项不靠缩小字体或换行来让位。 */
-@media(max-width:950px){.studio .sidebar{width:210px}}
+@media(max-width:950px){.studio .sidebar{width:200px;padding-left:15px;padding-right:15px}}
 .sidebar .sidebar-more-toggle{font-size:13px;font-weight:500;line-height:20px}
 .sidebar-more-group{margin-top:8px}
 .sidebar-more-list{margin:0 0 5px 20px;padding-left:7px;border-left:1px solid #c5d5ca}
@@ -52,3 +52,8 @@
 .sidebar-drag-placeholder>*{visibility:hidden}
 .sidebar .sidebar-drag-ghost{position:fixed;z-index:1000;margin:0;pointer-events:none;box-shadow:0 7px 20px #294b3d30;background:#eef5ef;transform:scale(1.03);opacity:.96}
 .sidebar button:focus-visible{outline:2px solid #4d8e79;outline-offset:-2px}
+
+/* 常用菜单强调内容占比，收纳菜单保留原来的紧凑层级。 */
+.sidebar #sidebar-visible .nav-item{font-size:15px;font-weight:500;gap:10px;padding-left:12px;padding-top:12px;padding-bottom:12px;line-height:22px}
+#sidebar-visible .sidebar-icon{width:20px;height:20px;flex-basis:20px}
+#sidebar-visible .sidebar-menu-label{flex:1;text-align:left}

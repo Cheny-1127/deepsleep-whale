@@ -58,7 +58,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   const cursorState=process.env.WHALE_CURSOR_STATE_DB||path.join(os.homedir(),'Library','Application Support','Cursor','User','globalStorage','state.vscdb');
   const cursorChats=createCursorChatOpener({stateFile:cursorState,openExternal:url=>shell.openExternal(url)});
   const codexChats=createCodexChatOpener({openExternal:url=>shell.openExternal(url)});
-  let completionExpanded=false,busyExpanded=false,reminderView=null;
+  let completionExpanded=false,busyExpanded=false,pendingExpanded=false,reminderView=null;
   let bridgeError = '';
   const behavior = new Behavior();
   const modules=createModuleSettings({dataDir});
@@ -97,7 +97,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   nurture.load();
 
   const windows=createWindows({snapshot,performAction,rankingSnapshot:id=>petQuota.rankingSnapshot(id),rankingRefresh:id=>petQuota.refreshRanking(id),rankingSelect:(groupId,id)=>petQuota.selectRankingGroup(groupId,id),collapseReminders:()=>{
-    if(completionExpanded||busyExpanded) { completionExpanded=false;busyExpanded=false;broadcast(); }
+    if(completionExpanded||busyExpanded||pendingExpanded) { completionExpanded=false;busyExpanded=false;pendingExpanded=false;broadcast(); }
   }});
   const {showPanel,showReminders,showPlanner}=windows;
 
@@ -136,16 +136,17 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   function snapshot() {
     // 两个窗口共享同一份主进程状态，避免小屋和悬浮桌宠各自计时、各自累计成长。
     const tasks = activity.snapshot();
-    return { modules:modules.snapshot(),planner:planner?{...planner.summary(),...(!modules.enabled('planner')?{active:[],notifications:false}:{})}:null,subscriptions:subscriptions?.summary()||null,trackingRows:modules.enabled('quota')?petQuotaSettings.snapshot().trackingConfigs.length:0, petVisible:windows.isPetVisible(),shortcuts:shortcuts.snapshot(),wechat:wechat?.snapshot()||null,hookAdapters:hooks.adapters,hookAvailability:hooks.availability,sourceStatus,codexApprovalSync:codexRuntime.snapshot(),clientRunning:{...clientRunning},completionExpanded, busyExpanded, reminderView, settings:hooks.settings, nurture: nurture.snapshot(), activity: tasks, ...behavior.snapshot(), bridge: Boolean(bridge), bridgeError, reminderError };
+    return { modules:modules.snapshot(),planner:planner?{...planner.summary(),...(!modules.enabled('planner')?{active:[],notifications:false}:{})}:null,subscriptions:subscriptions?.summary()||null,trackingRows:modules.enabled('quota')?petQuotaSettings.snapshot().trackingConfigs.length:0, petVisible:windows.isPetVisible(),shortcuts:shortcuts.snapshot(),wechat:wechat?.snapshot()||null,hookAdapters:hooks.adapters,hookAvailability:hooks.availability,sourceStatus,codexApprovalSync:codexRuntime.snapshot(),clientRunning:{...clientRunning},completionExpanded, busyExpanded, pendingExpanded, reminderView, settings:hooks.settings, nurture: nurture.snapshot(), activity: tasks, ...behavior.snapshot(), bridge: Boolean(bridge), bridgeError, reminderError };
   }
   function canObserveCodexApproval() {
     return modules.enabled('hooks')&&hooks.settings.sources.codex&&hooks.settings.events.codex?.PermissionRequest!==false&&clientRunning.codex===true&&
       hooks.availability.codex.state==='checked'&&hooks.availability.codex.events.PermissionRequest?.available;
   }
   function broadcast() {
-    // 三条以内由界面自动展示；清除手动展开标记，避免再次增到四条时沿用旧的展开状态。
-    if (activity.snapshot().unread<=3) completionExpanded=false;
-    if (activity.snapshot().working<=3) busyExpanded=false;
+    // 阈值内自动展示；清除手动展开标记，避免再次超限时沿用旧状态。
+    if (activity.snapshot().unread<=shortcuts.snapshot().reminderCollapseThreshold) completionExpanded=false;
+    if (activity.snapshot().working<=shortcuts.snapshot().reminderCollapseThreshold) busyExpanded=false;
+    if (activity.snapshot().pending<=shortcuts.snapshot().reminderCollapseThreshold) pendingExpanded=false;
     const tasks=activity.snapshot();
     codexRuntime.setSessions(canObserveCodexApproval()
       ?tasks.sessions.filter(s=>!s.session_id.startsWith('cursor:')&&['working','thinking','approval'].includes(s.state)):[]);
@@ -211,10 +212,10 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     } else if (action === 'open-completion') {
       const tasks=activity.snapshot();
       const switching=(reminderView||(busyExpanded?'busy':tasks.pending?'pending':tasks.unread?'completed':tasks.working?'busy':'completed'))!=='completed';
-      reminderView='completed';busyExpanded=false;
+      reminderView='completed';busyExpanded=false;pendingExpanded=false;
       const count=tasks.notices.length;
-      if(switching) {completionExpanded=count>3;broadcast();return snapshot();}
-      if(count>1) { completionExpanded=count>3?!completionExpanded:false;broadcast();return snapshot(); }
+      if(switching) {completionExpanded=count>shortcuts.snapshot().reminderCollapseThreshold;broadcast();return snapshot();}
+      if(count>1) { completionExpanded=count>shortcuts.snapshot().reminderCollapseThreshold?!completionExpanded:false;broadcast();return snapshot(); }
       // 点击时读取最新提醒，避免界面刚更新时跳到旧对话；仅在跳转成功后标记对应条目。
       const latest=activity.snapshot().notices[0];
       if(latest) {
@@ -222,21 +223,24 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
         catch(error) { reminderError=error.message;showReminders(); }
       } else showReminders();
     } else if(action==='open-pending') {
+      const tasks=activity.snapshot();
+      const switching=(reminderView||(busyExpanded?'busy':tasks.pending?'pending':tasks.unread?'completed':tasks.working?'busy':'completed'))!=='pending';
+      pendingExpanded=tasks.pending>shortcuts.snapshot().reminderCollapseThreshold&&(switching||!pendingExpanded);
       reminderView='pending';completionExpanded=false;busyExpanded=false;
     } else if (action === 'open-busy') {
       const tasks=activity.snapshot();
       // 默认分类与浮窗一致：待处理、已完成、执行中；切换分类先展示列表，不直接跳转。
       const switching=(reminderView||(busyExpanded?'busy':tasks.pending?'pending':tasks.unread?'completed':tasks.working?'busy':'completed'))!=='busy';
-      reminderView='busy';completionExpanded=false;
-      if(switching) {busyExpanded=tasks.working>3;broadcast();return snapshot();}
+      reminderView='busy';completionExpanded=false;pendingExpanded=false;
+      if(switching) {busyExpanded=tasks.working>shortcuts.snapshot().reminderCollapseThreshold;broadcast();return snapshot();}
       const busy=activity.snapshot().sessions.filter(item=>['thinking','working'].includes(item.state));
-      if(busy.length>1) busyExpanded=busy.length>3?!busyExpanded:false;
+      if(busy.length>1) busyExpanded=busy.length>shortcuts.snapshot().reminderCollapseThreshold?!busyExpanded:false;
       else if(busy.length===1) {
         busyExpanded=false;
         try { await openChat(busy[0].session_id); }
         catch(error) {reminderError=error.message;showReminders();}
       } else busyExpanded=false;
-    } else if (action === 'close-completions') { completionExpanded=false;busyExpanded=false;reminderView=null; }
+    } else if (action === 'close-completions') { completionExpanded=false;busyExpanded=false;pendingExpanded=false;reminderView=null; }
     else if (action === 'reminders') showReminders();
     else if (action === 'planner') showPlanner();
     else if (action === 'subscriptions-unread') {
@@ -325,7 +329,9 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   ipcMain.handle('shortcut-settings',(event,value)=>{
     if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋配置快捷操作');
     if(!modules.enabled('shortcuts'))throw Error('快捷操作已关闭，请先开启');
-    shortcuts.update(value);broadcast();return snapshot();
+    shortcuts.update(value);
+    if(typeof value==='object'){busyExpanded=false;completionExpanded=false;pendingExpanded=false;}
+    broadcast();return snapshot();
   });
   ipcMain.handle('wechat', async(event,name,value)=>{
     if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋配置微信');

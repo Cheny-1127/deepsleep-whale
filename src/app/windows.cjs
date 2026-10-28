@@ -137,7 +137,7 @@ function createWindows({ snapshot, performAction, collapseReminders, rankingSnap
     // 分类及展开规则与提醒视图一致，避免自动展示的列表被收起尺寸的窗口裁切。
     const view = data.reminderView || (data.busyExpanded ? 'busy' : data.activity.pending ? 'pending' : data.activity.unread ? 'completed' : data.activity.working ? 'busy' : 'completed');
     const count = view === 'pending' ? data.activity.pending : view === 'busy' ? data.activity.working : data.activity.unread;
-    const expanded = view === 'pending' ? count > 0 : (view === 'busy' ? data.busyExpanded : data.completionExpanded) || (count > 0 && count <= 3);
+    const expanded = (view === 'pending' ? data.pendingExpanded : view === 'busy' ? data.busyExpanded : data.completionExpanded) || (count > 0 && count <= (data.shortcuts?.reminderCollapseThreshold ?? 3));
     const plannerActive=Boolean(data.planner?.active.length);
     const width = data.state === 'fireworks' ? 340 : expanded||plannerActive ? 260 : 220;
     const height = (expanded ? (count === 1 ? 380 : 440) : 320) + (plannerActive?144:0) + Math.max(0, Math.min(data.trackingRows || 0, 5) - 1) * 33;

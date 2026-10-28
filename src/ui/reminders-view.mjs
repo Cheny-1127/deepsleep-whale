@@ -33,7 +33,7 @@ export function createReminderView({render,action,floating}) {
   }
   function renderReminders(data) {
     lastData=data;
-    // 待处理按首次收到顺序；完成或执行中 1～3 条直接显示，超过 3 条才折叠。
+    // 三类提醒分别按同一阈值合并，待处理仍按首次收到顺序排列。
     const tasks=data.activity;
     const unread=tasks.unread||0;
     const summary=`${tasks.working} 个进行中 · ${tasks.pending} 个权限检查`;
@@ -43,8 +43,8 @@ export function createReminderView({render,action,floating}) {
       const pending=(tasks.sessions||[]).filter(item=>item.state==='approval').sort((a,b)=>(a.approvalSince??a.time)-(b.approvalSince??b.time));
       const count=view==='pending'?pending.length:isBusy?tasks.working:unread;
       const single=count===1;
-      const autoExpanded=count>0&&count<=3;
-      const expanded=view==='pending'?pending.length>0:Boolean((isBusy?data.busyExpanded:data.completionExpanded)||autoExpanded);
+      const autoExpanded=count>0&&count<=(data.shortcuts?.reminderCollapseThreshold??3);
+      const expanded=Boolean((view==='pending'?data.pendingExpanded:isBusy?data.busyExpanded:data.completionExpanded)||autoExpanded);
       document.body.classList.toggle('single-completion',single&&expanded);
       document.body.classList.toggle('busy-expanded',isBusy);
       document.body.classList.toggle('completions-expanded',expanded);
@@ -54,7 +54,8 @@ export function createReminderView({render,action,floating}) {
       $('completion-shell').hidden=!unread&&!pending.length&&!busy;
       $('pending-alert').hidden=!pending.length;
       $('pending-alert').textContent=`待处理：${pending.length}`;
-      $('pending-alert').title='查看待处理任务，按收到顺序排列';
+      $('pending-alert').title=`查看待处理任务，按收到顺序排列${pending.length>(data.shortcuts?.reminderCollapseThreshold??3)?`，点击${expanded&&view==='pending'?'收起':'展开'}`:''}`;
+      $('pending-alert').setAttribute('aria-controls','completion-bubble');
       $('completion-alert').hidden=!unread;
       $('completion-bubble').hidden=!expanded;
       $('completion-alert').setAttribute('aria-expanded',String(expanded&&view==='completed'));
@@ -64,7 +65,7 @@ export function createReminderView({render,action,floating}) {
       $('busy-alert').hidden=!busy;
       $('busy-alert').textContent=`执行中：${busy}`;
       const latest=tasks.notices?.[0];
-      $('completion-alert').title=unread>3 ? `${unread} 个任务完成，点击${expanded?'收起':'展开'}` : unread>1 ? `${unread} 个任务完成，点击下方任务打开对话` : latest ? `${latest.title} · 点击打开对话` : '';
+      $('completion-alert').title=unread>(data.shortcuts?.reminderCollapseThreshold??3) ? `${unread} 个任务完成，点击${expanded?'收起':'展开'}` : unread>1 ? `${unread} 个任务完成，点击下方任务打开对话` : latest ? `${latest.title} · 点击打开对话` : '';
       $('completion-alert').setAttribute('aria-controls','completion-bubble');
       $('completion-alert').dataset.action='open-completion';
       $('pending-alert').setAttribute('aria-expanded',String(expanded&&view==='pending'));
