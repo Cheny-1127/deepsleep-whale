@@ -1,4 +1,5 @@
 import { updateSidebarStatus } from './sidebar-view.mjs';
+import { showView } from './hooks-view.mjs';
 const $ = id => document.getElementById(id);
 const time = value => value === null ? '尚未成功检查' : new Date(value).toLocaleString('zh-CN', {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
 const node = (tag, text, className) => {const el = document.createElement(tag);el.textContent = text;if (className) el.className = className;return el;};
@@ -263,13 +264,15 @@ export function createMessageSubscriptionsView() {
       copyMenu(body,value);
       const bodyExpanded = expandedBodies.has(key);body.classList.toggle('is-collapsed',!bodyExpanded);
       body.id = `subscription-body-${post.username}-${post.id}`;
-      // 仅正文触发阅读：超出两行时展开，短文不改变排版；标题和翻译沿用各自操作。
+      // 仅正文触发阅读：超出两行时切换展开/收起，短文不改变排版；标题和翻译沿用各自操作。
       body.setAttribute('role','button');body.tabIndex = 0;body.setAttribute('aria-disabled',String(pending || Boolean(data.storeError)));
       const readBody = ()=>{
         if (pending || data.storeError) return;
         // 选中文本用于复制时不触发展开或已读。
         if (window.getSelection()?.type === 'Range') return;
-        if (body.classList.contains('is-collapsed') && body.scrollHeight > body.clientHeight + 1) {
+        if (expandedBodies.has(key)) {
+          expandedBodies.delete(key);lastContent = '';render();
+        } else if (body.scrollHeight > body.clientHeight + 1) {
           expandedBodies.add(key);lastContent = '';render();
         }
         if (post.unread) void call('mark-read',value);
@@ -307,7 +310,7 @@ export function createMessageSubscriptionsView() {
     const expanded = !body.classList.contains('is-collapsed');
     if (expanded || body.scrollHeight > body.clientHeight + 1) body.setAttribute('aria-expanded',String(expanded));
     else body.removeAttribute('aria-expanded');
-    body.title = expanded ? '点击设为已读' : body.hasAttribute('aria-expanded') ? '点击展开并设为已读' : '点击设为已读';
+    body.title = expanded ? '点击收起' : body.hasAttribute('aria-expanded') ? '点击展开并设为已读' : '点击设为已读';
   }
   // 阅读区变宽或变窄后重新判断是否超过两行，不额外显示展开按钮。
   new ResizeObserver(()=>{
@@ -369,6 +372,12 @@ export function createMessageSubscriptionsView() {
   $('subscriptions-refresh').addEventListener('click',()=>call('refresh'));
   $('subscriptions-read-all').addEventListener('click',()=>call('mark-read',null,'已全部标为已读。'));
   $('subscriptions-clear').addEventListener('click',()=>call('clear-cache',undefined,'缓存已清除，订阅、已读状态和去重进度已保留。'));
+  window.whale.showSubscriptions(()=>{
+    showView('subscriptions');
+    filter='';picker.open=false;$('subscriptions-search').value='';
+    $('subscriptions-unread').checked=true;
+    selectTab(tabs[0]);void load();
+  });
   // 只缓存译文，不记住展开状态；再次进入或重启后均需主动点击才显示。
   // 离开时也清空，防止尚未完成的翻译在返回页面后自动展开。
   new MutationObserver(()=>{

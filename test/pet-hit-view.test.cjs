@@ -10,7 +10,8 @@ function fixture({floating=true}={}) {
   }
   const art=target('#pet-art',{x:30,y:100,w:160,h:176}),speech=target('.speech',{x:50,y:40,w:120,h:30},false),
     controls=target('.pet-controls',{x:40,y:275,w:140,h:25},false);
-  const targets=[controls,speech,art];
+  const badge=target('#pet-subscriptions-badge',{x:185,y:90,w:24,h:24},false);
+  const targets=[badge,controls,speech,art];
   const document={body:{classList:{contains:()=>floating}},
     querySelectorAll:()=>targets,elementFromPoint:(x,y)=>targets.find(n=>n.visible&&x>=n.rect.x&&x<n.rect.x+n.rect.w&&y>=n.rect.y&&y<n.rect.y+n.rect.h)||root,
     addEventListener:(name,handler)=>handlers.set(name,handler)};
@@ -22,7 +23,7 @@ function fixture({floating=true}={}) {
     MutationObserver:class{constructor(fn){mutation=fn;}observe(){}},ResizeObserver:class{constructor(fn){resize=fn;}observe(){}},
     requestAnimationFrame:fn=>frames.push(fn)});
   function emit(name,x=1,y=1,node=root) {handlers.get(name)?.({clientX:x,clientY:y,pointerId:1,target:node});}
-  return {changes,reads,art,speech,controls,emit,windowHandlers,get current(){return changes.at(-1);},
+  return {changes,reads,art,speech,controls,badge,emit,windowHandlers,get current(){return changes.at(-1);},
     move:(x,y)=>emit('mousemove',x,y),setCursor:value=>cursor=value,
     async layout(){mutation();for(const fn of frames.splice(0))fn();await tick();},
     async nativeMove(){pointerChanged();for(const fn of frames.splice(0))fn();await tick();},
@@ -41,6 +42,13 @@ test('stationary cursor is reevaluated when a bubble appears, disappears or expa
   f.speech.visible=false;await f.layout();assert.equal(f.current,false);
   f.setCursor({x:80,y:90});f.speech.visible=true;await f.layout();assert.equal(f.current,false);
   f.speech.rect.h=65;await f.resize();assert.equal(f.current,true);
+});
+test('unread badge captures clicks and restores pass-through when hidden',async()=>{
+  const f=fixture();await tick();f.setCursor({x:195,y:95});f.move(195,95);assert.equal(f.current,false);
+  f.badge.visible=true;await f.layout();assert.equal(f.current,true);
+  f.emit('pointerdown',195,95,f.badge);f.move(5,5);assert.equal(f.current,true);
+  f.emit('pointerup',5,5);assert.equal(f.current,false);
+  f.move(195,95);f.badge.visible=false;await f.layout();assert.equal(f.current,false);
 });
 test('pressing and dragging across transparent space retains capture until release or cancellation',async()=>{
   const f=fixture();await tick();f.emit('pointerdown',100,150,f.art);f.move(5,5);assert.equal(f.current,true);
