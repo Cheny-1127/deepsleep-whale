@@ -1,6 +1,7 @@
 import {confirmAction} from './confirm-dialog.mjs';
 import {showView} from './hooks-view.mjs';
 import {createReportGitlabView} from './report-gitlab-view.mjs';
+import {reportMarkdownHtml} from './report-markdown.mjs';
 
 export function createWorkReportsView(){
   const page=document.getElementById('reports-view'),content=document.getElementById('reports-content');if(!content)return;
@@ -9,9 +10,10 @@ export function createWorkReportsView(){
   const today=()=>reportDate();
   const field=(name,label,type='text',extra='')=>`<label class="report-field">${label}<input name="${name}" type="${type}" ${extra}></label>`;
   const check=(name,label)=>`<label class="report-check"><input name="${name}" type="checkbox">${label}</label>`;
+  const editIcon='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L9 17l-4 1 1-4Z"/></svg>';
   content.innerHTML=`<div class="ui-tabs" role="tablist" aria-label="工作报告视图"><button id="report-daily-tab" role="tab" aria-selected="true" aria-controls="report-daily">每日工作</button><button id="report-weekly-tab" role="tab" aria-selected="false" aria-controls="report-weekly" tabindex="-1">周报</button></div>
     <p id="report-error" class="ui-alert" role="alert" hidden></p><p id="report-feedback" class="report-note" role="status" hidden></p>
-    <section id="report-daily" role="tabpanel" aria-labelledby="report-daily-tab"><div id="report-recent-days" class="report-recent-days" role="group" aria-label="最近7天"></div><div class="report-toolbar"><label>工作日期<input id="report-date" type="date" min="2000-01-01" max="2099-12-31"></label><div class="report-actions"><button id="report-repair-day" class="outline" hidden>重试关联</button><button id="report-collect" class="outline">立即采集</button><button id="report-merge" class="outline" disabled>合并同一事项</button><button id="report-preview-day" class="outline">预览日报</button></div></div><p id="report-day-summary" class="report-note"></p><details id="report-source-status" class="report-source-status"><summary id="report-source-summary">采集状态</summary><p id="report-source-range" class="report-note"></p><div id="report-sources" class="report-note"></div></details><section id="report-matches" class="report-matches" aria-labelledby="report-matches-heading" hidden><h2 id="report-matches-heading"></h2><p id="report-matches-note" class="report-note"></p><div id="report-match-list" class="report-match-list"></div><p id="report-matches-limit" class="report-note" hidden>本次检查或展示的关联数量已达上限，仍可能有未发现的重复事项，可继续手动核对。</p><div id="report-matches-actions" class="report-actions"></div></section><div id="report-list" class="report-list"></div></section>
+    <section id="report-daily" role="tabpanel" aria-labelledby="report-daily-tab"><div id="report-recent-days" class="report-recent-days" role="group" aria-label="最近7天"></div><div class="report-toolbar"><label>工作日期<input id="report-date" type="date" min="2000-01-01" max="2099-12-31"></label><div class="report-actions"><button id="report-repair-day" class="outline" hidden>重试关联</button><button id="report-collect" class="outline">采集当天</button><button id="report-merge" class="outline" disabled>合并同一事项</button><button id="report-preview-day" class="outline">预览日报</button></div></div><p id="report-day-summary" class="report-note"></p><details id="report-source-status" class="report-source-status"><summary id="report-source-summary">采集状态</summary><p id="report-source-range" class="report-note"></p><div id="report-sources" class="report-note"></div></details><section id="report-matches" class="report-matches" aria-labelledby="report-matches-heading" hidden><h2 id="report-matches-heading"></h2><p id="report-matches-note" class="report-note"></p><div id="report-match-list" class="report-match-list"></div><p id="report-matches-limit" class="report-note" hidden>本次检查或展示的关联数量已达上限，仍可能有未发现的重复事项，可继续手动核对。</p><div id="report-matches-actions" class="report-actions"></div></section><div id="report-list" class="report-list"></div></section>
     <section id="report-weekly" role="tabpanel" aria-labelledby="report-weekly-tab" hidden><div class="report-toolbar"><label>选择周内任一天<input id="report-week-date" type="date" min="2000-01-01" max="2099-12-31"></label><div class="report-actions"><button id="report-generate" class="primary">生成周报</button><button id="report-save-week" class="outline">保存草稿</button><button id="report-archive-week" class="outline">归档到 Obsidian</button></div></div><div class="ui-card report-week-card"><p id="report-week-status" class="report-note">按配置模板汇总工作记录，可以在归档前编辑。</p><textarea id="report-week-content" class="report-preview" aria-label="周报内容" placeholder="选择日期后点击生成周报。生成内容以已记录事实为依据，可在这里补充总结。"></textarea></div></section>
     <dialog id="report-entry-dialog" class="ui-dialog" aria-labelledby="report-entry-heading"><form id="report-entry-form"><h2 id="report-entry-heading">记录工作</h2><div class="report-grid">${field('date','工作日期','date','required')}${field('project','所属项目','text','maxlength="100" placeholder="例如：用户中心"')}<label class="report-field report-wide">工作标题<input name="title" maxlength="200" required placeholder="例如：完成支付超时问题修复"></label><label class="report-field">状态<select name="status"><option value="done">已完成</option><option value="blocked">问题 / 阻塞</option><option value="planned">工作计划</option></select></label>${check('included','纳入日报与周报')}<label class="report-field report-wide">工作内容与成果<textarea name="details" maxlength="4000" rows="5" placeholder="粘贴处理结果、验证结论或需要跟进的问题。"></textarea></label><label class="report-field report-wide">来源 / 证据<input name="evidence" maxlength="2000" placeholder="提交编号、发版链接或相关说明"></label></div><p id="report-entry-error" class="ui-alert" role="alert" hidden></p><div class="report-dialog-actions"><button type="button" class="outline" data-close="entry-dialog">取消</button><button class="primary" type="submit">保存工作</button></div></form></dialog>
     <dialog id="report-work-dialog" class="ui-dialog" aria-labelledby="report-work-heading"><form id="report-work-form"><h2 id="report-work-heading">合并为同一事项</h2>
@@ -22,7 +24,8 @@ export function createWorkReportsView(){
       <label class="report-field report-wide">工作内容与结果<textarea name="description" maxlength="4000" rows="5"></textarea></label></div>
       <p id="report-work-error" class="ui-alert" role="alert" hidden></p><div class="report-dialog-actions"><button type="button" class="outline" data-close="work-dialog">取消</button><button type="submit" class="primary">确认合并</button></div>
     </form></dialog>
-    <dialog id="report-preview-dialog" class="ui-dialog" aria-labelledby="report-preview-heading"><h2 id="report-preview-heading">日报预览</h2><p class="report-note">按工作事项整理当天内容，归档只更新本应用管理的内容块。</p><textarea id="report-day-content" class="report-preview" readonly aria-label="日报内容"></textarea><p id="report-preview-error" class="ui-alert" role="alert" hidden></p><div class="report-dialog-actions"><button class="outline" data-close="preview-dialog">关闭</button><button id="report-archive-day" class="primary">归档到 Obsidian</button></div></dialog>
+    <dialog id="report-match-title-dialog" class="ui-dialog" aria-labelledby="report-match-title-heading"><form id="report-match-title-form"><h2 id="report-match-title-heading">修改组标题</h2><label class="report-field">组标题<input name="title" required maxlength="200"></label><p class="report-note">保存后立即更新组标题，确认合并时沿用。</p><p id="report-match-title-error" class="ui-alert" role="alert" hidden></p><div class="report-dialog-actions"><button type="button" class="outline" data-close="match-title-dialog">取消</button><button type="submit" class="primary">保存标题</button></div></form></dialog>
+    <dialog id="report-preview-dialog" class="ui-dialog" aria-labelledby="report-preview-heading"><h2 id="report-preview-heading">日报预览</h2><p class="report-note">按工作事项整理当天内容，归档只更新本应用管理的内容块。</p><div class="ui-tabs" role="tablist" aria-label="日报显示方式"><button id="report-day-preview-tab" type="button" role="tab" aria-selected="true" aria-controls="report-day-preview">阅读预览</button><button id="report-day-source-tab" type="button" role="tab" aria-selected="false" aria-controls="report-day-source" tabindex="-1">Markdown 源码</button></div><article id="report-day-preview" class="report-markdown" role="tabpanel" aria-labelledby="report-day-preview-tab" tabindex="0"></article><div id="report-day-source" role="tabpanel" aria-labelledby="report-day-source-tab" hidden><textarea id="report-day-content" class="report-preview" readonly aria-label="日报 Markdown 源码"></textarea></div><p id="report-preview-error" class="ui-alert" role="alert" hidden></p><div class="report-dialog-actions"><button class="outline" data-close="preview-dialog">关闭</button><button id="report-archive-day" class="primary">归档到 Obsidian</button></div></dialog>
     <dialog id="report-settings-dialog" class="ui-dialog" aria-labelledby="report-settings-heading"><form id="report-settings-form" novalidate>
       <div class="report-settings-header"><h2 id="report-settings-heading">工作报告配置</h2><div class="ui-tabs" role="tablist" aria-label="报告配置分类">${[['sources','数据来源'],['automation','自动整理'],['archive','归档'],['template','周报模板']].map(([id,label],index)=>`<button type="button" id="report-settings-tab-${id}" role="tab" aria-selected="${index===0}" aria-controls="report-settings-panel-${id}" tabindex="${index===0?0:-1}">${label}</button>`).join('')}</div></div>
       <div id="report-settings-body" class="report-settings-body">
@@ -30,13 +33,13 @@ export function createWorkReportsView(){
           <section id="report-gitlab-settings" class="report-settings-section"></section>
           <details id="report-jenkins-source" class="report-settings-section report-settings-extra"><summary>Jenkins 来源 <span class="report-note">生产发布与 MR</span></summary><div class="report-toolbar"><p class="report-note">按发布阶段完成时间记录指定账号的生产发布，读取实际版本涉及的 MR 与提交。项目名需对应已选 GitLab 仓库。</p><button type="button" id="report-add-job" class="outline">＋ 添加任务</button></div><div id="report-jenkins-jobs"></div></details>
         </section>
-        <section id="report-settings-panel-automation" role="tabpanel" aria-labelledby="report-settings-tab-automation" hidden><h3>记录与自动整理</h3><div class="report-grid">${check('syncPlanner','归入日程备忘中已完成的工作待办')}${check('autoCollect','自动采集已配置的数据来源')}${field('intervalMinutes','自动整理间隔（分钟）','number','min="5" max="1440" required')}${field('lookbackDays','每次采集回溯天数','number','min="1" max="90" required')}</div><p class="report-note">个人待办和周期性提醒不进入报告。休眠或退出时暂停采集，下次启动按回溯范围补查。</p></section>
+        <section id="report-settings-panel-automation" role="tabpanel" aria-labelledby="report-settings-tab-automation" hidden><h3>记录与自动整理</h3><div class="report-grid">${check('syncPlanner','归入日程备忘中已完成的工作待办')}${check('autoCollect','自动采集已配置的数据来源')}${field('intervalMinutes','自动整理间隔（分钟）','number','min="5" max="1440" required')}${field('lookbackDays','自动采集回溯天数','number','min="1" max="90" required')}</div><p class="report-note">个人待办和周期性提醒不进入报告。手动采集只更新所选日期；自动采集按回溯范围补查，休眠或退出时暂停。</p></section>
         <section id="report-settings-panel-archive" role="tabpanel" aria-labelledby="report-settings-tab-archive" hidden><h3>Obsidian 归档</h3><label class="report-field">报告目录（笔记库内已有目录）<span class="report-inline-input"><input name="archiveDir" placeholder="/workspace/note/Dd work report"><button type="button" id="report-pick-archive" class="outline">选择</button></span></label><div class="report-grid">${field('dailyDir','日报子目录','text','required')}${field('weeklyDir','周报子目录','text','required')}${check('autoArchive','自动归档有变化的日报')}${check('autoWeekly','自动生成上一完整周的周报')}</div><p class="report-note">同时开启两项自动设置时，也会归档上一周周报。手工编辑的草稿不会自动重新生成；笔记中的报告内容被修改时会停止覆盖并提示。</p></section>
         <section id="report-settings-panel-template" role="tabpanel" aria-labelledby="report-settings-tab-template" hidden><h3>周报模板</h3><label class="report-field">Markdown 格式<textarea name="weeklyTemplate" rows="12" maxlength="20000" required></textarea></label><p class="report-note">占位符：{{week_start}} 周一 · {{week_end}} 周日 · {{summary}} 项目汇总 · {{releases}} 发布记录 · {{blockers}} 问题与风险 · {{next_week}} 下周计划 · {{details}} 工作明细 · {{count}} 工作事项数。</p></section>
       </div>
       <div class="report-settings-footer"><p id="report-settings-error" class="ui-alert" role="alert" hidden></p><div class="report-settings-footer-row"><p id="report-settings-state" class="report-note" role="status"></p><div class="report-actions"><button type="button" class="outline" data-close="settings-dialog">取消</button><button class="primary" type="submit">确定并保存</button></div></div></div>
     </form></dialog>`;
-  $('date').value=$('week-date').value=today();let data,editing=null,workDialog=null,week=null,weekDate=today(),weekDirty=false,loading=false,working=false;
+  $('date').value=$('week-date').value=today();let data,editing=null,workDialog=null,editingMatchTitle=null,week=null,weekDate=today(),weekDirty=false,loading=false,working=false;
   async function request(name,value){const response=await window.whale.reports(name,value);if(response?.error)throw Error(response.error);return response.value;}
   function message(text,error=false,target){const node=target||$(error?'error':'feedback');node.textContent=text;node.hidden=!text;}
   async function run(button,work,target){if(working)return;working=true;button.disabled=true;message('',true,target);try{await work();}catch(error){message(error.message,true,target);}finally{working=false;button.disabled=false;$('collect').disabled=Boolean(data?.busy);}}
@@ -114,7 +117,13 @@ export function createWorkReportsView(){
   function workCard(item,entries,expanded,paired=false){
     const card=el('article','ui-card report-work-card'),heading=el('div','report-work-heading'),meta=el('div','report-work-meta');card.dataset.status=item.status;
     const own=entries.filter(entry=>item.entryIds.includes(entry.id)),planner=own.filter(entry=>entry.source==='planner'),sources=own.filter(entry=>entry.source!=='planner');
-    heading.append(el('h3','',item.title),el('span','report-work-badge',item.badge));
+    // 单条记录可直接编辑；自动汇总和合并事项只修改报告层的标题、说明。
+    const edit=button('',async()=>{
+      if(!item.groupId&&!item.mr&&item.kind!=='branch'&&own.length===1)openEntry(own[0]);else openWork(item,true);
+    },'ui-icon-button');
+    edit.title='修改信息';edit.setAttribute('aria-label','修改信息');edit.innerHTML=editIcon;
+    const title=el('div','report-work-title-group');title.append(el('h3','',item.title),edit);
+    heading.append(title,el('span','report-work-badge',item.badge));
     meta.append(el('span','report-work-project',[...new Set(own.map(entry=>entry.project).filter(Boolean))].join('、')||item.project));
     const mrUrls=new Set(item.memberKeys.filter(key=>key.startsWith('mr:')).map(key=>key.slice(3)));
     const mrs=item.mr?[item.mr]:[...new Map(own.flatMap(entry=>entry.sourceMeta?.mergeRequests||[]).filter(mr=>!mrUrls.size||mrUrls.has(mr.url)).map(mr=>[mr.url,mr])).values()];
@@ -140,13 +149,6 @@ export function createWorkReportsView(){
     else for(const entry of sources)details.append(sourceReference(entry));
     if(sources.length||item.releases.length||item.warnings.length||item.conflictingGroups?.length)card.append(details);
     const actions=el('div','report-work-controls');
-    // 单条记录可直接编辑；自动汇总和合并事项只修改报告层的标题、说明。
-    const edit=button('',async()=>{
-      if(!item.groupId&&!item.mr&&item.kind!=='branch'&&own.length===1)openEntry(own[0]);else openWork(item,true);
-    },'ui-icon-button');
-    edit.title='修改信息';edit.setAttribute('aria-label','修改信息');
-    edit.innerHTML='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L9 17l-4 1 1-4Z"/></svg>';
-    actions.append(edit);
     const remove=button('移除',async()=>{
       if(await confirmAction({owner:page,title:'移除这项工作？',message:`将移除“${item.title}”及当前包含的 ${item.entryIds.length} 条来源记录。这些记录不会因重新采集恢复。`,confirmLabel:'移除工作',danger:true})){
         await request('remove-work',{date:item.date,key:item.key});await load();message('已移除这项工作。');
@@ -168,7 +170,12 @@ export function createWorkReportsView(){
     for(const match of matches.items){
       const card=el('details','ui-card report-match'),summary=el('summary','report-match-summary'),heading=el('span','report-match-heading'),title=el('span','report-match-title-row'),toggle=el('span','report-match-toggle'),body=el('div','report-match-content'),grid=el('div','report-match-grid');
       card.dataset.reportDetail=JSON.stringify([date,'match:'+match.id]);card.open=expanded.has(card.dataset.reportDetail);
-      title.append(el('span','report-match-label','待确认关联'),el('span','report-match-title',match.title));heading.append(title,el('span','report-match-reason',match.reason));
+      const titleGroup=el('span','report-match-title-group'),edit=button('',async()=>{
+        editingMatchTitle={date,id:match.id};$('match-title-form').elements.title.value=match.title;message('',true,$('match-title-error'));$('match-title-dialog').showModal();
+      },'ui-icon-button report-match-edit');
+      edit.title='编辑组标题';edit.setAttribute('aria-label','编辑组标题');edit.innerHTML=editIcon;
+      edit.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();});
+      titleGroup.append(el('span','report-match-title',match.title),edit);title.append(el('span','report-match-label','待确认关联'),titleGroup);heading.append(title,el('span','report-match-reason',match.reason));
       toggle.append(el('span','report-match-expand','展开对比'),el('span','report-match-collapse','收起对比'));summary.append(heading,toggle);
       const entries=data.entries.filter(entry=>entry.sourceActive!==false);
       for(const key of match.keys){const item=data.work.items.find(item=>item.key===key);if(item)grid.append(workCard(item,entries,expanded,true));}
@@ -192,7 +199,9 @@ export function createWorkReportsView(){
     $('day-summary').textContent=`${done.length} 项工作 · ${work.items.filter(i=>i.status==='blocked').length} 项待解决 · ${work.items.filter(i=>i.status==='planned').length} 项计划`;
     const failed=data.sources.filter(s=>s.error).length,warnings=data.sources.filter(s=>s.warning).length;
     $('source-status').hidden=!data.sources.length;$('source-summary').textContent=`采集状态 · ${data.sources.length} 个来源${failed?' · '+failed+' 个失败':''}${warnings?' · '+warnings+' 个提醒':''}`;
-    $('source-range').textContent=`以下为最近一次采集的回溯结果（${data.settings.lookbackDays} 天），不代表所选日期的工作数量。`;
+    const collectedDay=data.sources[0]?.date;
+    $('collect').textContent=data.entries.some(entry=>['git','gitlab','jenkins'].includes(entry.source))||data.sources.some(source=>source.date===data.date&&!source.error)?'更新当天':'采集当天';
+    $('source-range').textContent=collectedDay?`以下为 ${collectedDay} 的采集结果，仅更新该日数据；读取条数不代表工作事项数。`:`以下为最近一次回溯采集的结果（${data.settings.lookbackDays} 天），不代表所选日期的工作数量。`;
     $('sources').replaceChildren();
     for(const source of data.sources){const row=el('div','report-source-result');row.append(el('span','',source.key.startsWith('jenkins:')?'Jenkins':'GitLab'),el('span','',source.project),el('span','',source.error||source.warning||'读取 '+source.count+' 条'));$('sources').append(row);}
     if(!entries.length){const empty=el('div','ui-card report-empty');empty.append(el('h2','','这一天还没有工作记录'),el('p','report-note','记录完成的工作，或在配置中接入日程、GitLab 与 Jenkins。'));list.append(empty);return;}
@@ -271,6 +280,9 @@ export function createWorkReportsView(){
     if(workDialog.edit)await request('save-work',{...value,...(workDialog.id?{id:workDialog.id}:{key:workDialog.key})});else await request('merge-work',{...value,keys:[workDialog.key,form.elements.target.value]});
     $('work-dialog').close();await load();message(workDialog.edit?'工作信息已保存。':'已合并为同一事项，原始来源已保留。');
   },$('work-error'));});
+  $('match-title-form').addEventListener('submit',event=>{event.preventDefault();const form=event.currentTarget;void run(form.querySelector('[type="submit"]'),async()=>{
+    await request('save-work-match-title',{...editingMatchTitle,title:form.elements.title.value});$('match-title-dialog').close();await load();message('组标题已保存。');
+  },$('match-title-error'));});
   function openEntry(entry){editing=entry||null;const form=$('entry-form');form.reset();for(const name of ['date','title','project','details','status','evidence'])form.elements[name].value=entry?.[name]??({date:$('date').value,status:'done'}[name]||'');form.elements.included.checked=entry?.included!==false;
     $('entry-heading').textContent=entry?'编辑工作记录':'记录工作';message('',true,$('entry-error'));$('entry-dialog').showModal();}
   $('add').addEventListener('click',()=>openEntry());
@@ -280,8 +292,14 @@ export function createWorkReportsView(){
   },$('entry-error'));});
   $('date').addEventListener('change',()=>void load());
   $('repair-day').addEventListener('click',()=>{associationAttempts.delete($('date').value);associationErrors.delete($('date').value);void load();});
-  $('collect').addEventListener('click',()=>run($('collect'),async()=>{await request('collect');await load();const failed=data.sources.filter(source=>source.error).length;message(failed?`采集结束，${failed} 个来源未成功，请展开采集状态查看。`:'采集完成，已有来源记录不会重复添加。');}));
-  $('preview-day').addEventListener('click',()=>run($('preview-day'),async()=>{const result=await request('preview-day',{date:$('date').value});$('day-content').value=result.content;$('preview-heading').textContent='日报 · '+result.date;$('preview-dialog').dataset.date=result.date;message('',true,$('preview-error'));$('preview-dialog').showModal();}));
+  $('collect').addEventListener('click',()=>run($('collect'),async()=>{const date=$('date').value;await request('collect',{date});await load();const failed=data.sources.filter(source=>source.error).length;message(failed?`${date} 采集结束，${failed} 个来源未成功，请展开采集状态查看。`:`采集完成：${date}，已更新当天数据。`);}));
+  // 阅读页的 HTML 只用于展示；归档仍由后端按日期生成 Markdown，不能回写预览标签。
+  function showDayPreviewTab(name){
+    $('day-preview').hidden=name!=='preview';$('day-source').hidden=name!=='source';
+    for(const tab of ['preview','source']){const active=tab===name;$('day-'+tab+'-tab').setAttribute('aria-selected',String(active));$('day-'+tab+'-tab').tabIndex=active?0:-1;}
+  }
+  for(const name of ['preview','source']){const tab=$('day-'+name+'-tab');tab.addEventListener('click',()=>showDayPreviewTab(name));tab.addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const next=event.key==='Home'?'preview':event.key==='End'?'source':name==='preview'?'source':'preview';showDayPreviewTab(next);$('day-'+next+'-tab').focus();});}
+  $('preview-day').addEventListener('click',()=>run($('preview-day'),async()=>{const result=await request('preview-day',{date:$('date').value});$('day-content').value=result.content;$('day-preview').innerHTML=reportMarkdownHtml(result.content);showDayPreviewTab('preview');$('day-preview').scrollTop=$('day-content').scrollTop=0;$('preview-heading').textContent='日报 · '+result.date;$('preview-dialog').dataset.date=result.date;message('',true,$('preview-error'));$('preview-dialog').showModal();}));
   $('archive-day').addEventListener('click',()=>run($('archive-day'),async()=>{const result=await request('archive-day',{date:$('preview-dialog').dataset.date});$('preview-dialog').close();message('日报已归档：'+result.path);},$('preview-error')));
   function showTab(name){for(const tab of ['daily','weekly']){const selected=tab===name;$(tab).hidden=!selected;$(tab+'-tab').setAttribute('aria-selected',String(selected));$(tab+'-tab').tabIndex=selected?0:-1;}if(name==='weekly'&&!weekDirty)void loadWeek();}
   for(const name of ['daily','weekly']){$(name+'-tab').addEventListener('click',()=>showTab(name));$(name+'-tab').addEventListener('keydown',event=>{if(['ArrowLeft','ArrowRight'].includes(event.key)){event.preventDefault();const next=name==='daily'?'weekly':'daily';showTab(next);$(next+'-tab').focus();}});}

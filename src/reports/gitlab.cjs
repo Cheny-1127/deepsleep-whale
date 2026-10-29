@@ -1,6 +1,7 @@
 'use strict';
 const {dateKey,gitlabUrl}=require('./model.cjs');
 const {mrReference,featureBranch,releaseMerge,createLifecycle}=require('./work-lifecycle.cjs');
+const {authorFilter,isMergeCommit}=require('./commit-authorship.cjs');
 const safe=message=>Object.assign(Error(message),{reportSafe:true});
 function positive(value,label){if(!Number.isSafeInteger(value)||value<1)throw safe('无效的 GitLab '+label);return value;}
 function createGitlabClient({url,token,fetchImpl=fetch,signal}={}){
@@ -31,6 +32,7 @@ function createGitlabClient({url,token,fetchImpl=fetch,signal}={}){
     async projects({groupId,page=1,search=''}={}){positive(groupId,'分组');const result=await list(`groups/${groupId}/projects`,{page,search:String(search).slice(0,200),include_subgroups:true,with_shared:false,simple:true,order_by:'name',sort:'asc'});
       result.items=result.items.map(project=>{if(!project||!Number.isSafeInteger(project.id)||project.id<1||typeof project.path_with_namespace!=='string'||!project.path_with_namespace)throw safe('GitLab 返回的项目格式无效');return {host:base,projectId:project.id,project:project.path_with_namespace.slice(0,100),path:project.path_with_namespace.slice(0,2000)};});return result;},
     commits(projectId,query){positive(projectId,'项目');return list(`projects/${projectId}/repository/commits`,query,100);},
+    async commit(projectId,sha){positive(projectId,'项目');if(!/^[0-9a-f]{40,64}$/.test(sha))throw safe('无效的 GitLab 提交');return (await request(`projects/${projectId}/repository/commits/${sha}`)).data;},
     async compare(projectId,from,to){positive(projectId,'项目');for(const sha of [from,to])if(!/^[0-9a-f]{40,64}$/.test(sha))throw safe('无效的 GitLab 发布版本');return (await request(`projects/${projectId}/repository/compare`,{from,to,straight:true})).data;},
     commitMergeRequests(projectId,sha,page=1){positive(projectId,'项目');if(!/^[0-9a-f]{40,64}$/.test(sha))throw safe('无效的 GitLab 发布版本');return list(`projects/${projectId}/repository/commits/${sha}/merge_requests`,{page},100);},
     mergeRequestCommits(projectId,iid,page=1){positive(projectId,'项目');positive(iid,'MR');return list(`projects/${projectId}/merge_requests/${iid}/commits`,{page},100);},
@@ -40,8 +42,7 @@ function createGitlabClient({url,token,fetchImpl=fetch,signal}={}){
 }
 async function collectGitlab(source,{since,until,signal,connection,authors,authorMode='email',authorNames,trackedEntries=[],fetchImpl=fetch}={}){
   if(!connection||gitlabUrl(connection.url)!==gitlabUrl(source.host))throw safe('GitLab 来源与当前连接的实例地址不一致，请重新选择项目');
-  if(!['email','name'].includes(authorMode))throw safe('请选择 GitLab 作者筛选方式');
-  const identities=new Set(String((authorMode==='name'?authorNames:authors)||'').split(/[,，\n]/).map(v=>v.trim().toLowerCase()).filter(Boolean));if(!identities.size)throw safe(authorMode==='name'?'请配置要采集的 GitLab 作者名':'请配置要采集的 GitLab 作者邮箱');
+  const {matches:matchesAuthor}=authorFilter({authors,authorMode,authorNames});
   let requests=0;
   const boundedFetch=(url,options)=>{if(++requests>400)throw safe('GitLab 提交与 MR 关联查询超过 400 次，请缩短回溯范围');return (fetchImpl||fetch)(url,options);};
   const client=createGitlabClient({...connection,fetchImpl:boundedFetch,signal}),result=[],seen=new Set();let scanned=0;
@@ -50,8 +51,8 @@ async function collectGitlab(source,{since,until,signal,connection,authors,autho
     // 超出提交回溯窗口的未完成功能仍跟踪一个已有提交；不扩大作者或仓库范围。
     const lifecycle=createLifecycle(trackedEntries),tracked=new Map(),prefix=`gitlab:${gitlabUrl(source.host)}:${source.projectId}:`;
     for(const old of [...trackedEntries].sort((a,b)=>(b.sourceMeta?.committedAt||0)-(a.sourceMeta?.committedAt||0))){
-      const meta=old.sourceMeta||{},identity=authorMode==='name'?meta.author:meta.email;
-      if(old.source!=='gitlab'||old.removed||old.included===false||old.sourceActive===false||!old.sourceKey?.startsWith(prefix)||meta.projectId!==source.projectId||!/^([a-f0-9]{40}|[a-f0-9]{64})$/.test(meta.sha)||typeof identity!=='string'||!identities.has(identity.toLowerCase()))continue;
+      const meta=old.sourceMeta||{};
+      if(old.source!=='gitlab'||old.removed||old.included===false||old.sourceActive===false||isMergeCommit(old)||!old.sourceKey?.startsWith(prefix)||meta.projectId!==source.projectId||!/^([a-f0-9]{40}|[a-f0-9]{64})$/.test(meta.sha)||!matchesAuthor({author_name:meta.author,author_email:meta.email}))continue;
       const feature=lifecycle.feature(old);if(!feature||feature.mr&&lifecycle.state(feature.mr,dateKey(until)).phase==='completed'||tracked.has(feature.key))continue;
       tracked.set(feature.key,old);
     }
@@ -91,11 +92,6 @@ async function collectGitlab(source,{since,until,signal,connection,authors,autho
       if(entry.sourceMeta.mergeRequests.length)continue;
       const exact=bySha.get(entry.sourceMeta.sha);
       if(exact?.size){entry.sourceMeta.mergeRequests=[...exact.values()];continue;}
-      // 部分 GitLab 不返回中间合并提交的 MR。只接受多父提交中的明确项目/MR 引用，且该 MR 已由同项目 API 核实。
-      if((entry.sourceMeta.parentShas||[]).length<2)continue;
-      const prefix='See merge request '+(source.path||source.project)+'!',references=new Map();
-      for(const line of entry.details.split(/\r?\n/)){const value=line.trim();if(!value.startsWith(prefix))continue;const iid=value.slice(prefix.length);if(/^[1-9]\d*$/.test(iid)&&known.has(Number(iid)))references.set(Number(iid),known.get(Number(iid)));}
-      if(references.size){entry.sourceMeta.mergeRequests=[...references.values()];entry.sourceMeta.mrAssociation='explicit-merge-reference';}
     }
     for(const mr of known.values())if(releaseMerge(mr)&&mr.mergedAt>=since&&mr.mergedAt<=until)result.push({source:'gitlab',sourceKey:`gitlab:${gitlabUrl(source.host)}:${source.projectId}:mr:${mr.iid}:merged`,project:source.project,title:mr.title,details:'代码已合并 '+mr.targetBranch+'。',date:dateKey(mr.mergedAt),status:'done',evidence:mr.url,sourceMeta:{projectId:source.projectId,repositoryUrl,mrChecked:true,mrLifecycleChecked:true,mergeRequests:[mr],event:'merged',committedAt:mr.mergedAt}});
     if(result.length>2000)throw safe('提交与功能进展超过 2000 条，请缩短回溯范围');
@@ -106,8 +102,7 @@ async function collectGitlab(source,{since,until,signal,connection,authors,autho
     scanned+=response.items.length;if(scanned>2000)throw safe('GitLab 单项目回溯超过 2000 条提交，请缩短回溯天数');
     for(const commit of response.items){if(!commit)throw safe('GitLab 返回的提交格式无效');const at=Date.parse(commit.committed_date);
       if(!/^[0-9a-f]{40,64}$/.test(commit.id)||!Number.isFinite(at)||typeof commit.author_email!=='string'||typeof commit.title!=='string'||typeof commit.message!=='string')throw safe('GitLab 返回的提交格式无效');
-      const identity=authorMode==='name'?commit.author_name:commit.author_email;
-      if(at<since||at>until||typeof identity!=='string'||!identities.has(identity.trim().toLowerCase())||seen.has(commit.id))continue;seen.add(commit.id);
+      if(at<since||at>until||!matchesAuthor(commit)||isMergeCommit(commit)||seen.has(commit.id))continue;seen.add(commit.id);
       const evidence=`${gitlabUrl(source.host)}/${(source.path||source.project).split('/').map(encodeURIComponent).join('/')}/-/commit/${commit.id}`;
       result.push({source:'gitlab',sourceKey:`gitlab:${gitlabUrl(source.host)}:${source.projectId}:${commit.id}`,project:source.project,title:commit.title.slice(0,200)||'GitLab 提交',details:commit.message.replace(/^.*(?:\r?\n|$)/,'').trim().slice(0,4000),date:dateKey(at),status:'done',evidence,
         sourceMeta:{projectId:source.projectId,sha:commit.id,parentShas:Array.isArray(commit.parent_ids)?commit.parent_ids.filter(id=>typeof id==='string'&&/^[0-9a-f]{40,64}$/.test(id)):[],author:String(commit.author_name||'').slice(0,200),email:commit.author_email,committedAt:at}});
@@ -116,4 +111,4 @@ async function collectGitlab(source,{since,until,signal,connection,authors,autho
   }
   throw safe('GitLab 单项目回溯超过 2000 条提交，请缩短回溯天数');
 }
-module.exports={gitlabUrl,createGitlabClient,collectGitlab};
+module.exports={gitlabUrl,authorFilter,createGitlabClient,collectGitlab};

@@ -1,6 +1,6 @@
 'use strict';
 const path=require('node:path');
-const {workSummary}=require('./work-summary.cjs');
+const {workSummary,withoutMergeNotices}=require('./work-summary.cjs');
 const LEGACY_DEFAULT_TEMPLATE='# 工作周报（{{week_start}} ～ {{week_end}}）\n\n## 本周工作\n{{summary}}\n\n## 发布记录\n{{releases}}\n\n## 问题与风险\n{{blockers}}\n\n## 下周计划\n{{next_week}}\n\n## 工作明细\n{{details}}\n';
 const DEFAULT_TEMPLATE='# 工作周报（{{week_start}} ～ {{week_end}}）\n\n## 本周工作\n{{summary}}\n\n## 问题与风险\n{{blockers}}\n\n## 下周计划\n{{next_week}}\n';
 const TOKENS=['week_start','week_end','summary','releases','blockers','next_week','details','count'];
@@ -78,6 +78,16 @@ function workGroupsInput(value=[]){
     return {id:group.id,date,title,description,members:[...group.members],...(group.editOnly?{editOnly:true}:{})};
   });
 }
+function workMatchTitlesInput(value=[]){
+  if(!Array.isArray(value)||value.length>5000)throw Error('事项组标题记录过多或格式无效');
+  const seen=new Set();return value.map(item=>{
+    if(!item||typeof item.id!=='string'||!/^[a-f0-9]{64}$/.test(item.id))throw Error('事项组标题标识无效');
+    const date=requireDate(item.date),key=date+'|'+item.id,title=text(item.title,200);
+    if(seen.has(key))throw Error('事项组标题记录重复');seen.add(key);
+    if(!title||typeof item.title!=='string'||item.title.length>200)throw Error('请填写有效的组标题（最多 200 字）');
+    return {date,id:item.id,title};
+  });
+}
 function dismissedMatchesInput(value=[]){
   if(!Array.isArray(value)||value.length>5000)throw Error('已忽略的事项关联过多，请重新检查部分日期的已忽略项');
   const seen=new Set();let memberCount=0;return value.map(item=>{
@@ -99,7 +109,7 @@ const active=entry=>!entry.removed&&entry.sourceActive!==false&&entry.included!=
 const md=value=>String(value||'').replace(/[\\`*_\[\]<>#]/g,'\\$&').replace(/\r?\n/g,' / ');
 function workLine(item){
   const lines=[`- **${md(item.title)}**（${md(item.badge)}）`];
-  if(item.description)lines.push(...item.description.split(/\r?\n/).filter(Boolean).map(line=>'  - '+md(line)));
+  if(item.description)lines.push(...withoutMergeNotices(item.description).split('\n').filter(Boolean).map(line=>'  - '+md(line)));
   return lines.join('\n');
 }
 function grouped(items){return items.length?items.map(workLine).join('\n'):'暂无记录。';}
@@ -116,4 +126,4 @@ function dailyContent(entries,date,workGroups=[]){
   const sections=[['今日工作',done],['问题与风险',items.filter(e=>e.status==='blocked')],['工作计划',items.filter(e=>e.status==='planned')]];
   return `# 工作日报 · ${date}\n\n今日工作 ${done.length} 项\n\n`+(sections.filter(([,items])=>items.length).map(([title,items])=>'## '+title+'\n'+grouped(items)).join('\n\n')||'暂无工作记录。')+'\n';
 }
-module.exports={DEFAULT_TEMPLATE,TOKENS,text,dateKey,validDate,requireDate,addDays,weekRange,defaultSettings,settingsInput,entryInput,workGroupsInput,dismissedMatchesInput,gitlabUrl,active,weekContent,dailyContent};
+module.exports={DEFAULT_TEMPLATE,TOKENS,text,dateKey,validDate,requireDate,addDays,weekRange,defaultSettings,settingsInput,entryInput,workGroupsInput,workMatchTitlesInput,dismissedMatchesInput,gitlabUrl,active,weekContent,dailyContent};

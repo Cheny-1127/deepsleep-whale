@@ -5,8 +5,11 @@ const $=id=>document.getElementById('planner-'+id);
 const el=(tag,className,text)=>{const node=document.createElement(tag);if(className)node.className=className;if(text!==undefined)node.textContent=text;return node;};
 const button=(text,run,className='outline')=>{const node=el('button',className,text);node.type='button';node.addEventListener('click',run);return node;};
 const dateTime=value=>new Date(value).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false});
+const dateOnly=value=>new Date(value).toLocaleDateString('zh-CN',{year:'numeric',month:'numeric',day:'numeric'});
+const calendarDate=value=>new Intl.DateTimeFormat('sv-SE',{year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value));
 const remaining=value=>{const seconds=Math.max(0,Math.ceil((value-Date.now())/1000));return `${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`;};
 const taskStatuses=[{value:'pending',label:'待处理'},{value:'processing',label:'处理中'},{value:'done',label:'处理完成'}];
+const taskPlanLabel=task=>task.startDate?(task.dueDate?`计划：${task.startDate} 至 ${task.dueDate}`:`计划开始：${task.startDate} · 结束未定`):task.dueDate?'计划结束：'+task.dueDate:'未排期';
 const dayNames=['周日','周一','周二','周三','周四','周五','周六'];
 const isAllDay=schedule=>schedule.periods.length===1&&schedule.periods[0].start==='00:00'&&schedule.periods[0].end==='24:00';
 const scheduleLabel=schedule=>`${schedule.days.length===7?'每天':schedule.days.map(day=>dayNames[day]).join('、')} · ${isAllDay(schedule)?'全天':schedule.periods.map(p=>p.start+'–'+(p.end==='24:00'?'当天结束':p.end)).join(' / ')}`;
@@ -91,7 +94,7 @@ export function createPlannerView({floating=false}={}) {
       <section id="planner-reminders" class="planner-module" aria-labelledby="planner-reminders-heading"><div class="planner-toolbar"><h2 id="planner-reminders-heading">定时提醒 <span id="planner-reminder-count" class="planner-count"></span></h2><p id="planner-work-summary" class="planner-muted"></p></div><div id="planner-reminder-list" class="planner-list"></div>
       <p class="planner-footnote">电脑休眠或应用退出时不能即时提醒；恢复后只提示当前时段内的一轮，不积压过期提醒。</p></section>
       <section id="planner-tasks" class="planner-module" aria-labelledby="planner-tasks-heading"><div class="planner-toolbar"><h2 id="planner-tasks-heading">待办事项 <span id="planner-task-count" class="planner-count"></span></h2><div class="planner-filters" role="group" aria-label="筛选待办"><button type="button" data-filter="all" aria-pressed="true">全部</button><button type="button" data-filter="today" aria-pressed="false">今天</button><button type="button" data-filter="upcoming" aria-pressed="false">接下来</button><button type="button" data-filter="none" aria-pressed="false">未排期</button><button type="button" data-filter="pending" aria-pressed="false">待处理</button><button type="button" data-filter="processing" aria-pressed="false">处理中</button><button type="button" data-filter="done" aria-pressed="false">处理完成</button></div></div><div id="planner-task-list" class="planner-list"></div></section></div>
-      <section id="planner-history" role="tabpanel" aria-labelledby="planner-history-tab" hidden><div class="planner-toolbar"><h2>完成历史 <span id="planner-history-count" class="planner-count"></span></h2><div class="planner-history-controls"><label>完成日期<input id="planner-history-date" type="date" min="2000-01-01" max="2100-12-31"></label><button id="planner-history-today" type="button" class="outline">今天</button></div></div><p class="planner-muted">保留任务完成时的标题和备注，删除原任务后记录仍在。工作待办按完成日期自动归入日报，需开启报告同步；个人事项不纳入。</p><div id="planner-history-list" class="planner-list" aria-live="polite"></div></section>
+      <section id="planner-history" role="tabpanel" aria-labelledby="planner-history-tab" hidden><div class="planner-toolbar"><h2>完成历史 <span id="planner-history-count" class="planner-count"></span></h2><div class="planner-history-controls"><label>完成日期<input id="planner-history-date" type="date" min="2000-01-01" max="2100-12-31"></label><button id="planner-history-today" type="button" class="outline">今天</button></div></div><p class="planner-muted">同一条待办只展示一条最新完成记录，删除原任务后仍保留。工作待办按实际完成日期自动归入日报，需开启报告同步；个人事项不纳入。</p><div id="planner-history-list" class="planner-list" aria-live="polite"></div></section>
       <dialog class="ui-dialog planner-dialog" id="planner-settings-dialog" aria-labelledby="planner-settings-heading"><form id="planner-settings-form"><div class="planner-dialog-heading"><h2 id="planner-settings-heading">默认配置</h2><button type="button" class="ui-icon-button" id="planner-close-settings" aria-label="关闭默认配置">×</button></div><p class="planner-muted">工作与个人共用此默认时间和通知设置，每条提醒也可单独设置。允许时段外停止提示，下个允许时段重新计时。日期按星期选择，不自动识别法定节假日。</p><div id="planner-work-editor"></div><div class="planner-notifications"><label><input type="checkbox" id="planner-notifications"> 系统通知</label><label><input type="checkbox" id="planner-sound"> 提示音</label></div><p id="planner-settings-error" class="ui-alert" role="alert" hidden></p><div class="planner-dialog-actions"><button type="button" class="outline" id="planner-cancel-settings">取消</button><button type="submit" class="primary">保存配置</button></div></form></dialog>
       <dialog class="ui-dialog planner-dialog" id="planner-item-dialog" aria-labelledby="planner-item-heading"><form id="planner-item-form">
         <div class="planner-dialog-heading"><h2 id="planner-item-heading">新建事项</h2><button type="button" class="ui-icon-button" id="planner-close-item" aria-label="关闭事项设置">×</button></div>
@@ -99,15 +102,23 @@ export function createPlannerView({floating=false}={}) {
         <label class="planner-field">事项名称<input id="planner-item-title" maxlength="200" placeholder="例如：整理周报、买牛奶" required></label>
         <fieldset class="planner-category-choice"><legend>所属分类</legend><label><input type="radio" name="planner-category" value="work" checked>工作</label><label><input type="radio" name="planner-category" value="personal">个人</label></fieldset>
         <fieldset class="planner-item-fields" id="planner-reminder-fields" hidden disabled>${pickerHtml('mode','计时方式')}<label class="planner-field" id="planner-interval-field">完成后间隔（分钟）<input type="number" id="planner-interval" min="1" max="1440" value="40" required></label><label class="planner-field" id="planner-fixed-field" hidden>每天固定时间<input id="planner-fixed" placeholder="例如：10:30, 15:00, 18:00"><small>用逗号分隔，必须位于允许提醒的时段内。</small></label><label class="planner-field">处理时长（分钟）<input type="number" id="planner-process" min="0" max="180" value="0" required><small>0：点击完成后开始下一轮；大于 0：点击开始处理，倒计时结束后自动完成。</small></label><label class="planner-follow"><input type="checkbox" id="planner-use-default" checked> 沿用默认提醒时间</label><div id="planner-custom-work" hidden></div></fieldset>
-        <fieldset class="planner-item-fields" id="planner-task-fields">${pickerHtml('task-status','处理状态')}${pickerHtml('deadline','完成期限')}<label class="planner-field" id="planner-date-field" hidden>截止日期<input type="date" id="planner-task-date" min="2000-01-01" max="2100-12-31"></label><label class="planner-field">备注<textarea id="planner-task-notes" maxlength="4000" rows="3" placeholder="补充说明、处理步骤……"></textarea></label></fieldset>
+        <fieldset class="planner-item-fields" id="planner-task-fields">${pickerHtml('task-status','处理状态')}<div class="planner-field" id="planner-task-completed-date-field" hidden><label for="planner-task-completed-date">实际完成日期</label><input type="date" id="planner-task-completed-date" min="2000-01-01" aria-describedby="planner-task-completed-date-note" disabled><small id="planner-task-completed-date-note">默认今天。补记以前完成的任务时，请选择实际完成的那一天。</small></div><div class="planner-task-schedule"><label class="planner-field">计划开始日期（可选）<input type="date" id="planner-task-start-date" min="2000-01-01" max="2100-12-31"></label><div class="planner-field" id="planner-date-field"><div class="planner-date-heading"><label id="planner-deadline-label" for="planner-task-date">计划结束日期（可选）</label><details class="ui-select planner-date-shortcuts" id="planner-deadline-picker"><summary class="ui-select-trigger" id="planner-deadline-trigger" aria-label="快捷设置计划结束日期" aria-describedby="planner-deadline-selected">快捷设置<span id="planner-deadline-selected" hidden></span><svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m3 6 5 5 5-5" stroke="currentColor" stroke-width="1.5"/></svg></summary><div class="ui-select-menu"><div class="ui-select-options" id="planner-deadline-options" role="listbox" aria-labelledby="planner-deadline-trigger"></div></div></details></div><input type="date" id="planner-task-date" min="2000-01-01" max="2100-12-31"></div></div><p class="planner-muted planner-task-schedule-note">计划开始和结束日期可分别留空，之后也可补填。在“处理完成”状态下可单独填写实际完成日期。</p><label class="planner-field">备注<textarea id="planner-task-notes" maxlength="4000" rows="3" placeholder="补充说明、处理步骤……"></textarea></label></fieldset>
         <p id="planner-item-error" class="ui-alert" role="alert" hidden></p><div class="planner-dialog-actions"><button type="button" class="outline" id="planner-cancel-item">取消</button><button class="primary" type="submit">保存事项</button></div></form></dialog>`;
   }
   let defaultWork,customWork,modePicker,deadlinePicker,taskStatusPicker;
   if(container) {
     defaultWork=workEditor($('work-editor'),'默认时段');customWork=workEditor($('custom-work'),'独立时段');
     modePicker=select('mode',[{value:'interval',label:'完成后计时'},{value:'fixed',label:'固定时间'}],value=>{mode=value;renderMode();});
-    deadlinePicker=select('deadline',[{value:'none',label:'暂不安排'},{value:'today',label:'今天完成'},{value:'tomorrow',label:'明天完成'},{value:'week',label:'一周内完成'},{value:'date',label:'指定日期'}],value=>{deadline=value;renderDeadline();});
-    taskStatusPicker=select('task-status',taskStatuses,value=>{taskState=value;taskStatusPicker.set(taskState);});
+    deadlinePicker=select('deadline',[{value:'none',label:'不设结束日期'},{value:'today',label:'今天完成'},{value:'tomorrow',label:'明天完成'},{value:'week',label:'一周内完成'},{value:'date',label:'指定日期'}],value=>{
+      if(value==='none')$('task-date').value='';
+      else if(value!=='date') {
+        const date=new Date(data.today+'T12:00:00');date.setDate(date.getDate()+({today:0,tomorrow:1,week:7}[value]));
+        $('task-date').value=`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+      }
+      deadline=value;renderDeadline();if(value==='date')$('task-date').focus();
+    });
+    $('task-date').addEventListener('input',()=>{deadline=$('task-date').value?'date':'none';renderDeadline();});
+    taskStatusPicker=select('task-status',taskStatuses,value=>{taskState=value;renderTaskStatus();});
     for(const node of container.querySelectorAll('[data-category]'))node.addEventListener('click',()=>{category=node.dataset.category;filter='all';renderLists();});
     for(const node of container.querySelectorAll('[name="planner-kind"]'))node.addEventListener('change',()=>{if(!itemId&&!saving){itemKind=node.value;renderItemType();}});
     for(const name of ['current','history']) {
@@ -142,7 +153,9 @@ export function createPlannerView({floating=false}={}) {
     for(const node of container.querySelectorAll('[data-filter]'))node.addEventListener('click',()=>{filter=node.dataset.filter;listKey='';renderLists();});
   }
   function renderMode(){modePicker.set(mode);$('interval-field').hidden=mode!=='interval';$('interval').disabled=mode!=='interval';$('fixed-field').hidden=mode!=='fixed';$('fixed').required=mode==='fixed';}
-  function renderDeadline(){deadlinePicker.set(deadline);$('date-field').hidden=deadline!=='date';$('task-date').required=deadline==='date';}
+  function renderDeadline(){deadlinePicker.set(deadline);}
+  // 切回未完成后禁用实际日期，隐藏的必填或超范围值不应阻止保存。
+  function renderTaskStatus(){taskStatusPicker.set(taskState);$('task-completed-date-field').hidden=taskState!=='done';$('task-completed-date').disabled=taskState!=='done';$('task-completed-date').required=taskState==='done';}
   function renderItemType() {
     const reminder=itemKind==='reminder';
     for(const node of container.querySelectorAll('[name="planner-kind"]'))node.checked=node.value===itemKind;
@@ -150,7 +163,7 @@ export function createPlannerView({floating=false}={}) {
     $('reminder-fields').hidden=!reminder;$('reminder-fields').disabled=!reminder;
     $('task-fields').hidden=reminder;$('task-fields').disabled=reminder;
     $('item-title').maxLength=reminder?100:200;$('item-title').placeholder=reminder?'例如：喝水、闭眼休息':'例如：整理周报、买牛奶';
-    $('item-error').hidden=true;modePicker.close();deadlinePicker.close();taskStatusPicker.close();renderMode();renderDeadline();taskStatusPicker.set(taskState);
+    $('item-error').hidden=true;modePicker.close();deadlinePicker.close();taskStatusPicker.close();renderMode();renderDeadline();renderTaskStatus();
   }
   function openItem(kind='task',item=null,preset=null) {
     if(!data||saving)return;
@@ -160,7 +173,8 @@ export function createPlannerView({floating=false}={}) {
     for(const node of container.querySelectorAll('[name="planner-category"]'))node.checked=node.value===selectedCategory;
     $('interval').value=item?.intervalMinutes??40;$('process').value=item?.processMinutes??preset?.processMinutes??0;$('fixed').value=item?.fixedTimes?.join(', ')||'';
     $('use-default').checked=!item?.customWorkTime;$('custom-work').hidden=$('use-default').checked;customWork.set(item?.customWorkTime||data.workTime);
-    $('task-notes').value=item?.notes||'';$('task-date').value=item?.dueDate||data.today;
+    $('task-notes').value=item?.notes||'';$('task-start-date').value=item?.startDate||'';$('task-date').value=item?.dueDate||'';
+    $('task-completed-date').value=Number.isFinite(item?.completedAt)?calendarDate(item.completedAt):data.today;$('task-completed-date').max=data.today;
     // 已有事项不在待办与提醒间直接转换，避免丢失期限、完成状态或正在运行的计时。
     $('item-types').hidden=Boolean(item);$('item-types').disabled=Boolean(item);
     $('item-heading').textContent=item?(kind==='reminder'?'编辑提醒':'编辑待办'):'新建事项';
@@ -174,7 +188,7 @@ export function createPlannerView({floating=false}={}) {
     const submit=event.target.querySelector('[type="submit"]');submit.disabled=true;$('item-error').hidden=true;
     const value={id:itemId||undefined,title:$('item-title').value,category:container.querySelector('[name="planner-category"]:checked').value};
     if(kind==='reminder')Object.assign(value,{mode,intervalMinutes:Number($('interval').value),processMinutes:Number($('process').value),fixedTimes:mode==='fixed'?$('fixed').value.split(/[,，\s]+/).filter(Boolean):[],customWorkTime:$('use-default').checked?null:customWork.get(),enabled:data.reminders.find(item=>item.id===itemId)?.enabled??true});
-    else Object.assign(value,{notes:$('task-notes').value,status:taskState,deadline,dueDate:$('task-date').value});
+    else Object.assign(value,{notes:$('task-notes').value,status:taskState,startDate:$('task-start-date').value||null,deadline:$('task-date').value?'date':'none',dueDate:$('task-date').value,...(taskState==='done'?{completedDate:$('task-completed-date').value}:{})});
     try {
       const next=await request('save-'+kind,value);
       // 新记录应立即可见，避免被当前分类或已完成筛选藏起来。
@@ -197,7 +211,7 @@ export function createPlannerView({floating=false}={}) {
     return run?'下次 '+dateTime(run.dueAt):'等待安排';
   }
   function openReportDay(item){document.dispatchEvent(new CustomEvent('whale-show-report-day',{detail:{completedAt:item.completedAt}}));}
-  function setHistoryDate(item){historyDate=new Intl.DateTimeFormat('sv-SE',{year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(item.completedAt));$('history-date').value=historyDate;}
+  function setHistoryDate(item){historyDate=calendarDate(item.completedAt);$('history-date').value=historyDate;}
   function rememberCompletion(item){lastCompleted=item;$('completed-message').textContent=`「${item.title}」已完成，已保存到完成历史。`;}
   function openCompletionHistory(item){if(item)setHistoryDate(item);section='history';historyKey='';renderLists();}
   async function renderHistory() {
@@ -211,11 +225,15 @@ export function createPlannerView({floating=false}={}) {
       for(const item of result.items) {
         const card=el('article','ui-card planner-history-card'),copy=el('div','planner-task-copy'),heading=el('div','planner-item-heading');
         const status=el('span','planner-task-status','处理完成');status.dataset.status='done';
-        card.dataset.historyId=item.id;heading.append(el('h3','',item.title),categoryBadge(item),status);copy.append(heading,el('span','planner-muted','完成于 '+dateTime(item.completedAt)));
+        card.dataset.historyId=item.id;heading.append(el('h3','',item.title),categoryBadge(item),status);copy.append(heading,el('span','planner-muted','实际完成于 '+dateOnly(item.completedAt)));
+        if(item.startDate||item.dueDate)copy.append(el('span','planner-muted planner-task-plan',taskPlanLabel(item)));
         if(item.notes)copy.append(el('p','planner-task-notes',item.notes));
         if(!data.tasks.some(task=>task.id===item.taskId))copy.append(el('p','planner-muted','原任务已删除 · 完成记录已保留'));
         card.append(copy);
-        if(item.category==='work'){const actions=el('div','planner-row-actions');actions.append(button('查看当日日报',()=>openReportDay(item)));card.append(actions);}
+        const current=data.tasks.find(task=>task.id===item.taskId&&task.status==='done'&&task.completedAt===item.completedAt),actions=el('div','planner-row-actions');
+        if(current)actions.append(button('修改完成日期',()=>{openTask(current);$('task-completed-date').focus();}));
+        if(item.category==='work')actions.append(button('查看当日日报',()=>openReportDay(item)));
+        if(actions.children.length)card.append(actions);
         list.append(card);
       }
     } catch(error){if(serial!==historyRequest||section!=='history')return;historyKey='';list.replaceChildren(el('p','ui-alert',error.message));}
@@ -256,19 +274,22 @@ export function createPlannerView({floating=false}={}) {
     const tasks=categoryTasks.filter(item=>{
       if(filter==='all')return item.status!=='done';
       if(selectedStatus)return item.status===filter;
-      return item.status!=='done'&&(filter==='today'&&item.dueDate&&item.dueDate<=data.today||filter==='upcoming'&&item.dueDate>data.today||filter==='none'&&item.dueDate===null);
-    }).sort((a,b)=>(a.dueDate||'9999').localeCompare(b.dueDate||'9999')||b.createdAt-a.createdAt);
+      const planDate=item.startDate||item.dueDate;
+      return item.status!=='done'&&(filter==='today'&&planDate&&planDate<=data.today||filter==='upcoming'&&planDate>data.today||filter==='none'&&!planDate);
+    }).sort((a,b)=>(a.startDate||a.dueDate||'9999').localeCompare(b.startDate||b.dueDate||'9999')||b.createdAt-a.createdAt);
     $('task-count').textContent=tasks.length;
     const list=$('task-list');list.replaceChildren();
-    if(!tasks.length){const empty=el('div','ui-card planner-empty');empty.append(el('h2','',selectedStatus?`没有${selectedStatus.label}的待办`:'这里暂时没有待办'),el('p','planner-muted','可以安排今天、明天、一周内完成，也可以先记下，不排时间。'));list.append(empty);}
+    if(!tasks.length){const empty=el('div','ui-card planner-empty');empty.append(el('h2','',selectedStatus?`没有${selectedStatus.label}的待办`:'这里暂时没有待办'),el('p','planner-muted','可分别设置计划开始、结束日期，也可先记录，之后再安排。'));list.append(empty);}
     for(const task of tasks) {
       const row=el('article','ui-card planner-task');
       const content=el('div','planner-task-copy');const title=el('div','planner-item-heading');const status=el('span','planner-task-status',taskStatuses.find(status=>status.value===task.status).label);status.dataset.status=task.status;title.append(el('h3','',task.title),categoryBadge(task),status);content.append(title);
-      const due=el('span','planner-muted',task.completedAt!==null?'完成于 '+dateTime(task.completedAt):!task.dueDate?'未排期':task.dueDate===data.today?'今天完成':task.dueDate<data.today?`已逾期 · ${task.dueDate}`:`${task.dueDate} 前完成`);if(task.completedAt===null&&task.dueDate&&task.dueDate<data.today)due.classList.add('planner-overdue');content.append(due);
+      const overdue=task.completedAt===null&&task.dueDate&&task.dueDate<data.today;
+      const due=el('span','planner-muted',task.completedAt!==null?'实际完成于 '+dateOnly(task.completedAt):(overdue?'已逾期 · ':'')+taskPlanLabel(task));if(overdue)due.classList.add('planner-overdue');content.append(due);
+      if(task.completedAt!==null&&(task.startDate||task.dueDate))content.append(el('span','planner-muted planner-task-plan',taskPlanLabel(task)));
       if(task.notes)content.append(el('p','planner-task-notes',task.notes));
       const actions=el('div','planner-row-actions');
       if(task.status==='pending')actions.append(button('开始处理',()=>act('set-task-status',{id:task.id,status:'processing'}),'soft'));
-      actions.append(button(task.status==='done'?'重新处理':'处理完成',()=>act('set-task-status',{id:task.id,status:task.status==='done'?'processing':'done'}),'soft'));
+      else actions.append(button(task.status==='done'?'重新处理':'处理完成',()=>act('set-task-status',{id:task.id,status:task.status==='done'?'processing':'done'}),'soft'));
       if(task.status==='done'&&task.category==='work')actions.append(button('查看当日日报',()=>openReportDay(task)));
       actions.append(button('编辑',()=>openTask(task)),button('删除',async()=>{if(await confirmAction({owner:container,title:'删除待办？',message:`将删除待办「${task.title}」。`,confirmLabel:'删除待办',danger:true}))void act('remove-task',{id:task.id});},'planner-delete'));
       row.append(content,actions);list.append(row);

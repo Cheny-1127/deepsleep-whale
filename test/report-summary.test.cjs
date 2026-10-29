@@ -29,6 +29,34 @@ test('work copy describes the change and outcome while release evidence remains 
   const report=dailyContent(records,'2026-10-26');assert.match(report,/避免重复上报/);assert.doesNotMatch(report,/MR !|fix\(tracking\)|#42|构建|原有服务器|EKS/);
   assert.equal(workSummary([...records,entry('new-issue',{source:'manual',status:'blocked',title:'上线后发现的新问题'})]).items.find(i=>i.kind==='mr').badge,'已完成');
 });
+test('generated merge notices stay in source evidence and never enter daily or weekly business copy',()=>{
+  for(const branch of ['main','v3.10.0','release/2026.10']){
+    const reference={...mr(1),title:'兼容TT广告系列四位日期格式',targetBranch:branch};
+    const records=[entry('merged-event',{title:reference.title,details:'代码已合并 '+branch+'。',sourceMeta:{event:'merged',mrChecked:true,mergeRequests:[reference]}}),entry('business-commit',{details:'兼容TT广告系列四位日期格式并补充关键注释及回归测试',sourceMeta:{mrChecked:true,mergeRequests:[reference]}}),release('published',1,'11','EKS',{mergeRequests:[reference]})];
+    const before=structuredClone(records),summary=workSummary(records);
+    assert.equal(summary.items.length,1);assert.equal(summary.items[0].badge,'已完成');assert.equal(summary.items[0].description,records[1].details);
+    for(const content of [dailyContent(records,'2026-10-26'),weekContent(records,'2026-10-26','{{summary}}\n{{releases}}\n{{details}}').content]){
+      assert.doesNotMatch(content,/代码已合并|main|v3\.10\.0|release\/2026\.10/);assert.match(content,/兼容TT广告系列四位日期格式并补充关键注释及回归测试/);
+    }
+    assert.deepEqual(records,before);
+  }
+});
+test('saved work descriptions also omit merge notices from reports without losing manual results or stored copy',()=>{
+  const records=commits(1),description='代码已合并 main。\n完成日期格式兼容\n保留现有投放规则\n补齐渠道边界校验\n回归验证通过';
+  const group={id:'legacy-copy',date:'2026-10-26',title:'兼容广告日期格式',description,members:workSummary(records).items[0].memberKeys};
+  const before=structuredClone({records,group});
+  for(const content of [dailyContent(records,group.date,[group]),weekContent(records,group.date,'{{summary}}\n{{details}}',[group]).content]){
+    assert.doesNotMatch(content,/代码已合并|main/);
+    for(const line of description.split('\n').slice(1))assert.ok(content.includes(line));
+  }
+  assert.equal(workSummary(records,[group]).items[0].description,description);assert.deepEqual({records,group},before);
+});
+test('merge-related business problems and manual technical explanations remain intact',()=>{
+  const details='代码已合并 main，但支付回调仍需渠道联调确认。\n修复合并订单时金额重复计算的问题。\n补齐 main 字段的日期解析与回归测试。';
+  const records=[entry('manual-copy',{source:'manual',title:'验证支付回调',details,status:'blocked'})];
+  assert.ok(dailyContent(records,'2026-10-26').includes(details.split('\n')[0]));
+  for(const line of details.split('\n'))assert.ok(weekContent(records,'2026-10-26','{{blockers}}').content.includes(line));
+});
 test('a deployment-only work extracts business content, including missing-range releases, without treating release evidence as unresolved business',()=>{
   const e=release('legacy',1,'11','EKS',{rangeVerified:false,mergeRequests:[]});
   e.details='发布时间：2026/10/26 11:00:00\n发布人：cy\n版本：起点待核对 → aaaaaaaa\nMR !1：修复订单超时\nhttps://gitlab.example.test/business/service/-/merge_requests/1\n  aaaaaaaa 修复订单超时（cy）';

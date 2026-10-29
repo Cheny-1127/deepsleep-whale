@@ -4,9 +4,11 @@ const active=e=>!e.removed&&e.sourceActive!==false&&e.included!==false;
 const eventTime=e=>[e.sourceMeta?.releasedAt,e.sourceMeta?.completedAt,e.sourceMeta?.committedAt].find(Number.isFinite)||Date.parse(e.date+'T00:00:00+08:00');
 const order=(a,b)=>a.time-b.time||a.key.localeCompare(b.key);
 const cleanTitle=value=>String(value||'').trim().replace(/^(?:feat|fix|perf|refactor|chore|docs|test|build|ci|style|revert)(?:\([^\n)]*\))?!?[:：]\s*/i,'');
+// 只过滤整行的系统合并提示；带后续业务问题的说明和保存的原始内容保持不变。
+const withoutMergeNotices=value=>String(value||'').split(/\r?\n/).filter(line=>!/^代码已合并\s+[\w./-]+[。.]?$/.test(line.trim().replace(/^[-*]\s+|^#{1,6}\s+/,''))).join('\n');
 function businessLines(value,title=''){
   let fenced=false;const lines=[];
-  for(let line of String(value||'').split(/\r?\n/)){
+  for(let line of withoutMergeNotices(value).split('\n')){
     if(/^\s*```/.test(line)){fenced=!fenced;continue;}if(fenced)continue;
     line=line.trim().replace(/^[-*]\s+|^#{1,6}\s+/,'');
     if(!line||/^(?:https?:\/\/|See merge request\b|Merge branch\b|Merge remote-tracking branch\b|MR\s*!\d+|(?:发布时间|发布人|版本|分支|构建编号|提交编号|Branch|Commit|SHA)[：:]|(?:Co-authored-by|Signed-off-by)[：:])/i.test(line))continue;
@@ -23,7 +25,8 @@ function releaseTitle(entry){
   if(meta.direction==='rollback')return '完成生产版本回退';
   if(meta.direction==='same')return '完成生产服务维护';
   const titles=(meta.mergeRequests||[]).map(mr=>businessTitle(mr.title,''));
-  if(!titles.length)for(const line of (entry.details||'').split(/\r?\n/)){
+  if(!titles.length&&Array.isArray(meta.ownCommitTitles))titles.push(...meta.ownCommitTitles.map(title=>businessTitle(title,'')));
+  if(!titles.length&&!Array.isArray(meta.ownCommitTitles))for(const line of (entry.details||'').split(/\r?\n/)){
     const match=line.match(/^MR\s*!\d+[：:]\s*(.+)$/)||line.match(/^直接提交\s+[a-f0-9]+[：:]\s*(.+?)(?:（[^（）]*）)?$/i);if(match)titles.push(businessTitle(match[1],''));
   }
   return [...new Set(titles)].join('；')||'完成生产服务更新';
@@ -89,7 +92,7 @@ function workSummary(entries,workGroups=[],{context=entries,periodEnd}={}){
   let items=[...groups.values()];
   for(const item of items){
     // 一条生产发布可能包含多个 MR；共享证据不能将未选中的业务事项带入合并。
-    const owned=item.entryIds.map(id=>sources.get(id)).filter(entry=>!item.mr||['manual','planner'].includes(entry.source)||(entry.sourceMeta?.mergeRequests||[]).length===1);
+    const owned=item.entryIds.map(id=>sources.get(id)).filter(entry=>!item.mr||['manual','planner'].includes(entry.source)||(entry.sourceMeta?.mergeRequests||[]).length===1||entry.source==='gitlab'&&!(entry.sourceMeta?.mergeRequests||[]).length);
     item.memberKeys=[...new Set([...(item.mr?['mr:'+item.mr.url]:[]),...owned.map(entry=>'source:'+entry.sourceKey)])];
   }
   // 合并关系独立于来源记录；MR 身份可接住后续采集新增的提交，原始正文不被改写。
@@ -132,4 +135,4 @@ function workSummary(entries,workGroups=[],{context=entries,periodEnd}={}){
   }
   return {items,releaseCount:new Set(items.flatMap(i=>i.releases.map(r=>r.id))).size,rawCount:records.length};
 }
-module.exports={workSummary,eventTime,mrReference};
+module.exports={workSummary,eventTime,mrReference,withoutMergeNotices};

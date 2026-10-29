@@ -5,6 +5,30 @@ const {createPlanner}=require('../src/app/planner.cjs');
 const NOW=Date.parse('2026-10-26T18:00:00+08:00');
 function fixture(t){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'whale-reports-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));const planner=createPlanner({dataDir:dir,now:()=>NOW});const instances=[];const create=(options={})=>{const reports=createWorkReports({dataDir:dir,now:()=>NOW,getTasks:()=>planner.snapshot().tasks,readEnvironment:()=>({}),...options});instances.push(reports);return reports;};t.after(()=>instances.forEach(item=>item.close()));return {dir,planner,create};}
 
+test('planner schedule dates never replace actual completion dates in daily reports',async t=>{
+  const f=fixture(t),reports=f.create();
+  for(const dueDate of ['2026-10-23','2026-10-30']){
+    f.planner.action('save-task',{title:'验证实际完成归属 '+dueDate,startDate:'2026-10-20',deadline:'date',dueDate,category:'work'});
+    const task=f.planner.snapshot().tasks.at(-1);f.planner.action('set-task-status',{id:task.id,status:'processing'});f.planner.action('set-task-status',{id:task.id,status:'done'});
+  }
+  await reports.action('sync-planner');
+  const entries=reports.snapshot({date:'2026-10-26'}).entries;assert.equal(entries.length,2);assert.ok(entries.every(entry=>entry.sourceMeta.completedAt===NOW));
+  for(const date of ['2026-10-20','2026-10-23','2026-10-30'])assert.equal(reports.snapshot({date}).entries.length,0);
+  assert.match((await reports.action('preview-day',{date:'2026-10-26'})).content,/今日工作 2 项/);
+});
+
+test('correcting actual completion day moves planner work to that daily report and preserves report edits',async t=>{
+  const f=fixture(t),reports=f.create(),task=f.planner.action('save-task',{title:'补记之前的工作',notes:'已处理',deadline:'date',dueDate:'2026-10-24',status:'done'}).tasks[0];
+  reports.syncPlanner();const entry=reports.snapshot({date:'2026-10-26'}).entries[0];
+  await reports.action('save-entry',{...entry,title:'人工整理后的标题',details:'保留补充说明'});
+  await reports.action('save-entry',{date:'2026-10-26',title:'当天的其他工作',status:'done'});
+  f.planner.action('save-task',{id:task.id,title:task.title,notes:task.notes,deadline:'date',dueDate:task.dueDate,status:'done',completedDate:'2026-10-23'});reports.syncPlanner();reports.syncPlanner();
+  assert.deepEqual(reports.snapshot({date:'2026-10-26'}).entries.map(item=>item.title),['当天的其他工作']);assert.equal(reports.snapshot({date:'2026-10-24'}).entries.length,0);
+  const corrected=reports.snapshot({date:'2026-10-23'}).entries[0];assert.ok(corrected);assert.equal(corrected.id,entry.id);assert.equal(corrected.title,'人工整理后的标题');assert.equal(corrected.details,'保留补充说明');assert.equal(corrected.edited,true);assert.equal(corrected.sourceMeta.completedAt,f.planner.snapshot().tasks[0].completedAt);
+  assert.match((await reports.action('preview-day',{date:'2026-10-23'})).content,/人工整理后的标题/);
+  const restarted=f.create();assert.equal(restarted.snapshot({date:'2026-10-23'}).entries[0].id,entry.id);assert.equal(restarted.snapshot({date:'2026-10-26'}).entries.length,1);
+});
+
 test('editing an automatic MR work preserves its sources, accepts later commits and survives restart',async t=>{
   const f=fixture(t),date='2026-10-26',mr={iid:1,title:'原始 MR 标题',url:'https://gitlab.example.test/business/service/-/merge_requests/1'};let count=2;
   const reports=f.create({gitlabStore:{load:()=>({url:'https://gitlab.example.test',token:'fixture'})},gitlabCollector:async()=>Array.from({length:count},(_,i)=>({source:'gitlab',sourceKey:'gitlab:edit:'+i,title:'原始提交 '+i,project:'business/service',date,status:'done',sourceMeta:{mrChecked:true,mergeRequests:[mr]}}))});
@@ -73,7 +97,7 @@ test('collection carries a feature from branch development through main merge to
   },jenkinsCollector:async()=>stage<2?[]:[{source:'jenkins',sourceKey:'jenkins:feature:42',date:'2026-10-28',title:'发布完成',project,status:'done',sourceMeta:{release:true,environment:'prod',direction:'forward',rangeVerified:true,releasedAt,completedAt:releasedAt,mergeRequests:[mr]}}]});
   await reports.action('settings',{gitlabProjects:[{host,projectId:1,project}],gitlabAuthors:'cy@example.test',jenkinsJobs:[{job:'prod/pay',project,environment:'prod',target:'EKS',userIds:'cy'}]});await reports.action('collect');assert.equal(reports.snapshot({date:'2026-10-26'}).work.items[0].badge,'开发中');
   const initial=reports.snapshot({date:'2026-10-26'});await reports.action('save-work',{date:initial.date,key:initial.work.items[0].key,title:raw.title,description:'保留开发说明'});assert.deepEqual(reports.snapshot({date:initial.date}).entries,initial.entries);
-  stage=1;currentTime=Date.parse('2026-10-27T18:00:00+08:00');await reports.action('collect');assert.equal(reports.snapshot({date:'2026-10-27'}).work.items[0].badge,'待发布');assert.equal(reports.snapshot({date:'2026-10-26'}).work.items[0].badge,'开发中');await reports.action('save-week',{date:'2026-10-26',content:'保留人工周报'});
+  stage=1;currentTime=Date.parse('2026-10-27T18:00:00+08:00');await reports.action('collect');assert.equal(reports.snapshot({date:'2026-10-27'}).work.items[0].badge,'待发布');assert.equal(reports.snapshot({date:'2026-10-26'}).work.items[0].badge,'开发中');assert.deepEqual(reports.snapshot({date:initial.date}).entries,initial.entries);assert.equal(reports.snapshot({date:initial.date}).work.items[0].description,'保留开发说明');await reports.action('save-week',{date:'2026-10-26',content:'保留人工周报'});
   stage=2;currentTime=Date.parse('2026-10-28T18:00:00+08:00');await reports.action('collect');
   assert.equal(reports.snapshot({date:'2026-10-28'}).work.items[0].badge,'已完成');assert.equal(reports.snapshot({date:'2026-10-28'}).work.items[0].completedAt,releasedAt);assert.equal(reports.snapshot({date:'2026-10-27'}).work.items[0].badge,'待发布');assert.equal(reports.snapshot({date:'2026-10-26'}).work.items[0].badge,'开发中');assert.equal((await reports.action('get-week',{date:'2026-10-28'})).content,'保留人工周报');
   const week=await reports.action('generate-week',{date:'2026-10-28',force:true});assert.equal((week.content.match(/\*\*新增支付方式\*\*/g)||[]).length,1);assert.match(week.content,/已完成/);assert.match(week.content,/保留开发说明/);assert.equal(f.create().snapshot({date:'2026-10-27'}).work.items[0].badge,'待发布');
@@ -141,6 +165,31 @@ test('automatic work reminders preserve decisions through collection and restart
   await assert.rejects(restarted.action('accept-work-match',{date,id}),/提醒已变化/);
   await restarted.action('unmerge-work',{date,id:merged.work.items[0].groupId});assert.equal(restarted.snapshot({date}).work.items.length,2);assert.equal(restarted.snapshot({date}).workMatches.items.length,0);
   assert.equal(f.create().snapshot({date}).workMatches.items.length,0);
+});
+
+test('a suggested group title can be edited without merging and survives recollection, restart and later confirmation',async t=>{
+  const f=fixture(t),date='2026-10-26',host='https://gitlab.example.test',projects=['business/api','business/admin'];let count=1;
+  const reports=f.create({gitlabStore:{load:()=>({url:host,token:'fixture'})},gitlabCollector:async source=>Array.from({length:count},(_,index)=>({source:'gitlab',sourceKey:'gitlab:title:'+source.projectId+':'+index,title:'原始提交标题',project:source.project,date,status:'done',sourceMeta:{mrChecked:true,mergeRequests:[{iid:1,title:'原始标题 '+source.project,url:host+'/'+source.project+'/-/merge_requests/1',sourceBranch:'feat-cy-1027-drama-script-management'}]}}))});
+  await reports.action('settings',{gitlabProjects:projects.map((project,index)=>({host,projectId:index+1,project})),gitlabAuthors:'cy@example.test'});await reports.action('collect',{date});
+  const before=reports.snapshot({date}),match=before.workMatches.items[0];assert.equal(match.keys.length,2);
+  const title='完善剧本管理',saved=await reports.action('save-work-match-title',{date,id:match.id,title});
+  assert.equal(saved.workMatches.items[0].title,title);assert.deepEqual(saved.work,before.work);assert.deepEqual(saved.entries,before.entries);assert.equal(saved.workMatches.items[0].id,match.id);
+  for(const invalid of ['', ' '.repeat(3), '长'.repeat(201)])await assert.rejects(reports.action('save-work-match-title',{date,id:match.id,title:invalid}),/标题/);
+  await assert.rejects(reports.action('save-work-match-title',{date,id:'missing',title}),/提醒已变化/);assert.deepEqual(reports.snapshot({date}),saved);
+  fs.mkdirSync(path.join(f.dir,'work-reports.json.tmp'));await assert.rejects(reports.action('save-work-match-title',{date,id:match.id,title:'保存失败的标题'}),/保存失败/);fs.rmdirSync(path.join(f.dir,'work-reports.json.tmp'));assert.equal(reports.snapshot({date}).workMatches.items[0].title,title);
+  count=2;await reports.action('collect',{date});const updated=reports.snapshot({date});assert.equal(updated.work.items.length,2);assert.equal(updated.entries.length,4);assert.equal(updated.workMatches.items[0].title,title);
+  const restarted=f.create();assert.equal(restarted.snapshot({date}).workMatches.items[0].title,title);
+  const merged=await restarted.action('accept-work-match',{date,id:match.id});assert.equal(merged.work.items.length,1);assert.equal(merged.work.items[0].title,title);assert.deepEqual(merged.entries,updated.entries);assert.match((await restarted.action('preview-day',{date})).content,/完善剧本管理/);
+  await assert.rejects(restarted.action('save-work-match-title',{date,id:match.id,title:'已失效的提醒'}),/提醒已变化/);
+});
+
+test('an edited group title follows the same unmerged branches when new commits sort before old source keys',async t=>{
+  const f=fixture(t),date='2026-10-26',host='https://gitlab.example.test',projects=['business/api','business/admin'];let shas=['f'.repeat(40)];
+  const reports=f.create({gitlabStore:{load:()=>({url:host,token:'fixture'})},gitlabCollector:async source=>shas.map(sha=>({source:'gitlab',sourceKey:`gitlab:${host}:${source.projectId}:${sha}`,title:'原始分支提交',project:source.project,date,status:'done',sourceMeta:{sha,projectId:source.projectId,author:'cy',email:'cy@example.test',committedAt:NOW-3600000,mrChecked:true,mrLifecycleChecked:true,repositoryUrl:host+'/'+source.project,featureBranch:'feat-cy-1027-drama-script-management',mergeRequests:[]}}))});
+  await reports.action('settings',{gitlabProjects:projects.map((project,index)=>({host,projectId:index+1,project})),gitlabAuthors:'cy@example.test'});await reports.action('collect',{date});
+  const before=reports.snapshot({date}),match=before.workMatches.items[0];assert.ok(before.work.items.every(item=>item.kind==='branch'));
+  await reports.action('save-work-match-title',{date,id:match.id,title:'完善剧本管理'});shas.push('a'.repeat(40));await reports.action('collect',{date});
+  const after=reports.snapshot({date});assert.equal(after.entries.length,4);assert.equal(after.work.items.length,2);assert.equal(after.workMatches.items[0].id,match.id);assert.equal(after.workMatches.items[0].title,'完善剧本管理');
 });
 
 test('reminders use completed planner notes and collected MR content without completing pending tasks',async t=>{
@@ -305,11 +354,21 @@ test('verified Jenkins scans retire legacy build facts only for the checked sour
   const project={host:'https://gitlab.example.test',projectId:7,project:'ossv/pay',path:'ossv/pay'};
   await reports.action('settings',{jenkinsJobs:[source],gitlabProjects:[project],gitlabAuthors:'cy@example.test'});
   items=[old];await reports.action('collect');let entry=reports.snapshot({date:old.date}).entries[0];await reports.action('save-entry',{...entry,title:'人工说明',included:false});
-  assert.equal(optionsSeen.connection.token,'fixture');assert.deepEqual(optionsSeen.gitlabProjects,[project]);assert.equal(typeof optionsSeen.gitlabFetchImpl,'function');
+  assert.equal(optionsSeen.connection.token,'fixture');assert.deepEqual(optionsSeen.gitlabProjects,[project]);assert.equal(typeof optionsSeen.gitlabFetchImpl,'function');assert.equal(optionsSeen.authors,'cy@example.test');assert.equal(optionsSeen.authorMode,'email');
   items=[];failure=true;await reports.action('collect');assert.notEqual(reports.snapshot({date:old.date}).entries[0].sourceActive,false);
   failure=false;await reports.action('collect');entry=reports.snapshot({date:old.date}).entries[0];assert.equal(entry.sourceActive,false);assert.equal(entry.title,'人工说明');
   items=[{...old,title:'核实后的发布完成',sourceMeta:{...old.sourceMeta,release:true,rangeVerified:false}}];await reports.action('collect');entry=reports.snapshot({date:old.date}).entries[0];assert.equal(entry.sourceActive,true);assert.equal(entry.title,'人工说明');assert.equal(entry.included,false);assert.match(reports.snapshot().sources.find(s=>s.key.startsWith('jenkins:')).warning,/完整范围待核对/);
   await reports.action('remove-entry',{id:entry.id});await reports.action('collect');assert.equal(reports.snapshot({date:old.date}).entries.length,0);
+});
+
+test('successful GitLab recollection retires old colleague merge commits and orphaned merge events',async t=>{
+  const f=fixture(t),date='2026-10-26',host='https://gitlab.example.test',project='business/pay',mr={iid:119,title:'同事的支付功能',url:host+'/'+project+'/-/merge_requests/119',state:'merged',sourceBranch:'feat/colleague-pay',targetBranch:'main',mergedAt:NOW-60000},prefix='gitlab:'+host+':7:';
+  const old=[{source:'gitlab',sourceKey:prefix+'a'.repeat(40),title:"Merge branch 'feat/colleague-pay' into 'main'",date,project,status:'done',sourceMeta:{projectId:7,sha:'a'.repeat(40),parentShas:['b'.repeat(40),'c'.repeat(40)],author:'CY',email:'cy@example.test',committedAt:NOW-60000,mrChecked:true,mergeRequests:[mr]}},{source:'gitlab',sourceKey:prefix+'mr:119:merged',title:mr.title,date,project,status:'done',sourceMeta:{projectId:7,event:'merged',committedAt:NOW-60000,mrChecked:true,mergeRequests:[mr]}}];
+  let items=old,failure=false;
+  const reports=f.create({gitlabStore:{load:()=>({url:host,token:'fixture'})},gitlabCollector:async()=>{if(failure)throw Object.assign(Error('读取失败'),{reportSafe:true});return items;}});
+  await reports.action('settings',{gitlabProjects:[{host,projectId:7,project}],gitlabAuthors:'cy@example.test'});await reports.action('collect');assert.equal(reports.snapshot({date}).work.items.length,1);
+  items=[];failure=true;await reports.action('collect');assert.equal(reports.snapshot({date}).work.items.length,1);
+  failure=false;await reports.action('collect');assert.equal(reports.snapshot({date}).work.items.length,0);assert.ok(reports.snapshot({date}).entries.every(entry=>entry.sourceActive===false));assert.equal(f.create().snapshot({date}).work.items.length,0);
 });
 
 test('explicit planner association survives restart and inclusion changes do not detach MR work',async t=>{

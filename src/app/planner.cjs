@@ -15,13 +15,29 @@ function taskStatus(value) {
 function completionOf(item,id=randomUUID()) {
   return {...clone(item),id,taskId:item.id};
 }
-function setTaskStatus(state,item,status,time) {
-  const previous=item.status;
+function completionHistory(state) {
+  // 一条待办只展示一条最新完成记录，跨日期也不拆成多条；同名不同任务仍独立。
+  // 最新按写入顺序判断，不能按完成时间排序：补记日期可能早于旧副本，读取时不删除原快照。
+  const items=new Map();
+  for(const item of state.completedTasks)items.set(item.taskId,item);
+  return [...items.values()];
+}
+function setTaskStatus(state,item,status,time,completedDate) {
+  const previous=item.status,previousTime=item.completedAt;
   item.status=taskStatus(status);
-  item.completedAt=status==='done'?(item.completedAt??time):null;
+  item.completedAt=status==='done'?completionTime(completedDate,item.completedAt,time):null;
   if(status==='done'&&previous!=='done') {
-    if(state.completedTasks.length>=20000)throw Error('完成历史已达 20000 条，请备份并整理历史后重试');
-    state.completedTasks.push(completionOf(item));
+    // 重新处理仍是原待办，复用历史 ID，避免跨天再次完成被计成另一项工作。
+    const completion=state.completedTasks.findLast(record=>record.taskId===item.id);
+    if(completion)Object.assign(completion,completionOf(item,completion.id));
+    else {
+      if(state.completedTasks.length>=20000)throw Error('完成历史已达 20000 条，请备份并整理历史后重试');
+      state.completedTasks.push(completionOf(item));
+    }
+  } else if(status==='done'&&previousTime!==item.completedAt) {
+    // 更正原完成记录的日期，旧版本遗留的其他快照继续保留但不再单独展示。
+    const completion=state.completedTasks.findLast(record=>record.taskId===item.id);
+    if(completion)completion.completedAt=item.completedAt;
   }
 }
 const isAllDay=schedule=>schedule.periods.length===1&&schedule.periods[0].start==='00:00'&&schedule.periods[0].end==='24:00';
@@ -109,21 +125,35 @@ function validDate(value) {
   const [y,m,d]=value.split('-').map(Number),date=new Date(y,m-1,d);
   return y>=2000&&y<=2100&&dateKey(date)===value;
 }
+function completionTime(date,current,time) {
+  if(date===undefined)return current??time;
+  if(!validDate(date)||date>dateKey(time))throw Error('请选择不晚于今天的有效实际完成日期');
+  const previous=current??time;
+  // 只补记日期时不推测具体时刻；同一天原有的精确完成时间保持不变。
+  return dateKey(previous)===date?previous:+new Date(date+'T00:00:00');
+}
 function taskInput(value,now) {
   const title=typeof value?.title==='string'?value.title.trim():'',notes=value?.notes??'';
   if(!title||title.length>200)throw Error('待办名称需为 1–200 字');
   if(typeof notes!=='string'||notes.length>4000)throw Error('备注最多 4000 字');
   if(!['none','today','tomorrow','week','date'].includes(value.deadline))throw Error('请选择完成期限');
+  // 计划日期只参与排期校验，不推导实际完成日期；补记完成由状态变更单独处理。
+  const startDate=value.startDate==null||value.startDate===''?null:value.startDate;
+  if(startDate!==null&&!validDate(startDate))throw Error('请选择有效的计划开始日期');
   let dueDate=null;
   if(value.deadline!=='none') {
-    if(value.deadline==='date') {if(!validDate(value.dueDate))throw Error('请选择有效的截止日期');dueDate=value.dueDate;}
+    if(value.deadline==='date') {if(!validDate(value.dueDate))throw Error('请选择有效的计划结束日期');dueDate=value.dueDate;}
     // 相对期限只在保存时换算一次，之后读取和重启均使用固定日期。
     else {const day=new Date(now);day.setDate(day.getDate()+({today:0,tomorrow:1,week:7}[value.deadline]));dueDate=dateKey(day);}
   }
-  return {title,category:categoryOf(value.category),notes,dueDate};
+  if(startDate&&dueDate&&startDate>dueDate)throw Error('计划结束日期不能早于开始日期');
+  return {title,category:categoryOf(value.category),notes,startDate,dueDate};
 }
 function validateTask(item) {
+  // 旧任务和历史快照只在内存补默认值，不为新增可选字段重写原文件。
+  if(item.startDate===undefined)item.startDate=null;
   if(!item.title||typeof item.title!=='string'||item.title.length>200||typeof item.notes!=='string'||item.notes.length>4000||item.dueDate!==null&&!validDate(item.dueDate)||item.completedAt!==null&&!Number.isFinite(item.completedAt))throw Error('invalid');
+  if(item.startDate!==null&&!validDate(item.startDate)||item.startDate&&item.dueDate&&item.startDate>item.dueDate)throw Error('invalid');
   item.category=categoryOf(item.category);
   item.status=taskStatus(item.status===undefined?(item.completedAt===null?'pending':'done'):item.status);
   if((item.status==='done')!==(item.completedAt!==null))throw Error('invalid');
@@ -203,7 +233,7 @@ function createPlanner({dataDir,now=()=>Date.now(),onChange=()=>{},onDue=()=>{},
     const time=now();
     return {revision,now:time,today:dateKey(time),notifications:state.notifications,error:error||writeError,active:error?[]:state.reminders.filter(item=>item.enabled&&item.run&&time>=item.run.windowStart&&time<item.run.windowEnd&&['waiting','processing'].includes(item.run.state)).map(({id,title,processMinutes,run})=>({id,title,processMinutes,...clone(run)}))};
   }
-  function snapshot(){const {completedTasks,...current}=state;return {...clone(current),historyCount:completedTasks.length,...summary(),today:dateKey(now())};}
+  function snapshot(){const {completedTasks,...current}=state;return {...clone(current),historyCount:completionHistory(state).length,...summary(),today:dateKey(now())};}
   function action(name,value) {
     if(name==='snapshot')return snapshot();
     if(error)throw Error(error);
@@ -211,7 +241,7 @@ function createPlanner({dataDir,now=()=>Date.now(),onChange=()=>{},onDue=()=>{},
       const date=value?.date??dateKey(now()),category=value?.category??'all';
       if(!validDate(date))throw Error('请选择有效的完成日期');
       if(category!=='all')categoryOf(category);
-      return {date,items:clone(state.completedTasks.filter(item=>dateKey(item.completedAt)===date&&(category==='all'||item.category===category)).sort((a,b)=>b.completedAt-a.completedAt))};
+      return {date,items:clone(completionHistory(state).filter(item=>dateKey(item.completedAt)===date&&(category==='all'||item.category===category)).sort((a,b)=>b.completedAt-a.completedAt))};
     }
     tick();
     const time=now(),next=clone(state);
@@ -256,14 +286,14 @@ function createPlanner({dataDir,now=()=>Date.now(),onChange=()=>{},onDue=()=>{},
       const old=value?.id?next.tasks.find(item=>item.id===value.id):null;
       if(value?.id&&!old)throw Error('待办不存在');
       if(!old&&next.tasks.length>=500)throw Error('最多保存 500 条待办，请清理已完成记录');
-      const item={...taskInput({...value,category:value?.category??old?.category},time),id:old?.id||randomUUID(),createdAt:old?.createdAt??time,completedAt:old?.completedAt??null,status:old?.status??'pending'};
-      setTaskStatus(next,item,value.status===undefined?item.status:value.status,time);
+      const item={...taskInput({...value,category:value?.category??old?.category,startDate:value?.startDate===undefined?old?.startDate:value.startDate},time),id:old?.id||randomUUID(),createdAt:old?.createdAt??time,completedAt:old?.completedAt??null,status:old?.status??'pending'};
+      setTaskStatus(next,item,value.status===undefined?item.status:value.status,time,value.completedDate);
       if(old)next.tasks[next.tasks.indexOf(old)]=item;else next.tasks.push(item);
     } else if(name==='toggle-task'||name==='set-task-status'||name==='remove-task') {
       const item=next.tasks.find(item=>item.id===value?.id);if(!item)throw Error('待办不存在');
       if(name==='remove-task')next.tasks=next.tasks.filter(task=>task!==item);
-      else if(name==='set-task-status')setTaskStatus(next,item,value.status,time);
-      else {if(typeof value.completed!=='boolean')throw Error('无效的完成状态');setTaskStatus(next,item,value.completed?'done':'pending',time);}
+      else if(name==='set-task-status')setTaskStatus(next,item,value.status,time,value.completedDate);
+      else {if(typeof value.completed!=='boolean')throw Error('无效的完成状态');setTaskStatus(next,item,value.completed?'done':'pending',time,value.completedDate);}
     } else throw Error('不支持的日程操作');
     save(next);return snapshot();
   }

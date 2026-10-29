@@ -69,6 +69,12 @@
 .planner-field { display:flex; flex-direction:column; gap:8px; margin-bottom:18px; font-size:var(--ui-font-control); }
 .planner-field input,.planner-field textarea { width:100%; min-width:0; }
 .planner-field small { font-size:var(--ui-font-small); color:var(--ui-text-subtle); line-height:1.7; }
+.planner-task-schedule { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; line-height:20px; }
+.planner-date-heading { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:6px 10px; }
+.planner-date-shortcuts>.ui-select-trigger { width:auto; min-height:0; padding:0; border:0; background:transparent; color:var(--ui-accent); font-size:var(--ui-font-small); gap:4px; }
+.planner-date-shortcuts .ui-select-menu { left:auto; right:0; width:180px; }
+.planner-task-schedule-note { margin:0 0 18px; }
+.planner-task-plan { display:block; }
 .planner-follow { margin:20px 0; }
 .planner-dialog-actions { justify-content:flex-end; margin-top:24px; }
 /* 提醒时段可使表单超过窗口高度，滚动编辑时始终保留保存和取消入口。 */

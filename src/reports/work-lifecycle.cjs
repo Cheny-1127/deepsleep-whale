@@ -1,4 +1,5 @@
 'use strict';
+const {isMergeCommit}=require('./commit-authorship.cjs');
 const active=entry=>!entry.removed&&entry.sourceActive!==false&&entry.included!==false;
 const featureBranch=value=>typeof value==='string'&&value.length<=500&&/^(?:feat(?:ure)?|hotfix)[/-]/i.test(value)&&!/[\0\r\n]/.test(value);
 function mrReference(value){
@@ -17,7 +18,7 @@ const repository=entry=>{
 };
 const incompleteMerge=mr=>!mr?.state||mr.state==='merged'&&(!mr.targetBranch||!Number.isFinite(mr.mergedAt));
 function needsMrRefresh(entry){
-  if(entry.source!=='gitlab'||entry.removed||entry.sourceActive===false)return false;
+  if(entry.source!=='gitlab'||entry.removed||entry.sourceActive===false||isMergeCommit(entry))return false;
   const meta=entry.sourceMeta||{};
   return !meta.mrChecked||meta.mrLifecycleChecked!==true&&(meta.mergeRequests||[]).some(value=>incompleteMerge(mrReference(value)));
 }
@@ -43,7 +44,7 @@ function createLifecycle(entries){
     if(entry.source!=='jenkins'||meta.release!==true||meta.rangeVerified!==true||meta.direction!=='forward'||meta.environment&&meta.environment!=='prod'||!Number.isFinite(meta.releasedAt))continue;
     const targets=new Map();
     for(const value of (meta.mergeRequests||[]).map(mrReference).filter(Boolean)){const mr=references.get(value.url)||value;targets.set('mr:'+mr.url,{key:'mr:'+mr.url,mr});}
-    const repo=repository(entry);if(repo)for(const sha of meta.commitShas||[]){const value=commits.get(repo+'|'+sha);if(value)targets.set(value.key,value);}
+    const repo=repository(entry);if(repo)for(const sha of meta.ownCommitShas||meta.commitShas||[]){const value=commits.get(repo+'|'+sha);if(value)targets.set(value.key,value);}
     releaseFeatures.set(entry.id||entry.sourceKey,[...targets.values()]);
     for(const key of targets.keys()){if(!releases.has(key))releases.set(key,[]);releases.get(key).push(meta.releasedAt);}
   }
