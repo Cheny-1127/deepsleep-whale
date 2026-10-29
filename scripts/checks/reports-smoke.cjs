@@ -9,10 +9,12 @@ const groupedMatches=process.env.WHALE_REPORT_MATCH_GROUP_ONLY==='1';
 const removingWorks=process.env.WHALE_REPORT_REMOVE_ONLY==='1';
 const lifecycleOnly=process.env.WHALE_REPORT_LIFECYCLE_ONLY==='1';
 const branchPolicy=process.env.WHALE_REPORT_BRANCH_POLICY_ONLY==='1';
+const previewOnly=process.env.WHALE_REPORT_PREVIEW_ONLY==='1';
+const previewScrollOnly=process.env.WHALE_REPORT_PREVIEW_SCROLL_ONLY==='1';
 const {MODULE_IDS}=require('../../src/app/module-settings.cjs');
 fs.writeFileSync(path.join(dir,'modules.json'),JSON.stringify(Object.fromEntries(MODULE_IDS.map(id=>[id,['planner','reports'].includes(id)]))));
 fs.writeFileSync(path.join(dir,'settings.json'),JSON.stringify({sources:{codex:false,cursor:false},notifications:false,sound:false}));
-if(process.env.WHALE_REPORT_SUMMARY_ONLY==='1'||process.env.WHALE_REPORT_HISTORY_ONLY==='1'||process.env.WHALE_REPORT_MATCH_ONLY==='1'||groupedMatches||removingWorks||lifecycleOnly||branchPolicy){
+if(process.env.WHALE_REPORT_SUMMARY_ONLY==='1'||process.env.WHALE_REPORT_HISTORY_ONLY==='1'||process.env.WHALE_REPORT_MATCH_ONLY==='1'||groupedMatches||removingWorks||lifecycleOnly||branchPolicy||previewOnly||previewScrollOnly){
   const {defaultSettings}=require('../../src/reports/model.cjs');
   const mr=iid=>({iid,title:'修复事项 '+iid,url:'https://gitlab.example.test/business/service/-/merge_requests/'+iid,state:'merged',sourceBranch:'feat-cy-task-'+iid,targetBranch:'main',mergedAt:Date.parse('2026-10-26T08:00:00+08:00')});
   const entry=(id,extra)=>({id,sourceKey:id,date:'2026-10-26',title:'原始提交 '+id,project:'business/service',details:'',source:'gitlab',status:'done',included:true,sourceActive:true,removed:false,edited:false,createdAt:now,updatedAt:now,...extra});
@@ -20,6 +22,12 @@ if(process.env.WHALE_REPORT_SUMMARY_ONLY==='1'||process.env.WHALE_REPORT_HISTORY
   for(const iid of [1,2,3])for(let n=0;n<3;n++)records.push(entry('commit-'+iid+'-'+n,{sourceMeta:{mrChecked:true,committedAt:now-3600000,mergeRequests:[mr(iid)]}}));
   for(const [id,iid,hour,target] of [['r1',1,11,'原有服务器'],['r2',2,16,'原有服务器'],['r3',2,17,'EKS'],['r4',3,19,'原有服务器']])records.push(entry(id,{source:'jenkins',title:'原始生产发布 '+id,evidence:'https://jenkins.example.test/job/service/42/',sourceMeta:{release:true,direction:'forward',rangeVerified:true,releasedAt:Date.parse('2026-10-26T'+hour+':00:00+08:00'),target,buildNumber:42,mergeRequests:[mr(iid)]}}));
   records.push(entry('planner',{source:'planner',title:'日程回归验证',details:'补齐边界条件验证',sourceMeta:{completedAt:now}}));
+  if(previewOnly)records.splice(0,records.length,
+    entry('preview-code',{sourceMeta:{mrChecked:true,mergeRequests:[{...mr(1),title:'修复短剧分发遗漏剧本及制作资料同步'}]}}),
+    entry('preview-planner',{source:'planner',title:'整理客服交接文档',details:'补充值班安排',sourceMeta:{completedAt:now}}),
+    entry('preview-risk',{source:'manual',title:'等待渠道确认结算规则',status:'blocked'}),
+    entry('preview-plan',{source:'manual',title:'梳理退款回归用例',status:'planned'}));
+  if(previewScrollOnly)records.splice(0,records.length,entry('preview-scroll',{source:'manual',title:'阅读预览滚动检查'}));
   if(process.env.WHALE_REPORT_MATCH_ONLY==='1')records.splice(0,records.length,
     entry('match-code',{title:'修复会员临近过期时缓存被写成永久有效的问题',evidence:'https://gitlab.example.test/business/service/-/commit/'+'a'.repeat(40),sourceMeta:{mrChecked:true,mergeRequests:[{...mr(1),title:'修复会员临近过期时缓存被写成永久有效的问题'}]}}),
     entry('match-planner',{source:'planner',project:'日程工作',title:'调整VIP播放缓存问题',details:'解决 epilora 到期前最后不足 1 秒的边界漏洞：时间取整为 0 → 工具写成永久缓存 → 读取不验证有效期 → 持续按 VIP 放行。',sourceMeta:{completedAt:now}}),
@@ -27,7 +35,7 @@ if(process.env.WHALE_REPORT_SUMMARY_ONLY==='1'||process.env.WHALE_REPORT_HISTORY
     entry('ordinary-planner',{source:'planner',project:'日程工作',title:'归档合同审批材料',details:'上传签署文件并登记合同编号',sourceMeta:{completedAt:now}}));
   if(process.env.WHALE_REPORT_MATCH_ONLY==='1')for(let i=0;i<12;i++)records.push(entry('match-extra-'+i,{title:'补充提交 '+i,details:'会员、缓存、永久',sourceMeta:{mrChecked:true,mergeRequests:[{...mr(1),title:'修复会员临近过期时缓存被写成永久有效的问题'}]}}));
   if(groupedMatches)records.splice(0,records.length,
-    ...[['admin','应用管理支持客户端类型配置与筛选'],['api','应用管理支持客户端类型并修复跨应用列表查询']].map(([project,title],index)=>entry('group-'+project,{project:'business/'+project,sourceMeta:{mrChecked:true,mergeRequests:[{iid:index+1,title,url:'https://gitlab.example.test/business/'+project+'/-/merge_requests/'+(index+1)}]}})),
+    ...[['admin','应用管理支持客户端类型配置与筛选'],['api','应用管理支持客户端类型并修复跨应用列表查询']].map(([project,title],index)=>entry('group-'+project,{project:'business/'+project,sourceMeta:{mrChecked:true,mergeRequests:[{iid:index+1,title,url:'https://gitlab.example.test/business/'+project+'/-/merge_requests/'+(index+1),sourceBranch:'feat-cy-102'+(7+index)+'-app-client-type'}]}})),
     entry('group-planner',{source:'planner',project:'日程工作',title:'APP应用类型新增',details:'h5、app、tiktok',sourceMeta:{completedAt:now}}));
   if(removingWorks)records.splice(0,records.length,...[['pay',119,2],['serve',392,1]].flatMap(([project,iid,count])=>Array.from({length:count},(_,i)=>entry('remove-'+project+'-'+i,{project:'business/'+project,sourceMeta:{mrChecked:true,mergeRequests:[{iid,title:'Feat/zhouliuqi 1021 h5 pagsmile pay',url:'https://gitlab.example.test/business/'+project+'/-/merge_requests/'+iid}]}}))));
   if(lifecycleOnly){
@@ -79,9 +87,9 @@ net.fetch=async(raw,options)=>{
     if(url.pathname.endsWith('/wfapi/describe'))return Response.json({stages:[{name:'Deploy to EKS',status:'SUCCESS',startTimeMillis:url.pathname.includes('/42/')?${now}-50000:${now}-86450000,durationMillis:10000}]});
     return Response.json({allBuilds:[42,41].map(number=>({number,building:false,result:'SUCCESS',timestamp:number===42?${now}-60000:${now}-86460000,duration:30000,actions:[{causes:[{userId:number===42?'cy':'other'}]},{remoteUrls:['https://gitlab.example.test/business/orders.git'],lastBuiltRevision:{SHA1:(number===42?'b':'a').repeat(40)}}]}))});
   }
-  if(url.pathname.endsWith('/repository/compare'))return Response.json({commits:url.searchParams.get('to')==='b'.repeat(40)?[{id:'b'.repeat(40),title:'发布订单超时修复',author_name:'其他同事'}]:[]});
+  if(url.pathname.endsWith('/repository/compare'))return Response.json({commits:url.searchParams.get('to')==='b'.repeat(40)?[{id:'b'.repeat(40),title:'发布订单超时修复',author_name:'其他同事',author_email:'other@example.test'},{id:'c'.repeat(40),title:'补充超时校验',author_name:'CY',author_email:'cy@example.test'}]:[]});
   if(url.pathname.endsWith('/merge_requests'))return Response.json([{iid:9,project_id:21,state:'merged',title:'订单超时修复',merge_commit_sha:'b'.repeat(40)}],{headers:{'x-next-page':''}});
-  if(url.pathname.endsWith('/merge_requests/9/commits'))return Response.json([{id:'b'.repeat(40),title:'发布订单超时修复',message:['发布订单超时修复','补齐超时重试与回归'].join(String.fromCharCode(10)),author_name:'其他同事'}],{headers:{'x-next-page':''}});
+  if(url.pathname.endsWith('/merge_requests/9/commits'))return Response.json([{id:'b'.repeat(40),title:'发布订单超时修复',message:['发布订单超时修复','补齐超时重试与回归'].join(String.fromCharCode(10)),author_name:'其他同事',author_email:'other@example.test'},{id:'c'.repeat(40),title:'补充超时校验',author_name:'CY',author_email:'cy@example.test'}],{headers:{'x-next-page':''}});
   return Response.json([],{headers:{'x-next-page':''}});
 };
 if(process.env.WHALE_REPORT_HISTORY_ONLY==='1'){
@@ -152,6 +160,73 @@ async function entries(){return (await panel.evaluate(()=>window.whale.reports('
 async function policy(){const state=await app.evaluate(({BrowserWindow})=>({mode:global.testWindowPolicy.mode,events:global.testWindowPolicy.events,windows:BrowserWindow.getAllWindows().map(win=>({visible:win.isVisible(),focused:win.isFocused(),top:win.isAlwaysOnTop()}))}));assert.ok(state.windows.every(w=>!w.focused&&!w.top));assert.ok(state.events.every(e=>e.type!=='focus'));if(state.mode==='hidden'){assert.ok(state.windows.every(w=>!w.visible));assert.deepEqual(state.events,[]);}}
 (async()=>{try{
   await launch();
+  if(previewScrollOnly){
+    await panel.waitForFunction(()=>document.querySelectorAll('#report-list .report-work-card').length===1);
+    await app.evaluate(({BrowserWindow})=>{const win=BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/index.html'));win.setMinimumSize(700,680);win.setContentSize(1060,680);});await panel.waitForFunction(()=>innerWidth===1060&&innerHeight===680);
+    await panel.locator('#report-source-status > summary').click();
+    const positions=()=>panel.evaluate(()=>({background:document.scrollingElement.scrollTop,main:document.querySelector('main').scrollTop,dialog:document.getElementById('report-preview-dialog').scrollTop}));
+    async function wheel(target,delta){
+      const bounds=await target.boundingBox();await panel.mouse.move(bounds.x+bounds.width/2,bounds.y+bounds.height/2);await panel.mouse.wheel(0,delta);
+      await panel.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))));
+    }
+    const dialog=panel.locator('#report-preview-dialog'),preview=panel.locator('#report-day-preview'),source=panel.locator('#report-day-content');
+    async function boundaries(target,label){
+      for(const [edge,delta] of [['top',-500],['bottom',500]]){
+        await target.evaluate((el,edge)=>{el.scrollTop=edge==='top'?0:el.scrollHeight;},edge);const before=await positions();await wheel(target,delta);
+        assert.deepEqual(await positions(),before,label+' '+edge+' must not scroll the outer dialog or background');
+      }
+    }
+    for(const long of [false,true]){
+      if(long){
+        const response=await panel.evaluate(()=>window.whale.reports('save-entry',{id:'preview-scroll',date:'2026-10-26',title:'阅读预览滚动检查',status:'done',included:true,details:Array.from({length:40},(_,i)=>'第 '+(i+1)+' 项：验证剧本、制作资料及渠道同步结果。').join('\n')}));assert.equal(response.error,undefined);await panel.locator('#report-date').dispatchEvent('change');
+      }
+      await panel.evaluate(()=>window.scrollTo(0,160));const background=await positions();assert.ok(background.background>0);await panel.locator('#report-preview-day').click();assert.equal((await positions()).background,background.background);
+      assert.equal(await preview.evaluate(el=>el.scrollHeight>el.clientHeight),long);
+      if(long){const before=await positions();await wheel(preview,200);await panel.waitForFunction(()=>document.getElementById('report-day-preview').scrollTop>0);assert.deepEqual(await positions(),before,'reading must scroll inside the preview');}
+      await boundaries(preview,long?'long preview':'short preview');
+      await panel.getByRole('tab',{name:'Markdown 源码',exact:true}).click();
+      if(long){const before=await positions();await wheel(source,120);await panel.waitForFunction(()=>document.getElementById('report-day-content').scrollTop>0);assert.deepEqual(await positions(),before,'source must scroll inside the textarea');}
+      await boundaries(source,long?'long source':'short source');
+      await dialog.locator('[data-close]').click();assert.equal((await positions()).background,background.background);
+      const before=await positions();await wheel(panel.locator('#report-source-summary'),200);await panel.waitForFunction(before=>document.scrollingElement.scrollTop>before,before.background);assert.ok((await positions()).background>before.background,'closing the preview restores background scrolling');
+    }
+    await policy();assert.deepEqual(errors,[]);console.log('PASS: short/long reading and Markdown source contain scrolling at both boundaries, background position stays fixed while open and scrolls after close; isolated hidden windows');return;
+  }
+  if(previewOnly){
+    await panel.waitForFunction(()=>document.querySelectorAll('#report-list .report-work-card').length===4);
+    const original=await entries(),title='修复短剧分发遗漏剧本及制作资料同步并补齐跨应用的数据校验';
+    const description='验证剧本与资料同步\n保留 *字面星号* 与 <img src=x onerror=alert(1)>';
+    const card=panel.locator('#report-list .report-work-card').filter({has:panel.getByRole('heading',{name:'修复短剧分发遗漏剧本及制作资料同步',exact:true})});
+    await card.locator('.report-work-title-group').getByRole('button',{name:'修改信息',exact:true}).click();
+    const form=panel.locator('#report-work-form');await form.locator('[name="title"]').fill(title);await form.locator('[name="description"]').fill(description);await form.locator('[type="submit"]').click();
+    await panel.waitForFunction(title=>!document.getElementById('report-work-dialog').open&&document.getElementById('report-list').textContent.includes(title),title);
+    assert.deepEqual(await entries(),original);
+    const planner=panel.locator('#report-list .report-work-card').filter({has:panel.getByRole('heading',{name:'整理客服交接文档',exact:true})});
+    await planner.locator('.report-work-title-group').getByRole('button',{name:'修改信息',exact:true}).click();assert.equal(await panel.locator('#report-entry-dialog').isVisible(),true);await panel.locator('#report-entry-dialog [data-close]').click();
+    const expected=(await panel.evaluate(()=>window.whale.reports('preview-day',{date:'2026-10-26'}))).value.content;
+    const dialog=panel.locator('#report-preview-dialog'),preview=panel.locator('#report-day-preview'),source=panel.locator('#report-day-content');
+    for(const width of [760,1060]){
+      await app.evaluate(({BrowserWindow},width)=>{const win=BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/index.html'));win.setMinimumSize(700,680);win.setSize(width,1000);},width);await panel.waitForFunction(width=>innerWidth===width,width);
+      assert.ok(await panel.locator('main').evaluate(el=>el.scrollWidth<=el.clientWidth));
+      for(const work of await panel.locator('#report-list .report-work-card').all()){
+        assert.equal(await work.locator('.report-work-controls').getByRole('button',{name:'修改信息',exact:true}).count(),0);
+        const heading=work.locator('.report-work-title-group'),text=await heading.locator('h3').boundingBox(),icon=await heading.getByRole('button',{name:'修改信息',exact:true}).boundingBox(),badge=await work.locator('.report-work-badge').boundingBox();
+        assert.ok(icon.x>=text.x+text.width&&icon.x-text.x-text.width<12);assert.ok(Math.abs(icon.y-text.y)<5);assert.ok(badge.x>=icon.x+icon.width);
+      }
+      await panel.screenshot({path:path.join(out,`work-reports-title-edit-${width}.png`),fullPage:true});
+      await panel.locator('#report-preview-day').click();assert.equal(await preview.isVisible(),true);assert.equal(await source.isVisible(),false);assert.equal(await panel.locator('#report-day-preview-tab').getAttribute('aria-selected'),'true');
+      assert.equal(await preview.locator('h1').innerText(),'工作日报 · 2026-10-26');assert.deepEqual(await preview.locator('h2').allTextContents(),['今日工作','问题与风险','工作计划']);assert.ok((await preview.locator('strong').allTextContents()).includes(title));
+      assert.match(await preview.locator('ul > li > ul').first().innerText(),/验证剧本与资料同步/);assert.match(await preview.innerText(),/保留 \*字面星号\* 与 <img src=x onerror=alert\(1\)>/);assert.equal(await preview.locator('img, script, iframe').count(),0);
+      assert.ok(await preview.evaluate(el=>el.scrollWidth<=el.clientWidth));assert.ok(await dialog.evaluate(el=>el.scrollWidth<=el.clientWidth));
+      assert.ok(await panel.locator('#report-archive-day').evaluate(el=>{const rect=el.getBoundingClientRect();return rect.top>=0&&rect.bottom<=innerHeight;}));
+      await panel.screenshot({path:path.join(out,`work-reports-daily-preview-${width}.png`),fullPage:true});
+      await panel.getByRole('tab',{name:'Markdown 源码',exact:true}).click();assert.equal(await source.isVisible(),true);assert.equal(await preview.isVisible(),false);assert.equal(await source.inputValue(),expected);
+      await panel.locator('#report-day-source-tab').press('ArrowLeft');assert.equal(await preview.isVisible(),true);assert.equal(await panel.locator('#report-day-preview-tab').evaluate(el=>el===document.activeElement),true);
+      await panel.locator('#report-day-preview-tab').press('End');assert.equal(await source.isVisible(),true);await dialog.locator('[data-close]').click();
+    }
+    const archive=await panel.evaluate(()=>window.whale.reports('archive-day',{date:'2026-10-26'}));assert.equal(archive.error,undefined);assert.ok(fs.readFileSync(archive.value.path,'utf8').includes(expected.trim()));
+    assert.deepEqual(await entries(),original);await policy();assert.deepEqual(errors,[]);console.log('PASS: title-adjacent edit, rendered daily Markdown, literal source text, keyboard tabs, unchanged Markdown archive and 760/1060px layout; isolated hidden windows');return;
+  }
   if(branchPolicy){
     const card=panel.locator('#report-list .report-work-card');await panel.waitForFunction(async()=>{const result=await window.whale.reports('snapshot',{date:'2026-10-26'});return !result.value.needsMrRefresh&&document.querySelector('#report-list .report-work-badge')?.textContent==='已完成';});
     const fixed=(await panel.evaluate(()=>window.whale.reports('snapshot',{date:'2026-10-26'}))).value;
@@ -216,27 +291,40 @@ async function policy(){const state=await app.evaluate(({BrowserWindow})=>({mode
     console.log('PASS: direct work removal, cancel/confirm, multiple sources, preserved other work, restart and empty state, 760/1060px layout');return;
   }
   if(groupedMatches){
-    let matches=panel.locator('#report-matches');const cards=()=>matches.locator('.report-work-card'),original=await entries();
+    let matches=panel.locator('#report-matches');const cards=()=>matches.locator('.report-work-card'),original=await entries(),snapshot=async()=>(await panel.evaluate(()=>window.whale.reports('snapshot',{date:'2026-10-26'}))).value;
+    const titleForm=()=>panel.locator('#report-match-title-form'),editTitle=()=>matches.getByRole('button',{name:'编辑组标题',exact:true});
     await panel.waitForFunction(()=>document.querySelectorAll('#report-match-list .report-match').length===1);
+    const originalWork=(await snapshot()).work;
     assert.match(await matches.innerText(),/可能是同一件工作 · 1 组/);assert.equal(await cards().count(),3);assert.equal(await panel.locator('#report-list .report-work-card').count(),0);
-    assert.equal(await matches.locator('.report-match-title').innerText(),'APP应用类型新增');await matches.locator('.report-match > summary').click();
+    assert.equal(await matches.locator('.report-match-title').innerText(),'APP应用类型新增');assert.match(await matches.locator('.report-match-reason').innerText(),/相同任务描述：app client type/);
+    assert.equal(await matches.locator('.report-match').getAttribute('open'),null);await editTitle().click();
+    assert.equal(await matches.locator('.report-match').getAttribute('open'),null);assert.equal(await panel.locator('#report-match-title-dialog').isVisible(),true);assert.equal(await titleForm().locator('[name="title"]').inputValue(),'APP应用类型新增');
+    await titleForm().locator('[name="title"]').fill('取消的组标题');await titleForm().getByRole('button',{name:'取消',exact:true}).click();assert.equal(await matches.locator('.report-match-title').innerText(),'APP应用类型新增');assert.deepEqual((await snapshot()).work,originalWork);
+    await editTitle().press('Enter');assert.equal(await matches.locator('.report-match').getAttribute('open'),null);await titleForm().locator('[name="title"]').fill('');assert.equal(await titleForm().evaluate(form=>form.checkValidity()),false);
+    await titleForm().locator('[name="title"]').fill('Escape 取消的标题');await titleForm().locator('[name="title"]').press('Escape');assert.equal(await panel.locator('#report-match-title-dialog').isVisible(),false);assert.equal(await matches.locator('.report-match-title').innerText(),'APP应用类型新增');
+    await editTitle().click();await titleForm().locator('[name="title"]').fill('完善剧本管理与短剧必填校验并统一字段约束');await titleForm().locator('[name="title"]').press('Enter');
+    await panel.waitForFunction(()=>!document.getElementById('report-match-title-dialog').open&&document.querySelector('.report-match-title')?.textContent==='完善剧本管理与短剧必填校验并统一字段约束');assert.equal(await matches.locator('.report-match').getAttribute('open'),null);assert.deepEqual((await snapshot()).work,originalWork);assert.deepEqual(await entries(),original);
+    await matches.locator('.report-match > summary').click();
     for(const width of [760,1060]){
       await app.evaluate(({BrowserWindow},width)=>{const win=BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/index.html'));win.setMinimumSize(700,680);win.setSize(width,1000);},width);
-      await panel.waitForFunction(width=>window.innerWidth===width,width);assert.ok(await panel.locator('main').evaluate(node=>node.scrollWidth<=node.clientWidth));
+      await panel.waitForFunction(width=>window.innerWidth===width,width);assert.ok(await panel.locator('main').evaluate(node=>node.scrollWidth<=node.clientWidth));assert.equal(await editTitle().isVisible(),true);
       assert.equal(await matches.locator('.report-match-grid').evaluate(node=>getComputedStyle(node).gridTemplateColumns.split(' ').length),width===760?1:2);
-      const bounds=await Promise.all((await cards().all()).map(card=>card.boundingBox())),footer=await matches.locator('.report-match-footer').boundingBox();
-      assert.ok(bounds.every(box=>box&&footer.y>=box.y+box.height));await panel.screenshot({path:path.join(out,`work-reports-grouped-${width}.png`),fullPage:true});
+      const title=await matches.locator('.report-match-title').boundingBox(),edit=await editTitle().boundingBox();assert.ok(edit.x>=title.x+title.width-1);
+      const bounds=await Promise.all((await cards().all()).map(card=>card.boundingBox())),footer=await matches.locator('.report-match-footer').boundingBox();assert.ok(bounds.every(box=>box&&footer.y>=box.y+box.height));
+      await panel.screenshot({path:path.join(out,`work-reports-grouped-${width}.png`),fullPage:true});
     }
+    await editTitle().click();await panel.screenshot({path:path.join(out,'work-reports-group-title-edit.png'),fullPage:true});await titleForm().getByRole('button',{name:'取消',exact:true}).click();assert.notEqual(await matches.locator('.report-match').getAttribute('open'),null);
     await matches.getByRole('button',{name:'不是同一件',exact:true}).click();await panel.waitForFunction(()=>document.querySelectorAll('#report-match-list .report-match').length===0);
     assert.equal(await panel.locator('#report-list .report-work-card').count(),3);await policy();await app.close();app=null;await launch();matches=panel.locator('#report-matches');
-    assert.equal(await matches.locator('.report-match').count(),0);await matches.getByRole('button',{name:'重新检查已忽略的关联',exact:true}).click();
-    await panel.waitForFunction(()=>document.querySelectorAll('#report-match-list .report-match').length===1);assert.equal(await cards().count(),3);await matches.locator('.report-match > summary').click();
-    await matches.getByRole('button',{name:'确认合并',exact:true}).click();await panel.waitForFunction(()=>document.querySelectorAll('.report-work-card').length===1);
-    assert.deepEqual(await entries(),original);assert.equal(await panel.locator('#report-list .report-work-card > .report-work-heading > h3').innerText(),'APP应用类型新增');
-    await panel.getByRole('button',{name:'解除合并',exact:true}).click();await panel.locator('.ui-confirm-dialog').getByRole('button',{name:'解除合并',exact:true}).click();
-    await panel.waitForFunction(()=>document.querySelectorAll('.report-work-card').length===3);assert.equal(await matches.locator('.report-match').count(),0);assert.deepEqual(await entries(),original);
-    assert.equal((await app.evaluate(()=>global.reportRequests)).length,0);await policy();assert.deepEqual(errors,[]);
-    console.log('PASS: one group with three work cards, 760/1060px layout, dismiss/restart/restore, merge/unmerge and unchanged sources');return;
+    assert.equal(await matches.locator('.report-match').count(),0);await matches.getByRole('button',{name:'重新检查已忽略的关联',exact:true}).click();await panel.waitForFunction(()=>document.querySelectorAll('#report-match-list .report-match').length===1);
+    assert.equal(await matches.locator('.report-match-title').innerText(),'完善剧本管理与短剧必填校验并统一字段约束');assert.deepEqual((await snapshot()).work,originalWork);assert.deepEqual(await entries(),original);
+    await editTitle().click();await titleForm().locator('[name="title"]').fill('完善剧本管理');await titleForm().getByRole('button',{name:'保存标题',exact:true}).click();await panel.waitForFunction(()=>!document.getElementById('report-match-title-dialog').open&&document.querySelector('.report-match-title')?.textContent==='完善剧本管理');
+    await matches.locator('.report-match > summary').click();await matches.getByRole('button',{name:'确认合并',exact:true}).click();await panel.waitForFunction(()=>document.querySelectorAll('.report-work-card').length===1);
+    assert.equal(await panel.locator('#report-work-dialog').isVisible(),false);assert.equal(await panel.locator('#report-list .report-work-card > .report-work-heading > .report-work-title-group > h3').innerText(),'完善剧本管理');assert.deepEqual(await entries(),original);
+    await panel.locator('#report-preview-day').click();assert.match(await panel.locator('#report-day-content').inputValue(),/完善剧本管理/);await panel.locator('#report-preview-dialog [data-close]').click();
+    await panel.getByRole('button',{name:'解除合并',exact:true}).click();await panel.locator('.ui-confirm-dialog').getByRole('button',{name:'解除合并',exact:true}).click();await panel.waitForFunction(()=>document.querySelectorAll('.report-work-card').length===3);
+    assert.equal(await matches.locator('.report-match').count(),0);assert.deepEqual(await entries(),original);assert.equal((await app.evaluate(()=>global.reportRequests)).length,0);await policy();assert.deepEqual(errors,[]);
+    console.log('PASS: header title icon, collapsed/expanded state preserved, keyboard save/cancel, no implicit merge or source edits, restart, direct merge using saved title, preview, 760/1060px layout and unmerge');return;
   }
   if(process.env.WHALE_REPORT_MATCH_ONLY==='1'){
     await panel.waitForFunction(()=>document.querySelectorAll('#report-match-list .report-match').length===1);
@@ -262,7 +350,7 @@ async function policy(){const state=await app.evaluate(({BrowserWindow})=>({mode
     assert.equal(await source.getAttribute('open'),'');assert.equal(await panel.evaluate(()=>window.reportComparisonNode.isConnected),true);
     const right=matches.locator('.report-work-card').last(),plannerReference=right.locator('.report-planner-reference'),plannerPopup=plannerReference.locator('.report-planner-popup');
     assert.equal(await right.locator('.report-source-card').count(),0);
-    assert.equal(await right.locator(':scope > .report-work-heading > h3').count(),1);assert.equal(await right.locator('.report-work-meta > button.outline').count(),0);
+    assert.equal(await right.locator(':scope > .report-work-heading > .report-work-title-group > h3').count(),1);assert.equal(await right.locator('.report-work-meta > button.outline').count(),0);
     await plannerReference.locator('.report-planner-trigger').hover();await plannerPopup.waitFor({state:'visible'});assert.match(await plannerPopup.innerText(),/完成日期：2026-10-26/);
     await plannerReference.locator('.report-planner-trigger').focus();await plannerReference.locator('.report-planner-trigger').press('Escape');assert.equal(await plannerPopup.isVisible(),false);await panel.locator('#report-day-summary').click();
     const updated=await panel.evaluate(async()=>{const response=await window.whale.reports('snapshot',{date:'2026-10-26'}),entry=response.value.entries.find(entry=>entry.id==='match-planner');return window.whale.reports('save-entry',{...entry,details:entry.details+' 补充回归结果。'});});assert.equal(updated.error,undefined);
@@ -309,7 +397,7 @@ async function policy(){const state=await app.evaluate(({BrowserWindow})=>({mode
     assert.equal(await panel.locator('#report-list .report-release-list:visible').count(),0);
     assert.match(await panel.locator('#report-list').innerText(),/business\/service/);assert.match(await panel.locator('#report-list').innerText(),/MR !2/);assert.match(await panel.locator('#report-list').innerText(),/GitLab 提交 3 条/);
     assert.equal(await panel.locator('#report-list .report-work-release-summary').count(),3);assert.match(await panel.locator('#report-list .report-work-release-summary').nth(1).innerText(),/2 次发布.*原有服务器、EKS.*17:00/);assert.doesNotMatch(await panel.locator('#report-list').innerText(),/Merge branch/);
-    assert.equal(await panel.locator('#report-list .report-work-controls').getByRole('button',{name:'修改信息',exact:true}).count(),4);assert.equal(await panel.locator('#report-list').getByRole('button',{name:'合并同一事项',exact:true}).count(),0);assert.equal(await panel.locator('#report-merge').isEnabled(),true);
+    assert.equal(await panel.locator('#report-list .report-work-title-group').getByRole('button',{name:'修改信息',exact:true}).count(),4);assert.equal(await panel.locator('#report-list').getByRole('button',{name:'合并同一事项',exact:true}).count(),0);assert.equal(await panel.locator('#report-merge').isEnabled(),true);
     assert.equal(await panel.locator('.report-work-badge').filter({hasText:'已完成'}).count(),4);
     const evidence=panel.locator('#report-list .report-work-evidence').first();await evidence.locator('summary').click();assert.match(await evidence.innerText(),/MR !|发布人|版本|提交/);await evidence.locator('summary').click();
     if(process.env.WHALE_REPORT_HISTORY_ONLY==='1'){
@@ -320,7 +408,7 @@ async function policy(){const state=await app.evaluate(({BrowserWindow})=>({mode
       await panel.locator('#report-date').dispatchEvent('change');await panel.waitForFunction(()=>!document.getElementById('report-collect').disabled);assert.equal((await app.evaluate(()=>global.reportRequests)).length,requests);
       assert.equal(await panel.locator('#report-repair-day').isVisible(),false);assert.doesNotMatch(await panel.locator('#report-list').innerText(),/历史提交尚未|Merge branch/);
     }
-    await panel.locator('#report-source-status > summary').click();assert.match(await panel.locator('#report-source-range').innerText(),/回溯结果.*不代表所选日期/);await panel.locator('#report-source-status > summary').click();
+    await panel.locator('#report-source-status > summary').click();assert.match(await panel.locator('#report-source-range').innerText(),/回溯采集的结果.*不代表所选日期/);await panel.locator('#report-source-status > summary').click();
     for(const width of [860,1060]){await app.evaluate(({BrowserWindow},width)=>BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/index.html')).setSize(width,1000),width);assert.ok(await panel.locator('main').evaluate(el=>el.scrollWidth<=el.clientWidth));await panel.screenshot({path:path.join(out,`work-reports-${process.env.WHALE_REPORT_HISTORY_ONLY==='1'?'history':'summary'}-${width}.png`),fullPage:true});}
     await panel.locator('#report-preview-day').click();const preview=await panel.locator('#report-day-content').inputValue();assert.match(preview,/今日工作 4 项/);assert.doesNotMatch(preview,/Merge branch|[0-9a-f]{40}|MR !|原有服务器|EKS|#42|生产发布/);await panel.locator('#report-preview-dialog [data-close]').click();
     const beforeEdit=(await panel.evaluate(()=>window.whale.reports('snapshot',{date:'2026-10-26'}))).value,automatic=beforeEdit.work.items.find(item=>item.mr);
@@ -333,7 +421,7 @@ async function policy(){const state=await app.evaluate(({BrowserWindow})=>({mode
       await app.evaluate(({BrowserWindow},width)=>{const win=BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/index.html'));win.setMinimumSize(700,680);win.setSize(width,1000);},width);await panel.waitForFunction(width=>innerWidth===width,width);
       assert.ok(await panel.locator('main').evaluate(el=>el.scrollWidth<=el.clientWidth));
       for(const card of await panel.locator('#report-list .report-work-card').all()){
-        const title=await card.locator('.report-work-heading > h3').boundingBox(),badge=await card.locator('.report-work-heading > .report-work-badge').boundingBox();assert.ok(badge.x>=title.x+title.width);assert.ok(Math.abs(badge.y-title.y)<5);
+        const title=await card.locator('.report-work-heading > .report-work-title-group > h3').boundingBox(),badge=await card.locator('.report-work-heading > .report-work-badge').boundingBox();assert.ok(badge.x>=title.x+title.width);assert.ok(Math.abs(badge.y-title.y)<5);
       }
       await panel.screenshot({path:path.join(out,`work-reports-card-info-${width}.png`),fullPage:true});
     }
@@ -343,7 +431,7 @@ async function policy(){const state=await app.evaluate(({BrowserWindow})=>({mode
     assert.deepEqual(await entries(),beforeEdit.entries);
     const original=(await panel.evaluate(()=>window.whale.reports('snapshot',{date:'2026-10-26'}))).value;
     const plannerEntry=original.entries.find(e=>e.source==='planner'&&e.sourceActive!==false),planner=panel.locator('.report-work-card').filter({has:panel.getByRole('heading',{name:plannerEntry.title,exact:true})});
-    await planner.locator('.report-work-controls').getByRole('button',{name:'修改信息',exact:true}).click();assert.equal(await panel.locator('#report-entry-dialog').isVisible(),true);await panel.locator('#report-entry-dialog [data-close]').click();
+    await planner.locator('.report-work-title-group').getByRole('button',{name:'修改信息',exact:true}).click();assert.equal(await panel.locator('#report-entry-dialog').isVisible(),true);await panel.locator('#report-entry-dialog [data-close]').click();
     await panel.locator('#report-merge').click();const form=panel.locator('#report-work-form');await form.locator('[name="origin"]').selectOption(original.work.items.find(item=>item.kind==='planner').key);
     assert.equal(await form.locator('[name="target"] option').count(),3);assert.doesNotMatch((await form.locator('[name="target"] option').allTextContents()).join(' '),/MR !/);
     const selected=original.work.items.filter(i=>i.mr).at(-1).key;await form.locator('[name="target"]').selectOption(selected);
@@ -373,12 +461,18 @@ async function policy(){const state=await app.evaluate(({BrowserWindow})=>({mode
     const response=await panel.evaluate(project=>window.whale.reports('settings',{gitlabProjects:[project],gitlabAuthors:'cy@example.test',jenkinsJobs:[{job:'prod/orders',project:project.project,environment:'prod',target:'EKS',userIds:'cy'}]}),project);assert.equal(response.error,undefined);
     await panel.locator('#report-open-settings').click();const settings=panel.locator('#report-settings-form');
     assert.match(await panel.locator('#report-jenkins-source').innerText(),/发布阶段完成时间/);assert.equal(await settings.locator('[name="deploySuccess"]').count(),0);assert.equal(await settings.locator('[data-kind="job"] [name="environment"]').inputValue(),'prod');assert.equal(await settings.locator('[data-kind="job"] [name="environment"] option').count(),1);
-    await settings.locator('[data-close="settings-dialog"]').click();await panel.locator('#report-collect').click();await panel.waitForFunction(()=>document.getElementById('report-feedback').textContent.includes('采集完成'));
+    await settings.locator('[data-close="settings-dialog"]').click();assert.equal(await panel.locator('#report-collect').innerText(),'采集当天');await panel.locator('#report-collect').click();await panel.waitForFunction(()=>document.getElementById('report-feedback').textContent.includes('采集完成：2026-10-26'));
+    assert.equal(await panel.locator('#report-collect').innerText(),'更新当天');assert.match(await panel.locator('#report-source-range').textContent(),/2026-10-26.*仅更新该日/);
+    const requests=await app.evaluate(()=>global.reportRequests.filter(request=>new URL(request.url).pathname.endsWith('/repository/commits')));assert.equal(requests.length,1);assert.equal(new URL(requests[0].url).searchParams.get('since'),'2026-10-25T16:00:00.000Z');assert.equal(new URL(requests[0].url).searchParams.get('until'),new Date(now).toISOString());
     assert.equal((await entries()).length,1);assert.match(await panel.locator('#report-list').innerText(),/订单超时修复/);await panel.locator('.report-work-evidence > summary').click();assert.match(await panel.locator('#report-list').innerText(),/发布完成 #42/);assert.match(await panel.locator('#report-list').innerText(),/MR !9/);assert.match(await panel.locator('#report-list').innerText(),/其他同事/);assert.match(await panel.locator('#report-list').innerText(),/补齐超时重试与回归/);
-    await panel.locator('#report-preview-day').click();assert.match(await panel.locator('#report-day-content').inputValue(),/MR !9/);assert.match(await panel.locator('#report-day-content').inputValue(),/17:59/);await panel.locator('#report-preview-dialog [data-close]').click();
+    await panel.locator('#report-preview-day').click();assert.match(await panel.locator('#report-day-content').inputValue(),/订单超时修复/);assert.doesNotMatch(await panel.locator('#report-day-content').inputValue(),/MR !9|17:59/);await panel.locator('#report-preview-dialog [data-close]').click();
     await panel.locator('#report-collect').click();await panel.waitForFunction(()=>!document.getElementById('report-collect').disabled);assert.equal((await entries()).length,1);
+    const currentDay=await entries();await panel.locator('#report-date').fill('2026-10-25');await panel.locator('#report-date').dispatchEvent('change');await panel.waitForFunction(()=>document.getElementById('report-collect').textContent==='采集当天');
+    await panel.locator('#report-collect').click();await panel.waitForFunction(()=>document.getElementById('report-feedback').textContent.includes('采集完成：2026-10-25'));assert.equal(await panel.locator('#report-collect').innerText(),'更新当天');assert.deepEqual(await entries(),currentDay);
+    const priorDay=await panel.evaluate(()=>window.whale.reports('snapshot',{date:'2026-10-25'}));assert.equal(priorDay.value.entries.length,0);for(const source of priorDay.value.sources){assert.equal(source.date,'2026-10-25');assert.equal(source.since,Date.parse('2026-10-25T00:00:00+08:00'));assert.equal(source.until,Date.parse('2026-10-25T23:59:59.999+08:00'));}
+    await panel.locator('#report-date').fill('2026-10-26');await panel.locator('#report-date').dispatchEvent('change');await panel.waitForFunction(()=>document.getElementById('report-list').textContent.includes('订单超时修复'));
     for(const width of [860,1060]){await app.evaluate(({BrowserWindow},width)=>BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/index.html')).setSize(width,850),width);assert.ok(await panel.locator('main').evaluate(el=>el.scrollWidth<=el.clientWidth));await panel.screenshot({path:path.join(out,`work-reports-releases-${width}.png`),fullPage:true});}
-    await policy();assert.deepEqual(errors,[]);console.log('PASS: production-only source settings, automatic deployment evidence, MR commits by all authors, release-time daily preview, deduplication and hidden 860/1060px layout');return;
+    await policy();assert.deepEqual(errors,[]);console.log('PASS: selected-day collection and button states, isolated previous-day update, production-only source settings, personal contribution with all-author evidence, daily preview, deduplication and hidden 860/1060px layout');return;
   }
   if(process.env.WHALE_REPORT_DATES_ONLY==='1'){
     const days=panel.locator('#report-recent-days button'),pick=date=>panel.locator(`#report-recent-days button[data-date="${date}"]`);

@@ -21,6 +21,9 @@
 .report-match-title-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .report-match-label { padding: 3px 8px; border-radius: 6px; background: var(--ui-selected); color: var(--ui-accent); font-size: 12px; font-weight: 600; }
 .report-match-title { color: var(--ui-text); font-size: 17px; line-height: 1.6; font-weight: 700; }
+.report-match-title-group { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
+.report-match-title-group > .report-match-title { min-width: 0; }
+#report-match-title-dialog { box-sizing: border-box; width: min(520px, calc(100vw - 48px)); }
 .report-match-reason { display: block; padding: 6px 10px; border-left: 3px solid var(--ui-accent); background: var(--ui-selected); border-radius: 4px; color: var(--ui-accent); font-size: 13px; font-weight: 500; line-height: 1.7; }
 .report-match-toggle { flex-shrink: 0; color: var(--ui-accent); font-size: 12px; }
 .report-match-toggle::after { content: '⌄'; display: block; text-align: center; font-size: 18px; }
@@ -57,7 +60,9 @@
 .report-work-controls { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 12px; margin-top: 10px; }
 #report-work-dialog { box-sizing: border-box; width: min(620px, calc(100vw - 48px)); max-height: calc(100vh - 48px); overflow-y: auto; }
 .report-work-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
-.report-work-heading > h3 { min-width: 0; margin: 0; font-size: 17px; line-height: 1.6; overflow-wrap: anywhere; }
+.report-work-title-group { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.report-work-title-group > h3 { min-width: 0; margin: 0; font-size: 17px; line-height: 1.6; overflow-wrap: anywhere; }
+.report-work-title-group > .ui-icon-button { flex: 0 0 auto; margin-top: -3px; }
 .report-work-heading > .report-work-badge { flex-shrink: 0; margin-top: 2px; font-size: var(--ui-font-small); white-space: nowrap; }
 .report-work-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; color: var(--ui-text-muted); font-size: var(--ui-font-small); }
 .report-work-card > .report-work-meta { margin-top: 10px; }
@@ -106,6 +111,23 @@
 .report-gitlab-project { padding: 7px 0; }
 .report-dialog-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 20px; }
 .report-preview { width: 100%; min-height: 380px; resize: vertical; padding: 16px; font: 12px/1.9 ui-monospace, monospace; white-space: pre-wrap; }
+/* 预览到达滚动边界时截断滚动链，并锁住根页面，避免滚动传给下层。 */
+html:has(#report-preview-dialog[open]) { overflow: hidden; }
+#report-preview-dialog { width: min(840px, calc(100vw - 48px)); box-sizing: border-box; overscroll-behavior-y: contain; }
+#report-preview-dialog .ui-tabs { margin: 18px 0 16px; }
+#report-preview-dialog .report-preview, .report-markdown { box-sizing: border-box; min-height: 280px; max-height: 55vh; overflow: auto; overscroll-behavior-y: contain; }
+.report-markdown { padding: 22px 24px; border: 1px solid var(--ui-divider); border-radius: var(--ui-radius-control); font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; }
+.report-markdown h1 { margin: 0 0 16px; font-size: 24px; line-height: 1.5; }
+.report-markdown h2 { margin: 24px 0 12px; font-size: 18px; line-height: 1.5; }
+.report-markdown h3, .report-markdown h4, .report-markdown h5, .report-markdown h6 { margin: 20px 0 10px; font-size: 16px; }
+.report-markdown p { margin: 12px 0; }
+.report-markdown ul { margin: 10px 0; padding-left: 24px; list-style: disc; }
+.report-markdown li { margin: 8px 0; }
+.report-markdown li > ul { margin: 6px 0; list-style: circle; }
+.report-markdown li > ul > li { margin: 4px 0; color: var(--ui-text-muted); }
+.report-markdown strong { font-weight: 600; }
+.report-markdown > :first-child { margin-top: 0; }
+.report-markdown > :last-child { margin-bottom: 0; }
 .report-week-card { padding: 20px; }
 .report-inline-input { display: flex; gap: 8px; align-items: center; }
 .report-inline-input input { flex: 1; min-width: 0; }

@@ -71,7 +71,9 @@ async function checkTaskStatuses() {
   const waitStatus=async(title,status)=>{await row(title).locator(`.planner-task-status[data-status="${status}"]`).waitFor();};
   const save=async()=>{await panel.locator('#planner-item-form [type="submit"]').click();await panel.waitForFunction(()=>!document.getElementById('planner-item-dialog').open);};
   await addTask('测试待处理','今天完成');await waitStatus('测试待处理','pending');
+  assert.equal(await row('测试待处理').getByRole('button',{name:'处理完成',exact:true}).count(),0,'待处理卡片仅提供开始处理');
   await row('测试待处理').getByRole('button',{name:'开始处理',exact:true}).click();await waitStatus('测试待处理','processing');
+  assert.equal(await row('测试待处理').getByRole('button',{name:'开始处理',exact:true}).count(),0,'处理中卡片仅提供处理完成');
   await row('测试待处理').getByRole('button',{name:'编辑',exact:true}).click();
   assert.equal(await panel.locator('#planner-task-status-selected').textContent(),'处理中');
   await choose('task-status','待处理');await panel.locator('#planner-cancel-item').click();
@@ -94,6 +96,7 @@ async function checkTaskStatuses() {
   await row('测试待处理').getByRole('button',{name:'编辑',exact:true}).click();
   await choose('task-status','待处理');await save();await waitStatus('测试待处理','pending');
   assert.equal(await row('测试待处理').getByRole('checkbox').count(),0);
+  await row('测试待处理').getByRole('button',{name:'开始处理',exact:true}).click();await waitStatus('测试待处理','processing');
   await row('测试待处理').getByRole('button',{name:'处理完成',exact:true}).click();await panel.waitForFunction(()=>!document.querySelector('.planner-task'));
   await panel.locator('[data-filter="done"]').click();await waitStatus('测试待处理','done');
   await row('测试待处理').getByRole('button',{name:'编辑',exact:true}).click();await choose('task-status','待处理');await save();await waitStatus('测试待处理','pending');
@@ -125,6 +128,114 @@ async function checkTaskStatuses() {
   await assertWindowPolicy();assert.deepEqual(errors,[]);
   console.log('Planner task statuses OK: transitions, filters, editor, explicit completion buttons, save failure, persistence, layout and hidden windows');
 }
+async function checkTaskSchedule() {
+  const row=title=>panel.locator('.planner-task').filter({has:panel.getByRole('heading',{name:title,exact:true})}),dialog=panel.locator('#planner-item-dialog');
+  const save=async()=>{await panel.locator('#planner-item-form [type="submit"]').click();await panel.waitForFunction(()=>!document.getElementById('planner-item-dialog').open);};
+  const edit=()=>row('可后补排期').getByRole('button',{name:'编辑',exact:true}).click();
+  const filter=async name=>{await panel.locator(`[data-filter="${name}"]`).click();};
+  const task=async()=>(await snapshot()).tasks.find(task=>task.title==='可后补排期');
+  await newItem();await panel.locator('#planner-item-title').fill('可后补排期');
+  const endDate=panel.getByLabel('计划结束日期（可选）',{exact:true});
+  assert.equal(await endDate.isVisible(),true);assert.equal(await endDate.inputValue(),'');assert.equal(await endDate.getAttribute('required'),null);
+  assert.equal(await dialog.getByText('计划结束日期（可选）',{exact:true}).count(),1);assert.equal(await dialog.getByText('计划结束日期',{exact:true}).count(),0,'计划结束日期只展示一个字段标题');
+  for(const [label,date] of [['今天完成','2026-10-26'],['明天完成','2026-10-27'],['一周内完成','2026-11-02']]){await choose('deadline',label);assert.equal(await endDate.inputValue(),date);}
+  await choose('deadline','不设结束日期');assert.equal(await endDate.inputValue(),'');assert.equal(await endDate.isVisible(),true);
+  await choose('deadline','指定日期');assert.equal(await panel.evaluate(()=>document.activeElement.id),'planner-task-date');assert.equal(await endDate.inputValue(),'');
+  await endDate.fill('2026-10-30');await endDate.fill('');await save();
+  assert.equal((await task()).startDate,null);assert.equal((await task()).dueDate,null);assert.match(await row('可后补排期').innerText(),/未排期/);
+  await edit();assert.equal(await panel.locator('#planner-task-start-date').inputValue(),'');assert.equal(await panel.locator('#planner-task-start-date').getAttribute('required'),null);
+  await panel.locator('#planner-task-start-date').fill('2026-10-28');await panel.locator('#planner-cancel-item').click();assert.equal((await task()).startDate,null);
+  await edit();await panel.locator('#planner-task-start-date').fill('2026-10-28');await save();assert.equal((await task()).dueDate,null);assert.match(await row('可后补排期').innerText(),/计划开始：2026-10-28 · 结束未定/);
+  await filter('none');assert.equal(await row('可后补排期').count(),0);await filter('today');assert.equal(await row('可后补排期').count(),0);await filter('upcoming');assert.equal(await row('可后补排期').count(),1);await filter('all');
+  await edit();await endDate.fill('2026-10-30');await save();assert.equal((await task()).startDate,'2026-10-28');assert.equal((await task()).dueDate,'2026-10-30');
+  await edit();await panel.locator('#planner-task-start-date').fill('2026-10-31');await panel.locator('#planner-item-form [type="submit"]').click();await panel.locator('#planner-item-error:not([hidden])').waitFor();assert.match(await panel.locator('#planner-item-error').innerText(),/结束日期不能早于开始日期/);assert.equal((await task()).startDate,'2026-10-28');
+  await panel.locator('#planner-task-start-date').fill('2026-10-26');await save();await filter('today');assert.equal(await row('可后补排期').count(),1);await filter('upcoming');assert.equal(await row('可后补排期').count(),0);await filter('all');
+  for(const width of [760,1060]){
+    await app.evaluate(({BrowserWindow},width)=>{const win=BrowserWindow.getAllWindows().find(win=>win.webContents.getURL().endsWith('/index.html'));win.setMinimumSize(700,680);win.setContentSize(width,760);},width);await panel.waitForFunction(width=>innerWidth===width,width);
+    assert.ok(await panel.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await panel.locator('#planner-tasks').scrollIntoViewIfNeeded();await panel.screenshot({path:path.join(out,`planner-task-schedule-${width}.png`)});
+    await edit();assert.equal(await panel.locator('#planner-task-start-date').inputValue(),'2026-10-26');assert.equal(await panel.locator('#planner-task-date').inputValue(),'2026-10-30');
+    await panel.locator('#planner-task-start-date').scrollIntoViewIfNeeded();assert.ok(await dialog.evaluate(el=>el.scrollWidth<=el.clientWidth));assert.ok(await panel.locator('#planner-item-form [type="submit"]').evaluate(el=>el.getBoundingClientRect().bottom<=innerHeight));
+    await panel.screenshot({path:path.join(out,`planner-task-schedule-editor-${width}.png`)});
+    const startBox=await panel.locator('#planner-task-start-date').boundingBox(),endBox=await endDate.boundingBox();assert.ok(Math.abs(startBox.y-endBox.y)<2,`开始和结束日期输入框保持对齐：${JSON.stringify({startBox,endBox})}`);
+    await panel.locator('#planner-deadline-trigger').click();
+    assert.ok(await panel.locator('#planner-deadline-options').evaluate(el=>{const rect=el.getBoundingClientRect(),dialog=el.closest('dialog').getBoundingClientRect();return rect.left>=dialog.left&&rect.right<=dialog.right;}));
+    await panel.screenshot({path:path.join(out,`planner-task-schedule-shortcuts-${width}.png`)});await panel.keyboard.press('Escape');await panel.locator('#planner-cancel-item').click();
+  }
+  await edit();await endDate.fill('');await save();assert.equal((await task()).dueDate,null);assert.equal((await task()).startDate,'2026-10-26');
+  await edit();await panel.locator('#planner-task-start-date').fill('');await save();assert.equal((await task()).startDate,null);await filter('none');assert.equal(await row('可后补排期').count(),1);await filter('all');
+  await edit();await panel.locator('#planner-task-start-date').fill('2026-10-26');await choose('deadline','指定日期');await panel.locator('#planner-task-date').fill('2026-10-30');await save();
+  assert.equal(await row('可后补排期').getByRole('button',{name:'处理完成',exact:true}).count(),0);await row('可后补排期').getByRole('button',{name:'开始处理',exact:true}).click();await row('可后补排期').getByRole('button',{name:'处理完成',exact:true}).click();await panel.waitForFunction(()=>!document.querySelector('.planner-task'));
+  assert.equal((await task()).completedAt,+new Date('2026-10-26T10:00:00'));assert.equal((await task()).dueDate,'2026-10-30');
+  await panel.locator('#planner-completed-feedback').getByRole('button',{name:'查看完成历史',exact:true}).click();await panel.locator('.planner-history-card').waitFor();assert.equal(await panel.locator('#planner-history-date').inputValue(),'2026-10-26');assert.match(await panel.locator('.planner-history-card').innerText(),/实际完成于/);assert.match(await panel.locator('.planner-history-card').innerText(),/计划：2026-10-26 至 2026-10-30/);
+  await panel.locator('#planner-current-tab').click();await addTask('只定结束日期','明天完成');assert.equal((await snapshot()).tasks.at(-1).startDate,null);assert.equal((await snapshot()).tasks.at(-1).dueDate,'2026-10-27');
+  const saved=(await snapshot()).tasks;await assertWindowPolicy();await app.close();app=null;await launch();assert.deepEqual((await snapshot()).tasks,saved);await row('只定结束日期').getByRole('button',{name:'编辑',exact:true}).click();assert.equal(await panel.locator('#planner-task-start-date').inputValue(),'');assert.equal(await panel.locator('#planner-task-date').inputValue(),'2026-10-27');await panel.locator('#planner-cancel-item').click();
+  await assertWindowPolicy();assert.deepEqual(errors,[]);console.log('Planner task schedule OK: single optional end date, visible shortcut results, direct input/clear, later edits, invalid ranges, actual completion, persistence and 760/1060px layout; hidden windows');
+}
+async function checkDuplicateTaskHistory() {
+  const title='调整VIP播放缓存问题',row=()=>panel.locator('.planner-task').filter({has:panel.getByRole('heading',{name:title,exact:true})});
+  const history=()=>panel.locator('.planner-history-card').filter({has:panel.getByRole('heading',{name:title,exact:true})});
+  const histories=date=>panel.evaluate(date=>window.whale.planner('history',{date}),date);
+  const save=async()=>{await panel.locator('#planner-item-form [type="submit"]').click();await panel.waitForFunction(()=>!document.getElementById('planner-item-dialog').open);};
+  await addTask(title,'明天完成');await row().getByRole('button',{name:'编辑',exact:true}).click();await choose('task-status','处理完成');await save();await history().waitFor();
+  const original=(await histories('2026-10-26')).value.items[0];assert.ok(original);
+  await panel.locator('#planner-current-tab').click();await panel.locator('[data-filter="done"]').click();await row().getByRole('button',{name:'重新处理',exact:true}).click();
+  await panel.locator('[data-filter="processing"]').click();await advance('2026-10-26T11:00:00');await row().getByRole('button',{name:'处理完成',exact:true}).click();
+  await panel.locator('#planner-completed-feedback').getByRole('button',{name:'查看完成历史',exact:true}).click();await history().waitFor();
+  assert.equal(await history().count(),1);assert.equal(await panel.locator('#planner-history-count').textContent(),'1');assert.equal((await snapshot()).historyCount,1);assert.equal((await histories('2026-10-26')).value.items[0].id,original.id);
+  assert.equal(await history().getByRole('button',{name:'修改完成日期',exact:true}).count(),1);
+  // 同一条待办跨天重新完成也更新同一条记录，旧日期不再展示一份副本。
+  await panel.locator('#planner-current-tab').click();await panel.locator('[data-filter="done"]').click();await row().getByRole('button',{name:'重新处理',exact:true}).click();
+  await panel.locator('[data-filter="processing"]').click();await advance('2026-10-27T10:00:00');await row().getByRole('button',{name:'处理完成',exact:true}).click();
+  await panel.locator('#planner-completed-feedback').getByRole('button',{name:'查看完成历史',exact:true}).click();await history().waitFor();
+  assert.equal(await panel.locator('#planner-history-date').inputValue(),'2026-10-27');assert.equal(await history().count(),1);assert.equal((await histories('2026-10-26')).value.items.length,0);assert.equal((await histories('2026-10-27')).value.items[0].id,original.id);assert.equal((await snapshot()).historyCount,1);
+  await history().getByRole('button',{name:'查看当日日报',exact:true}).click();await panel.locator('#report-daily:not([hidden])').waitFor();assert.equal(await panel.locator('#report-date').inputValue(),'2026-10-27');await panel.getByRole('heading',{name:title,exact:true}).waitFor();await panel.locator('#nav-planner').click();
+  await assertWindowPolicy();await app.close();app=null;
+  // 模拟旧版本已落盘的跨日重复，最新写入条目即使回填了更早日期也应成为唯一展示项。
+  const file=path.join(dir,'planner.json'),legacy=JSON.parse(fs.readFileSync(file,'utf8')),time=+new Date('2026-10-26T09:00:00');
+  assert.equal(legacy.completedTasks.length,1);legacy.completedTasks.unshift({...legacy.completedTasks[0],id:'legacy-past-day-vip',completedAt:+new Date('2026-10-24T10:00:00')});
+  legacy.completedTasks.push({...legacy.completedTasks[0],id:'legacy-duplicate-vip',completedAt:time});legacy.tasks[0].completedAt=time;const serialized=JSON.stringify(legacy);fs.writeFileSync(file,serialized);
+  await launch();await panel.locator('#planner-history-tab').click();await history().waitFor();assert.equal(await history().count(),1);assert.equal((await snapshot()).historyCount,1);assert.equal(fs.readFileSync(file,'utf8'),serialized);
+  assert.equal((await histories('2026-10-26')).value.items[0].id,'legacy-duplicate-vip');assert.equal((await histories('2026-10-24')).value.items.length,0);assert.equal((await histories('2026-10-27')).value.items.length,0);
+  await history().getByRole('button',{name:'修改完成日期',exact:true}).click();await panel.getByLabel('实际完成日期',{exact:true}).fill('2026-10-25');await save();await history().waitFor();
+  assert.equal(await panel.locator('#planner-history-date').inputValue(),'2026-10-25');assert.equal(await history().count(),1);assert.equal((await histories('2026-10-26')).value.items.length,0);assert.equal((await histories('2026-10-24')).value.items.length,0);assert.equal((await histories('2026-10-27')).value.items.length,0);assert.equal((await snapshot()).historyCount,1);assert.equal(JSON.parse(fs.readFileSync(file,'utf8')).completedTasks.length,3);
+  await assertWindowPolicy();await app.close();app=null;await launch();await panel.locator('#planner-history-tab').click();await panel.locator('#planner-history-date').fill('2026-10-25');await panel.locator('#planner-history-date').dispatchEvent('change');await history().waitFor();
+  assert.equal(await history().count(),1);assert.equal(await history().getByRole('button',{name:'修改完成日期',exact:true}).count(),1);assert.equal((await histories('2026-10-26')).value.items.length,0);await panel.screenshot({path:path.join(out,'planner-history-deduplicated.png')});
+  await assertWindowPolicy();assert.deepEqual(errors,[]);console.log('Planner duplicate history OK: one record per task across dates, stable record ID, matching report day, legacy duplicates display latest without rewriting, correction leaves no stale day, restart and hidden windows');
+}
+async function checkTaskCompletionDates() {
+  const row=title=>panel.locator('.planner-task').filter({has:panel.getByRole('heading',{name:title,exact:true})});
+  const history=title=>panel.locator('.planner-history-card').filter({has:panel.getByRole('heading',{name:title,exact:true})});
+  const completedDate=panel.getByLabel('实际完成日期',{exact:true}),dialog=panel.locator('#planner-item-dialog');
+  const save=async()=>{await panel.locator('#planner-item-form [type="submit"]').click();await panel.waitForFunction(()=>!document.getElementById('planner-item-dialog').open);};
+  const histories=date=>panel.evaluate(date=>window.whale.planner('history',{date}),date);
+  // 新建历史任务可直接指定完成状态和日期，不需要开始、完成逐步点击；计划日期不充当实际日期。
+  await newItem();await panel.locator('#planner-item-title').fill('直接补记历史任务');await panel.locator('#planner-task-start-date').fill('2026-10-23');await panel.locator('#planner-task-date').fill('2026-10-23');
+  assert.equal(await completedDate.isVisible(),false);await choose('task-status','处理完成');assert.equal(await completedDate.inputValue(),'2026-10-26');assert.equal(await completedDate.getAttribute('max'),'2026-10-26');
+  await completedDate.fill('2026-10-27');assert.equal(await completedDate.evaluate(el=>el.validity.rangeOverflow),true);
+  await completedDate.fill('');assert.equal(await completedDate.evaluate(el=>el.validity.valueMissing),true);
+  await completedDate.fill('2026-10-23');await save();
+  assert.equal(await panel.locator('#planner-history-date').inputValue(),'2026-10-23');await history('直接补记历史任务').waitFor();assert.match(await history('直接补记历史任务').innerText(),/实际完成于 2026\/10\/23/);assert.doesNotMatch(await history('直接补记历史任务').innerText(),/00:00/);
+  await history('直接补记历史任务').getByRole('button',{name:'查看当日日报',exact:true}).click();await panel.locator('#report-daily:not([hidden])').waitFor();assert.equal(await panel.locator('#report-date').inputValue(),'2026-10-23');await panel.getByRole('heading',{name:'直接补记历史任务',exact:true}).waitFor();
+  await panel.locator('#nav-planner').click();await panel.locator('#planner-current-tab').click();
+  // 已经误记到今天的记录可直接更正；取消和写入失败都保持原数据。
+  await addTask('更正误记到今天的任务','不设结束日期');await row('更正误记到今天的任务').getByRole('button',{name:'编辑',exact:true}).click();await choose('task-status','处理完成');await save();await history('更正误记到今天的任务').waitFor();
+  const initial=(await histories('2026-10-26')).value.items.find(item=>item.title==='更正误记到今天的任务');assert.ok(initial);
+  await history('更正误记到今天的任务').getByRole('button',{name:'修改完成日期',exact:true}).click();assert.equal(await completedDate.inputValue(),'2026-10-26');await completedDate.fill('2026-10-24');await panel.locator('#planner-cancel-item').click();assert.equal((await histories('2026-10-26')).value.items[0].completedAt,initial.completedAt);
+  await history('更正误记到今天的任务').getByRole('button',{name:'修改完成日期',exact:true}).click();await completedDate.fill('2026-10-24');
+  const temporary=path.join(dir,'planner.json.tmp');fs.mkdirSync(temporary);await panel.locator('#planner-item-form [type="submit"]').click();await panel.locator('#planner-item-error:not([hidden])').waitFor();assert.equal((await histories('2026-10-26')).value.items[0].completedAt,initial.completedAt);fs.rmdirSync(temporary);await save();
+  assert.equal(await panel.locator('#planner-history-date').inputValue(),'2026-10-24');await history('更正误记到今天的任务').waitFor();assert.equal((await histories('2026-10-26')).value.items.length,0);assert.equal((await histories('2026-10-24')).value.items[0].id,initial.id);assert.equal((await snapshot()).historyCount,2);
+  for(const width of [760,1060]) {
+    await app.evaluate(({BrowserWindow},width)=>{const win=BrowserWindow.getAllWindows().find(win=>win.webContents.getURL().endsWith('/index.html'));win.setMinimumSize(700,680);win.setContentSize(width,760);},width);await panel.waitForFunction(width=>innerWidth===width,width);
+    await history('更正误记到今天的任务').getByRole('button',{name:'修改完成日期',exact:true}).click();await completedDate.scrollIntoViewIfNeeded();
+    assert.ok(await dialog.evaluate(el=>el.scrollWidth<=el.clientWidth));assert.ok(await panel.locator('#planner-item-form [type="submit"]').evaluate(el=>el.getBoundingClientRect().bottom<=innerHeight));
+    await panel.screenshot({path:path.join(out,`planner-task-completed-date-${width}.png`)});await panel.locator('#planner-cancel-item').click();
+    assert.ok(await panel.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await panel.screenshot({path:path.join(out,`planner-task-corrected-history-${width}.png`)});
+  }
+  await panel.locator('#planner-current-tab').click();await newItem();await panel.locator('#planner-item-title').fill('切回未完成不校验完成日期');await choose('task-status','处理完成');await completedDate.fill('2026-10-27');await choose('task-status','待处理');assert.equal(await completedDate.isDisabled(),true);await save();assert.equal((await snapshot()).tasks.at(-1).completedAt,null);
+  const saved=(await snapshot()).tasks;await assertWindowPolicy();await app.close();app=null;await launch();assert.deepEqual((await snapshot()).tasks,saved);
+  await panel.locator('#planner-history-tab').click();await panel.locator('#planner-history-date').fill('2026-10-24');await panel.locator('#planner-history-date').dispatchEvent('change');await history('更正误记到今天的任务').waitFor();assert.equal((await histories('2026-10-24')).value.items[0].id,initial.id);
+  await assertWindowPolicy();assert.deepEqual(errors,[]);console.log('Planner actual completion dates OK: direct backfill, date validation, history correction, cancel/write failure, report day, persistence and 760/1060px hidden layout');
+}
 async function checkTaskHistory() {
   const row=title=>panel.locator('.planner-task').filter({has:panel.getByRole('heading',{name:title,exact:true})});
   const history=title=>panel.locator('.planner-history-card').filter({has:panel.getByRole('heading',{name:title,exact:true})});
@@ -154,7 +265,7 @@ async function checkTaskHistory() {
   await newItem();await panel.locator('#planner-item-title').fill('个人购物');await chooseCategory('personal');await choose('task-status','处理完成');
   await panel.locator('#planner-item-form [type="submit"]').click();await panel.waitForFunction(()=>!document.getElementById('planner-item-dialog').open);
   await panel.locator('#planner-history-tab').click();await history('个人购物').waitFor();
-  assert.equal(await history('个人购物').getByRole('button').count(),0);
+  assert.equal(await history('个人购物').getByRole('button',{name:'修改完成日期',exact:true}).count(),1);assert.equal(await history('个人购物').getByRole('button',{name:'查看当日日报',exact:true}).count(),0);
   await panel.locator('[data-category="work"]').click();await history('完成支付回归').waitFor();assert.equal(await panel.locator('.planner-history-card').count(),1);
   await panel.locator('[data-category="personal"]').click();await history('个人购物').waitFor();assert.equal(await panel.locator('.planner-history-card').count(),1);
   await panel.locator('[data-category="all"]').click();await panel.waitForFunction(()=>document.querySelectorAll('.planner-history-card').length===2);
@@ -188,6 +299,7 @@ async function checkCompletedTasksLeaveList() {
   const history=title=>panel.locator('.planner-history-card').filter({has:panel.getByRole('heading',{name:title,exact:true})});
   await addTask('直接完成后移入历史','今天完成');
   assert.equal(await row('直接完成后移入历史').getByRole('checkbox').count(),0,'待办用明确状态和按钮操作，不显示勾选框');
+  await row('直接完成后移入历史').getByRole('button',{name:'开始处理',exact:true}).click();
   await row('直接完成后移入历史').getByRole('button',{name:'处理完成',exact:true}).click();
   await panel.waitForFunction(()=>!document.querySelector('.planner-task')||document.querySelector('.planner-task-status[data-status="done"]'));
   assert.equal(await panel.locator('.planner-task').count(),0,'完成任务应立即从默认待办列表移走');
@@ -231,6 +343,9 @@ async function checkCompletedTasksLeaveList() {
 }
 (async()=>{try {
   await launch();
+  if(process.env.WHALE_PLANNER_HISTORY_DEDUP_ONLY==='1'){await checkDuplicateTaskHistory();return;}
+  if(process.env.WHALE_PLANNER_COMPLETION_DATES_ONLY==='1'){await checkTaskCompletionDates();return;}
+  if(process.env.WHALE_PLANNER_SCHEDULE_ONLY==='1'){await checkTaskSchedule();return;}
   if(process.env.WHALE_PLANNER_COMPLETION_ONLY==='1'){await checkCompletedTasksLeaveList();return;}
   if(process.env.WHALE_PLANNER_HISTORY_ONLY==='1'){await checkTaskHistory();return;}
   if(process.env.WHALE_PLANNER_STATUS_ONLY==='1'){await checkTaskStatuses();return;}
@@ -313,11 +428,12 @@ async function checkCompletedTasksLeaveList() {
   assert.equal((await snapshot()).workTime.periods[0].end,'19:00');
   await settingsButton.click();assert.equal(await panel.getByRole('textbox',{name:'默认时段结束时间',exact:true}).inputValue(),'19:00');
   await panel.keyboard.press('Escape');assert.equal(await settingsDialog.isVisible(),false);
-  for(const [title,deadline] of [['今天处理','今天完成'],['明天处理','明天完成'],['周内处理','一周内完成'],['以后安排','暂不安排']])await addTask(title,deadline);
+  for(const [title,deadline] of [['今天处理','今天完成'],['明天处理','明天完成'],['周内处理','一周内完成'],['以后安排','不设结束日期']])await addTask(title,deadline);
   assert.deepEqual((await snapshot()).tasks.map(item=>item.dueDate),['2026-10-26','2026-10-27','2026-11-02',null]);
   assert.equal(await panel.locator('#planner-task-list img').count(),0);
   await panel.getByRole('button',{name:'未排期',exact:true}).click();assert.equal(await panel.locator('.planner-task').count(),1);
   await panel.getByRole('button',{name:'今天',exact:true}).click();assert.equal(await panel.locator('.planner-task').count(),1);
+  await panel.locator('.planner-task').getByRole('button',{name:'开始处理',exact:true}).click();
   await panel.locator('.planner-task').getByRole('button',{name:'处理完成',exact:true}).click();await panel.waitForFunction(()=>!document.querySelector('.planner-task'));
   await panel.getByRole('button',{name:'处理完成',exact:true}).click();assert.equal(await panel.locator('.planner-task').count(),1);
   await panel.locator('.planner-task').getByRole('button',{name:'重新处理',exact:true}).click();await panel.waitForFunction(()=>!document.querySelector('.planner-task'));
@@ -418,7 +534,7 @@ async function checkCompletedTasksLeaveList() {
   await panel.locator('#planner-item-title').fill('个人伸展');await panel.locator('#planner-interval').fill('2');
   await panel.locator('#planner-use-default').uncheck();await custom.getByRole('button',{name:'每天',exact:true}).click();await custom.getByRole('checkbox',{name:'全天允许',exact:true}).check();
   // 无关的待办日期即使无效，也不应阻止保存提醒。
-  await panel.locator('[name="planner-kind"][value="task"]').check();await choose('deadline','指定日期');await panel.locator('#planner-task-date').fill('');
+  await panel.locator('[name="planner-kind"][value="task"]').check();await choose('deadline','指定日期');await panel.locator('#planner-task-date').fill('1999-12-31');
   await panel.locator('[name="planner-kind"][value="reminder"]').check();
   await panel.locator('#planner-item-form [type="submit"]').click();await panel.waitForFunction(()=>!document.getElementById('planner-item-dialog').open);
   assert.equal(await panel.locator('[data-category="personal"]').getAttribute('aria-pressed'),'true');

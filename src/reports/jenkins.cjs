@@ -7,7 +7,7 @@ function remotePath(value){
   if(typeof value!=='string')return '';
   try{return decodeURIComponent(new URL(value.replace(/^git@([^:]+):/,'https://$1/')).pathname).replace(/^\/+|\/+$/g,'').replace(/\.git$/,'');}catch{return '';}
 }
-async function collectJenkins(source,{since,until,signal,environment,fetchImpl=fetch,connection,gitlabProjects=[],gitlabFetchImpl=fetch}={}){
+async function collectJenkins(source,{since,until,signal,environment,fetchImpl=fetch,connection,gitlabProjects=[],gitlabFetchImpl=fetch,authors,authorMode,authorNames}={}){
   // 工作报告只扫描生产发布；保留旧配置字段以兼容已有账本，不再以手工勾选认定发布。
   if(source.environment!=='prod')return [];
   let base;
@@ -79,7 +79,8 @@ async function collectJenkins(source,{since,until,signal,environment,fetchImpl=f
         if(candidate&&candidate.targetKey===release.targetKey&&candidate.releasedAt<release.releasedAt&&(!previous||candidate.releasedAt>previous.releasedAt))previous=candidate;
       }
       if(data.allBuilds.length===201&&!previous)throw safe('Jenkins 历史已截断且缺少前次发布基线，请核对更早发布');
-      const changes=await releaseChanges(project,{from:previous?.sha,to:release.sha,connection,fetchImpl:readGitlab,signal});
+      const changes=await releaseChanges(project,{from:previous?.sha,to:release.sha,connection,fetchImpl:readGitlab,signal,authors,authorMode,authorNames,releasedAt:release.releasedAt});
+      if(!changes.ownCommitCount)continue;
       const {details:changeDetails,...changeMeta}=changes;
       const context=[source.environment,source.target].filter(Boolean).join(' / '),time=new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(release.releasedAt);
       const details=`发布时间：${time}\n发布人：${release.publishers.join('、')}\n版本：${previous?previous.sha.slice(0,8):'起点待核对'} → ${release.sha.slice(0,8)}\n${changeDetails}`;

@@ -1,10 +1,11 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),{randomUUID,createHash}=require('node:crypto');
-const {text,dateKey,requireDate,addDays,weekRange,defaultSettings,settingsInput,entryInput,workGroupsInput,dismissedMatchesInput,active,weekContent,dailyContent}=require('../reports/model.cjs');
+const {text,dateKey,requireDate,addDays,weekRange,defaultSettings,settingsInput,entryInput,workGroupsInput,workMatchTitlesInput,dismissedMatchesInput,active,weekContent,dailyContent}=require('../reports/model.cjs');
 const {archiveReport}=require('../reports/archive.cjs');
 const {readReportEnvironment}=require('../reports/environment.cjs');
 const {workSummary,eventTime}=require('../reports/work-summary.cjs');
 const {needsMrRefresh}=require('../reports/work-lifecycle.cjs');
+const {authorFilter,isMergeCommit}=require('../reports/commit-authorship.cjs');
 const {workMatches}=require('../reports/work-matches.cjs');
 const {collectGit}=require('../reports/git.cjs');
 const {collectJenkins}=require('../reports/jenkins.cjs');
@@ -13,9 +14,9 @@ const clone=value=>structuredClone(value),fingerprint=value=>createHash('sha256'
 
 function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvironment=readReportEnvironment,gitCollector=collectGit,jenkinsCollector=collectJenkins,gitlabCollector=collectGitlab,gitlabStore,
   onChange=()=>{},clock={setTimeout,clearTimeout},fetchImpl=fetch,gitlabFetchImpl=fetchImpl}={}) {
-  const file=path.join(dataDir,'work-reports.json');let initial={},error='',writeError='',closed=false,enabled=true,started=false,timer,flight=null,controller,generation=0;
+  const file=path.join(dataDir,'work-reports.json');let initial={},error='',writeError='',closed=false,enabled=true,started=false,timer,flight=null,collectingDate=null,controller,generation=0;
   try{initial=readEnvironment();}catch{error='工作报告环境配置无法读取，请检查项目 .env';}
-  let state={version:1,revision:0,settings:defaultSettings(initial.archiveDir||''),entries:[],workGroups:[],dismissedMatches:[],weeks:{},sources:[],archives:{},dirtyDates:[]};
+  let state={version:1,revision:0,settings:defaultSettings(initial.archiveDir||''),entries:[],workGroups:[],workMatchTitles:[],dismissedMatches:[],weeks:{},sources:[],archives:{},dirtyDates:[]};
   let corrupt=false;
   let gitlabConnecting=false;const gitlabRequests=new Set(),preparations=new Map();
   try{
@@ -23,7 +24,7 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
     const saved=JSON.parse(fs.readFileSync(file,'utf8'));
     if(saved.version!==1||!Array.isArray(saved.entries)||saved.entries.length>20000||!saved.weeks||typeof saved.weeks!=='object'||Array.isArray(saved.weeks)||!Array.isArray(saved.sources)||!saved.archives||typeof saved.archives!=='object'||!Array.isArray(saved.dirtyDates))throw Error();
     if(!Number.isSafeInteger(saved.revision)||saved.revision<0||Array.isArray(saved.archives)||saved.sources.some(source=>!source||typeof source.key!=='string'||typeof source.project!=='string'||typeof source.error!=='string'||!Number.isFinite(source.checkedAt)))throw Error();
-    saved.settings=settingsInput(saved.settings);saved.workGroups=workGroupsInput(saved.workGroups);saved.dismissedMatches=dismissedMatchesInput(saved.dismissedMatches);const ids=new Set(),keys=new Set();
+    saved.settings=settingsInput(saved.settings);saved.workGroups=workGroupsInput(saved.workGroups);saved.workMatchTitles=workMatchTitlesInput(saved.workMatchTitles);saved.dismissedMatches=dismissedMatchesInput(saved.dismissedMatches);const ids=new Set(),keys=new Set();
     saved.entries=saved.entries.map(entry=>{
       if(typeof entry.id!=='string'||!entry.id||ids.has(entry.id)||typeof entry.sourceKey!=='string'||!entry.sourceKey||keys.has(entry.sourceKey)||!['manual','planner','git','gitlab','jenkins'].includes(entry.source))throw Error();
       ids.add(entry.id);keys.add(entry.sourceKey);
@@ -61,7 +62,8 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
   function snapshot({date=dateKey(now())}={}){
     requireDate(date);
     const entries=state.entries.filter(e=>e.date===date),work=dayWork(date),dismissed=state.dismissedMatches.filter(item=>item.date===date);
-    return {...summary(),date,gitlab:gitlabStatus(),settings:clone(state.settings),entries:clone(entries.filter(e=>!e.removed).sort((a,b)=>eventTime(a)-eventTime(b)||a.sourceKey.localeCompare(b.sourceKey))),work,workMatches:{...workMatches(work.items,entries,dismissed),dismissedCount:dismissed.length},
+    const matches=workMatches(work.items,entries,dismissed),titles=new Map(state.workMatchTitles.filter(item=>item.date===date).map(item=>[item.id,item.title]));
+    return {...summary(),date,gitlab:gitlabStatus(),settings:clone(state.settings),entries:clone(entries.filter(e=>!e.removed).sort((a,b)=>eventTime(a)-eventTime(b)||a.sourceKey.localeCompare(b.sourceKey))),work,workMatches:{...matches,items:matches.items.map(item=>titles.has(item.id)?{...item,title:titles.get(item.id)}:item),dismissedCount:dismissed.length},
       sources:clone(state.sources),needsMrRefresh:entries.some(needsMrRefresh),weeks:Object.keys(state.weeks).sort().reverse().slice(0,104),total:state.entries.filter(e=>!e.removed).length,
       archiveReady:Boolean(state.settings.archiveDir&&fs.existsSync(state.settings.archiveDir)),templateTokens:['week_start','week_end','summary','releases','blockers','next_week','details','count']};
   }
@@ -75,13 +77,31 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
       else{next.entries.push({...fields,id:randomUUID(),source:item.source,sourceKey:item.sourceKey,sourceMeta:item.sourceMeta||{},sourceActive:item.sourceActive!==false,removed:false,edited:false,createdAt:now(),updatedAt:now()});dirty(next,fields.date);}
     }
   }
-  function syncPlanner(){
+  function retireGitlabMerges(next,source,options,items){
+    // 仅在成功重采集的项目和时间窗内停用旧合并噪声，保留原记录及其他日期。
+    const prefix=`gitlab:${gitlabUrl(source.host)}:${source.projectId}:`,keys=new Set(items.map(item=>item.sourceKey)),matches=authorFilter(options).matches;
+    const scoped=next.entries.filter(entry=>entry.source==='gitlab'&&entry.sourceKey.startsWith(prefix)&&!entry.removed&&entry.sourceActive!==false),owned=new Set();
+    for(const entry of scoped)if(entry.included!==false&&entry.sourceMeta.sha&&!isMergeCommit(entry)&&matches({author_name:entry.sourceMeta.author,author_email:entry.sourceMeta.email}))for(const mr of entry.sourceMeta.mergeRequests||[])owned.add(mr.url);
+    for(const entry of scoped){
+      const meta=entry.sourceMeta;
+      if(keys.has(entry.sourceKey)||!Number.isFinite(meta.committedAt)||meta.committedAt<options.since||meta.committedAt>options.until)continue;
+      if(!isMergeCommit(entry)&&(meta.event!=='merged'||(meta.mergeRequests||[]).some(mr=>owned.has(mr.url))))continue;
+      entry.sourceActive=false;entry.updatedAt=now();dirty(next,entry.date);
+    }
+  }
+  function syncPlanner(date){
     if(closed||!enabled||!state.settings.syncPlanner||corrupt)return;
     try{
       const next=clone(state),tasks=getTasks();
       for(const task of tasks){
         const key='planner:'+task.id,old=next.entries.find(e=>e.sourceKey===key),completed=task.category!=='personal'&&Number.isFinite(task.completedAt);
-        if(completed)ingest(next,[{title:task.title,project:old?.project||'日程工作',details:task.notes,date:dateKey(task.completedAt),status:'done',evidence:'日程备忘 · '+task.title,source:'planner',sourceKey:key,sourceMeta:{taskId:task.id,completedAt:task.completedAt}}]);
+        if(date&&(completed?dateKey(task.completedAt):old?.date)!==date)continue;
+        if(completed){
+          const completedDate=dateKey(task.completedAt);
+          // 明确更正实际完成日期时，人工整理过的工作也随之换日，保留其标题、说明和排除状态。
+          if(old&&!old.removed&&old.edited&&old.sourceMeta.completedAt!==task.completedAt&&old.date!==completedDate){dirty(next,old.date,completedDate);old.date=completedDate;old.updatedAt=now();}
+          ingest(next,[{title:task.title,project:old?.project||'日程工作',details:task.notes,date:completedDate,status:'done',evidence:'日程备忘 · '+task.title,source:'planner',sourceKey:key,sourceMeta:{taskId:task.id,completedAt:task.completedAt}}]);
+        }
         else if(old&&old.sourceActive!==false){old.sourceActive=false;old.updatedAt=now();dirty(next,old.date);}
       }
       // 删除日程并不抹掉已经发生的工作事实；明确撤销完成或改为个人分类才停用来源。
@@ -89,22 +109,28 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
     }catch(failure){writeError=failure.message;onChange();}
   }
   function schedule(){clock.clearTimeout(timer);if(started&&!closed&&enabled){timer=clock.setTimeout(()=>void runScheduled(),state.settings.intervalMinutes*60000);timer?.unref?.();}}
-  function collect(){
-    if(flight)return flight;if(closed||!enabled)return Promise.reject(Error('工作报告已关闭，请先开启'));if(corrupt)return Promise.reject(Error(error));
-    if(preparations.size)return Promise.allSettled([...preparations.values()]).then(()=>collect());
+  function collect(date){
+    // 同日期请求可复用采集；切换日期不能借用另一日期请求的结果。
+    if(flight)return !date||date===collectingDate?flight:Promise.reject(Error('正在采集其他时间范围，请等待完成后再更新当天'));if(closed||!enabled)return Promise.reject(Error('工作报告已关闭，请先开启'));if(corrupt)return Promise.reject(Error(error));
+    if(preparations.size)return Promise.allSettled([...preparations.values()]).then(()=>collect(date));
     if(gitlabConnecting)return Promise.reject(Error('正在连接 GitLab，请稍后采集'));
+    const currentTime=now();if(date&&date>dateKey(currentTime))return Promise.reject(Error('未来日期尚无采集数据，请选择今天或之前的日期'));
     const settings=clone(state.settings),epoch=generation;controller=new AbortController();const signal=controller.signal;
-    const until=now(),since=until-settings.lookbackDays*86400000;
+    // 手动更新按选中日的上海时间划界，自动采集才使用配置的回溯窗口。
+    const until=date?Math.min(currentTime,Date.parse(date+'T23:59:59.999+08:00')):currentTime,since=date?Date.parse(date+'T00:00:00+08:00'):until-settings.lookbackDays*86400000;
+    collectingDate=date||null;
     flight=Promise.resolve().then(async()=>{
-      syncPlanner();const results=[];let environment;
+      syncPlanner(date);const results=[];let environment;
       try{environment=readEnvironment();error='';}catch{environment={};error='工作报告环境配置无法读取，请检查项目 .env';}
       for(const [kind,sources,collector] of [['git',settings.repositories,gitCollector],['gitlab',settings.gitlabProjects,gitlabCollector],['jenkins',settings.jenkinsJobs,jenkinsCollector]])for(const source of sources){
         if(signal.aborted||closed||epoch!==generation)return;
         const key=kind+':'+(source.path||source.job||source.host+':'+source.projectId);
-        try{const options={since,until,signal,environment,fetchImpl};if(kind==='jenkins'){options.connection=gitlabStore?.load();options.gitlabProjects=settings.gitlabProjects;options.gitlabFetchImpl=gitlabFetchImpl;}if(kind==='gitlab'){options.connection=gitlabStore?.load();options.authors=settings.gitlabAuthors;options.authorMode=settings.gitlabAuthorMode;options.authorNames=settings.gitlabAuthorNames;options.trackedEntries=clone(state.entries);options.fetchImpl=gitlabFetchImpl;}
-          const entries=await collector(source,options);
+        try{const options={since,until,signal,environment,fetchImpl};if(kind==='jenkins'){options.connection=gitlabStore?.load();options.gitlabProjects=settings.gitlabProjects;options.gitlabFetchImpl=gitlabFetchImpl;}if(kind==='gitlab'||kind==='jenkins'){options.authors=settings.gitlabAuthors;options.authorMode=settings.gitlabAuthorMode;options.authorNames=settings.gitlabAuthorNames;}if(kind==='gitlab'){options.connection=gitlabStore?.load();options.trackedEntries=clone(state.entries.filter(entry=>!date||!Number.isFinite(entry.sourceMeta.committedAt)||entry.sourceMeta.committedAt<=until));options.fetchImpl=gitlabFetchImpl;}
+          let entries=await collector(source,options);
           if(signal.aborted||closed||epoch!==generation)return;
           if(!Array.isArray(entries)||entries.length>2000)throw Error('采集返回的记录过多，请缩小回溯范围');
+          // GitLab 可返回用于跟踪 MR 的历史提交；手动更新只落盘选中日期的来源。
+          if(date)entries=entries.filter(entry=>entry.date===date);
           // 采集期间允许编辑已有工作；每次落盘都合并最新状态，不使用过期快照覆盖编辑。
           const next=clone(state);
           if(kind==='jenkins'){
@@ -115,11 +141,11 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
               if(matches){old.sourceActive=false;old.updatedAt=now();dirty(next,old.date);}
             }
           }
-          ingest(next,entries);save(next);results.push({key,project:source.project,checkedAt:now(),count:entries.length,error:'',warning:entries.some(e=>e.source==='jenkins'&&e.sourceMeta.rangeVerified===false)?'部分发布缺少前次版本，仅展示目标版本关联 MR，完整范围待核对':''});
-        }catch(failure){if(signal.aborted||closed||epoch!==generation)return;results.push({key,project:source.project,checkedAt:now(),count:0,error:failure.reportSafe?failure.message:'采集失败，请检查来源配置、权限或回溯范围后重试。'});}
+          ingest(next,entries);if(kind==='gitlab')retireGitlabMerges(next,source,options,entries);save(next);results.push({key,project:source.project,date:date||'',since,until,checkedAt:now(),count:entries.length,error:'',warning:entries.some(e=>e.source==='jenkins'&&e.sourceMeta.rangeVerified===false)?'部分发布缺少前次版本，仅展示目标版本关联 MR，完整范围待核对':''});
+        }catch(failure){if(signal.aborted||closed||epoch!==generation)return;results.push({key,project:source.project,date:date||'',since,until,checkedAt:now(),count:0,error:failure.reportSafe?failure.message:'采集失败，请检查来源配置、权限或回溯范围后重试。'});}
       }
       if(!signal.aborted&&!closed&&epoch===generation){const next=clone(state);next.sources=results;save(next);}
-    }).finally(()=>{flight=null;controller=null;onChange();}).then(()=>snapshot());onChange();return flight;
+    }).finally(()=>{flight=null;collectingDate=null;controller=null;onChange();}).then(()=>snapshot(date?{date}:{}));onChange();return flight;
   }
   function prepareDay(date){
     if(preparations.has(date))return preparations.get(date);
@@ -220,11 +246,15 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
       const connection=gitlabStore?.load();if(!connection)throw Error('请先连接 GitLab');
       const client=createGitlabClient({...connection,fetchImpl:gitlabFetchImpl,signal});return name==='gitlab-groups'?client.groups(value):client.projects(value);
     });
-    if(name==='dismiss-work-match'||name==='accept-work-match'||name==='restore-work-matches'){
+    if(name==='dismiss-work-match'||name==='accept-work-match'||name==='restore-work-matches'||name==='save-work-match-title'){
       const date=requireDate(value.date),next=clone(state);
       if(name==='restore-work-matches'){next.dismissedMatches=next.dismissedMatches.filter(item=>item.date!==date);save(next);return snapshot({date});}
       const current=snapshot({date}),match=current.workMatches.items.find(item=>item.id===value.id);
       if(!match)throw Error('关联提醒已变化，请刷新后重新确认');
+      if(name==='save-work-match-title'){
+        // 待确认组标题与合并关系分开保存，修改标题不代表接受关联。
+        next.workMatchTitles=workMatchTitlesInput([...next.workMatchTitles.filter(item=>item.date!==date||item.id!==match.id),{date,id:match.id,title:value.title}]);save(next);return snapshot({date});
+      }
       if(name==='accept-work-match')return action('merge-work',{date,keys:match.keys,title:match.title,description:match.description});
       next.dismissedMatches=dismissedMatchesInput([...next.dismissedMatches,{date,id:match.id,members:match.keys.map(key=>current.work.items.find(item=>item.key===key).memberKeys)}]);save(next);return snapshot({date});
     }
@@ -290,7 +320,7 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
       if(flight||scheduled||gitlabConnecting||preparations.size)throw Error('正在采集、连接或归档，请稍后保存配置');
       const next=clone(state);next.settings=settingsInput(value,state.settings);save(next);error='';syncPlanner();schedule();return snapshot();
     }
-    if(name==='collect')return collect();
+    if(name==='collect')return collect(requireDate(value.date??dateKey(now())));
     if(name==='prepare-day')return prepareDay(requireDate(value.date));
     if(name==='sync-planner'){syncPlanner();return snapshot();}
     if(name==='preview-day')return {date:requireDate(value.date),content:dailyContent(state.entries,value.date,state.workGroups)};

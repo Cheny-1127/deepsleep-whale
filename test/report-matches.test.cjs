@@ -13,7 +13,7 @@ test('different business titles are suggested using specific shared content, not
 test('generic overlap, other projects, dates, uncompleted and conflicting works do not produce reminders',()=>{
   const base=item('a','修复会员缓存过期判断');
   for(const other of [item('b','调整登录缓存'),item('b','修复问题优化功能'),item('b',base.title,'',{status:'planned'}),item('b',base.title,'',{status:'blocked'}),item('b',base.title,'',{date:'2026-10-27'}),item('b',base.title,'',{conflictingGroups:[{id:'conflict'}]})])assert.equal(workMatches([base,other]).items.length,0);
-  assert.equal(workMatches([{...base,project:'business/a'},item('b',base.title,'',{project:'business/b'})]).items.length,0);
+  assert.equal(workMatches([{...base,project:'business/a'},item('b','调整会员缓存过期判断','',{project:'business/b'})]).items.length,0);
   assert.equal(workMatches([item('a','修复问题'),item('b','修复问题')]).items.length,0);
 });
 test('stable MR identity keeps a dismissal across new commits and title edits',()=>{
@@ -47,4 +47,35 @@ test('grouping respects the fifty-work merge limit and the twenty-group display 
 test('large candidate sets are bounded and explicitly indicate incomplete checks',()=>{
   const result=workMatches(Array.from({length:700},(_,i)=>item('task-'+i,'会员缓存有效期修复')));
   assert.ok(result.items.length<=20);assert.equal(result.limited,true);
+});
+
+test('the same feature branch is a priority hint even across repositories with unrelated copy',()=>{
+  const items=[item('admin','增加客户端选择','',{project:'business/admin'}),item('api','补齐枚举映射','',{project:'business/api'})],branch='feat-cy-1028-client-type';
+  const entries=[{id:'admin',source:'gitlab',sourceMeta:{featureBranch:branch}},{id:'api',source:'gitlab',sourceMeta:{mergeRequests:[{url:'https://gitlab.example.test/business/api/-/merge_requests/1',sourceBranch:branch}]}}];
+  const result=workMatches(items,entries);assert.equal(result.items.length,1);assert.match(result.items[0].reason,/相同功能分支：feat-cy-1028-client-type/);assert.deepEqual(result.items[0].keys,['admin','api']);assert.equal(items.length,2);
+  assert.equal(workMatches(items,entries,[{date,id:result.items[0].id,members:items.map(item=>item.memberKeys)}]).items.length,0);
+});
+
+test('cy branch descriptions match across dates and branch types without matching the date alone',()=>{
+  const items=[item('one','增加配置入口'),item('two','补齐读取逻辑')],entries=[{id:'one',source:'gitlab',sourceMeta:{featureBranch:'feat-cy-1027-client-type'}},{id:'two',source:'gitlab',sourceMeta:{featureBranch:'hotfix-cy-1028-client-type'}}];
+  assert.match(workMatches(items,entries).items[0].reason,/相同任务描述：client type/);
+  entries[1].sourceMeta.featureBranch='feat-cy-1027-other-feature';assert.equal(workMatches(items,entries).items.length,0);
+});
+
+test('exact business descriptions are hints across projects, while generic descriptions remain ignored',()=>{
+  const items=[item('one','应用类型配置','',{project:'business/admin'}),item('two','fix: 应用类型配置。','',{project:'business/api'})];
+  const result=workMatches(items);assert.equal(result.items.length,1);assert.match(result.items[0].reason,/相同任务描述/);
+  assert.equal(workMatches([item('one','完成工作'),item('two','完成工作')]).items.length,0);
+  assert.equal(workMatches([item('one','增加配置入口','代码已合并 main。'),item('two','补齐读取逻辑','代码已合并 main。')]).items.length,0);
+});
+
+test('branch hints respect date, explicit denials and the MR represented by a shared deployment',()=>{
+  const branch='feat-cy-1028-client-type',one=item('one','增加配置入口','',{mr:{url:'mr:one',sourceBranch:branch}}),two=item('two','补齐读取逻辑','',{date:'2026-10-27',mr:{url:'mr:two',sourceBranch:branch}});
+  assert.equal(workMatches([one,two]).items.length,0);
+  two.date=date;const pair=workMatches([one,two]).items[0];
+  const third=item('third','增加类型映射','',{mr:{url:'mr:third',sourceBranch:branch}}),dismissed=[{date,id:pair.id,members:[one.memberKeys,two.memberKeys]}];
+  assert.ok(workMatches([one,two,third],[],dismissed).items.every(match=>!match.keys.includes('one')||!match.keys.includes('two')));
+  one.entryIds=['shared'];delete one.mr.sourceBranch;
+  const entries=[{id:'shared',source:'jenkins',sourceMeta:{mergeRequests:[{url:'mr:one',sourceBranch:'feat-cy-1028-unrelated'},{url:'mr:two',sourceBranch:branch}]}}];
+  assert.equal(workMatches([one,two],entries).items.length,0);
 });

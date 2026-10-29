@@ -179,6 +179,18 @@ test('tracked old commits refresh outside the lookback and create an exact main 
   const event=entries.find(entry=>entry.sourceMeta.event==='merged');assert.ok(event);assert.equal(event.date,'2026-10-26');assert.equal(event.sourceMeta.mergeRequests[0].targetBranch,'main');assert.ok(calls.some(path=>path.endsWith('/merge_requests/9')));
 });
 
+test('merging a colleague feature does not collect their task or create its merge event',async()=>{
+  const {collectGitlab}=require('../src/reports/gitlab.cjs'),source={host,projectId:21,project:'business/orders'},mr={iid:119,project_id:21,title:'同事的支付功能',state:'merged',source_branch:'feat/colleague-pay',target_branch:'main',merged_at:'2026-10-26T12:00:00+08:00'};
+  for(const merge of [{...commit('a'),title:"Merge branch 'feat/colleague-pay' into 'main'",parent_ids:['b'.repeat(40),'c'.repeat(40)]},{...commit('a'),title:'解决合并冲突',parent_ids:['b'.repeat(40),'c'.repeat(40)]}]){
+    const entries=await collectGitlab(source,{since:NOW-86400000,until:NOW,connection:{url:host,token},authors:user.email,fetchImpl:async raw=>reply(new URL(raw).pathname.endsWith('/repository/commits')?[merge,commit('b','colleague@example.test')]:[mr],{'x-next-page':''})});
+    assert.deepEqual(entries,[]);
+  }
+  const old={source:'gitlab',sourceKey:'gitlab:'+host+':21:'+'a'.repeat(40),title:"Merge branch 'feat/colleague-pay' into 'main'",project:source.project,date:'2026-10-01',status:'done',sourceMeta:{projectId:21,sha:'a'.repeat(40),email:user.email,committedAt:NOW-30*86400000,mergeRequests:[{...mr,url:host+'/business/orders/-/merge_requests/119'}]}};
+  const entries=await collectGitlab(source,{since:NOW-86400000,until:NOW,connection:{url:host,token},authors:user.email,trackedEntries:[old],fetchImpl:async raw=>reply(new URL(raw).pathname.endsWith('/repository/commits')?[]:[mr],{'x-next-page':''})});assert.deepEqual(entries,[]);
+  const contributed=await collectGitlab(source,{since:NOW-86400000,until:NOW,connection:{url:host,token},authors:user.email,fetchImpl:async raw=>reply(new URL(raw).pathname.endsWith('/repository/commits')?[commit('c')]:[mr],{'x-next-page':''})});
+  assert.equal(contributed.length,2);assert.equal(contributed[0].sourceMeta.sha,'c'.repeat(40));assert.equal(contributed[1].sourceMeta.event,'merged');
+});
+
 test('frontend merge events preserve a variable target branch without allowing it for backend repositories',async()=>{
   const {collectGitlab}=require('../src/reports/gitlab.cjs'),mergedAt=NOW-1000;
   const mr={iid:20,project_id:21,state:'merged',title:'应用类型新增',source_branch:'feat-cy-client-type',target_branch:'v3.10.0',merged_at:new Date(mergedAt).toISOString()};
@@ -199,10 +211,10 @@ test('MR association failures and truncated pages cannot save half-associated so
   }}),/分页不完整/);
 });
 
-test('intermediate merge commits join only a verified exact project MR reference or MR merge SHA',async()=>{
+test('business commits retain verified SHA associations while intermediate merges do not introduce colleague work',async()=>{
   const {collectGitlab}=require('../src/reports/gitlab.cjs');
   const merged={iid:9,project_id:21,state:'merged',title:'订单修复',merge_commit_sha:'f'.repeat(40)};
   const items=[commit('a'),{...commit('b'),message:"Merge branch feature\n\nSee merge request business/orders!9",parent_ids:['a'.repeat(40),'c'.repeat(40)]},{...commit('c'),message:'普通提交\nSee merge request business/orders!9',parent_ids:['a'.repeat(40)]},{...commit('d'),message:'合并其他项目\nSee merge request other/orders!9',parent_ids:['a'.repeat(40),'c'.repeat(40)]},commit('f')];
   const result=await collectGitlab({host,projectId:21,project:'business/orders'},{since:NOW-86400000,until:NOW,connection:{url:host,token},authors:user.email,fetchImpl:async raw=>{const p=new URL(raw).pathname;return reply(p.endsWith('/repository/commits')?items:p.includes('/'+'a'.repeat(40)+'/merge_requests')?[merged]:[],{'x-next-page':''});}});
-  assert.deepEqual(result.map(e=>e.sourceMeta.mergeRequests.length),[1,1,0,0,1]);assert.equal(result[1].sourceMeta.mrAssociation,'explicit-merge-reference');
+  assert.deepEqual(result.map(e=>e.sourceMeta.sha),['a','c','f'].map(value=>value.repeat(40)));assert.deepEqual(result.map(e=>e.sourceMeta.mergeRequests.length),[1,0,1]);
 });
