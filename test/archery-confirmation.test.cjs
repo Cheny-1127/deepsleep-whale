@@ -7,6 +7,17 @@ function fixture(t,options={}) {
   const bridge=createArcheryConfirmation({getWindow:()=>window,...options});t.after(()=>bridge.cancel());
   return {sender,window,messages,bridge,item:{id:566,title:'测试工单'}};
 }
+test('rejection token requires a reason and returns it only for its bound operation',async t=>{
+  const f=fixture(t),waiting=f.bridge.request(f.sender,f.item,{operation:'reject'}),message=f.messages[0];
+  assert.equal(message.operation,'reject');
+  for(const remark of [undefined,'  ','x'.repeat(1001)])assert.equal(f.bridge.reply(f.sender,{token:message.token,confirmed:true,remark}),false);
+  assert.equal(f.bridge.reply(f.sender,{token:message.token,confirmed:true,remark:'  不符合变更要求  '}),true);
+  assert.deepEqual(await waiting,{confirmed:true,remark:'不符合变更要求'});
+  assert.equal(f.bridge.reply(f.sender,{token:message.token,confirmed:true,remark:'再次拒绝'}),false);
+  const approving=f.bridge.request(f.sender,f.item,{operation:'approve'}),token=f.messages.at(-1).token;
+  f.bridge.reply(f.sender,{token,confirmed:true,remark:'不能变成拒绝'});assert.equal(await approving,true);
+});
+
 test('confirmation is bound to the originating page and one-use token; no reply is not approval',async t=>{
   const f=fixture(t),waiting=f.bridge.request(f.sender,f.item),token=f.messages[0].token;
   assert.equal(f.messages[0].channel,'archery-confirmation');assert.deepEqual(f.messages[0].item,f.item);

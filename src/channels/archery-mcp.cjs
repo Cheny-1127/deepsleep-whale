@@ -57,12 +57,12 @@ function readArcheryConfig({home=process.env.CODEX_HOME||path.join(os.homedir(),
   const canApprove=(!Array.isArray(entry.enabled_tools)||entry.enabled_tools.includes('work_order_approve'))&&
     !entry.disabled_tools?.includes('work_order_approve');
   const allowed=name=>(!Array.isArray(entry.enabled_tools)||entry.enabled_tools.includes(name))&&!entry.disabled_tools?.includes(name);
-  const canDetail=allowed('work_order_detail'),canExecute=allowed('work_order_execute'),canList=allowed('work_order_list');
-  const fingerprint=hash(JSON.stringify({server,canApprove,canDetail,canExecute,canList,installed:installed.revision}));
+  const canReject=allowed('work_order_terminate'),canDetail=allowed('work_order_detail'),canExecute=allowed('work_order_execute'),canList=allowed('work_order_list');
+  const fingerprint=hash(JSON.stringify({server,canApprove,canReject,canDetail,canExecute,canList,installed:installed.revision}));
   // 密码变化只使会话失效；同一账号的未知审批结果继续防重。未知启动器按配置来源保守隔离。
   const accountKey=hash(JSON.stringify(baseUrl&&metadata.ARCHERY_USERNAME?[baseUrl,metadata.ARCHERY_USERNAME]:
     [configFile||path.join(home,'config.toml'),entry.command,entry.args||[],entry.cwd||'']));
-  return {server,fingerprint,accountKey,canApprove,canDetail,canExecute,canList,baseUrl,
+  return {server,fingerprint,accountKey,canApprove,canReject,canDetail,canExecute,canList,baseUrl,
     startupMs:Math.min(120000,Math.max(1000,(Number(entry.startup_timeout_sec)||30)*1000)),
     timeoutMs:Math.min(180000,Math.max(1000,(Number(entry.tool_timeout_sec)||90)*1000))};
 }
@@ -84,6 +84,11 @@ function createArcheryMcp(config) {
       if(!config.canApprove||!connected||!Number.isSafeInteger(id)||id<1)throw new Error('approval_unavailable');
       // 不建新会话、不批量、不重试，更不追加执行 SQL。
       return client.callTool({name:'work_order_approve',arguments:{order_ids:[id],remark:'审核通过'}},undefined,{signal,timeout:config.timeoutMs});
+    },
+    async reject(id,{signal,remark}={}) {
+      if(!config.canReject||!connected||!Number.isSafeInteger(id)||id<1||typeof remark!=='string'||!remark.trim()||remark.trim().length>1000)throw new Error('rejection_unavailable');
+      // 审核拒绝对应终止流程，不能误用提交人取消；只发送已确认的单笔编号与原因。
+      return client.callTool({name:'work_order_terminate',arguments:{order_ids:[id],remark:remark.trim()}},undefined,{signal,timeout:config.timeoutMs});
     },
     async execute(id,{signal}={}) {
       if(!config.canExecute||!connected||!Number.isSafeInteger(id)||id<1)throw new Error('execution_unavailable');

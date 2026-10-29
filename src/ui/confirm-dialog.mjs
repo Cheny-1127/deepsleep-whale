@@ -1,7 +1,7 @@
 let sequence=0;
 
 // 确认框挂在所属模块内，模块关闭时可统一取消；不使用会唤起系统窗口的 window.confirm。
-export function confirmAction({owner,title,message,confirmLabel='确认',danger=false,content=null}) {
+export function confirmAction({owner,title,message,confirmLabel='确认',danger=false,content=null,validate=null}) {
   // 隐藏、停用模块不能发起操作，同一时刻也只允许一个确认框占用焦点。
   if(owner.closest('[hidden],[inert]')||document.querySelector('.ui-confirm-dialog[open]'))return Promise.resolve(false);
   const opener=document.activeElement,dialog=document.createElement('dialog'),id='ui-confirm-'+(++sequence);
@@ -13,7 +13,8 @@ export function confirmAction({owner,title,message,confirmLabel='确认',danger=
   // 默认聚焦取消，直接按 Enter 不会触发删除等不可撤销操作。
   cancel.type=confirm.type='button';cancel.className='outline';cancel.textContent='取消';cancel.autofocus=true;
   confirm.className=danger?'primary ui-confirm-danger':'primary';confirm.textContent=confirmLabel;
-  cancel.addEventListener('click',()=>dialog.close());confirm.addEventListener('click',()=>dialog.close('confirmed'));
+  // 有附加必填内容时先校验，失败保留弹窗与草稿；取消始终不受表单校验阻拦。
+  cancel.addEventListener('click',()=>dialog.close());confirm.addEventListener('click',()=>{if(!validate||validate())dialog.close('confirmed');});
   // 额外详情由调用方创建 DOM 节点后传入，不接收 HTML 字符串，沿用相同的取消与焦点管理。
   actions.append(cancel,confirm);dialog.append(heading,description);if(content)dialog.append(content);dialog.append(actions);owner.append(dialog);
   return new Promise(resolve=>{

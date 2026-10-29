@@ -13,7 +13,7 @@ function fixture() {
   }
   const elements=new Map();
   for(const [,id] of fs.readFileSync(path.join(__dirname,'../src/ui/index.html'),'utf8').matchAll(/id="([^"]+)"/g))elements.set(id,new Element());
-  let data={state:'connected',busy:false,canApprove:true,canDetail:true,canListExecute:true,canExecute:true,mode:'approve',page:1,items:[],hasMore:true,sourceTotal:50,lastChecked:1000},fail=false;
+  let data={state:'connected',busy:false,canApprove:true,canReject:true,canDetail:true,canListExecute:true,canExecute:true,mode:'approve',page:1,items:[],hasMore:true,sourceTotal:50,lastChecked:1000},fail=false;
   let detail=async id=>({id,sql:'SELECT 1; <img src=x onerror=bad()>',review:'审核结果',execution:'尚未执行'});
   let connection={valid:true,configFile:'/fixture/config.toml',defaultFile:'/default/config.toml',permissions:{detail:true,approve:true,execute:false}};
   const calls=[],timers=[],confirmations=[];let onConfirmation,confirmed=false,confirmImpl=async()=>confirmed;
@@ -28,10 +28,31 @@ function fixture() {
     if(name==='set-enabled')data={...data,enabled:value};return {value:data};
   }}};
   const source=fs.readFileSync(path.join(__dirname,'../src/ui/archery-view.mjs'),'utf8').replace(/^import .*;\n/gm,'').replace('export function','function');
-  vm.runInNewContext(source+'\ncreateArcheryView();',{window,document:{getElementById:id=>elements.get(id),createElement:tag=>Object.assign(new Element(),{tagName:tag})},Date,updateSidebarStatus:()=>{},confirmAction:async options=>{confirmations.push(options);return confirmImpl();},setInterval:fn=>timers.push(fn)});
+  vm.runInNewContext(source+'\ncreateArcheryView();',{window,document:{getElementById:id=>elements.get(id),createElement:tag=>Object.assign(new Element(),{tagName:tag})},Date,updateSidebarStatus:()=>{},confirmAction:async options=>{confirmations.push(options);return confirmImpl(options);},setInterval:fn=>timers.push(fn)});
   const get=id=>elements.get('archery-'+id);
   return {get,calls,timers,confirmations,confirmation:request=>onConfirmation(request),setConfirmed:value=>confirmed=value,setConfirm:fn=>confirmImpl=fn,set:value=>data={...data,...value,...(value.items?{items:value.items.map(item=>({status:'workflow_manreviewing',...item}))}:{})},setConnection:value=>connection={...connection,...value},setDetail:fn=>detail=fn,fail:()=>fail=true,async sync(){elements.get('nav-archery').click();await tick();}};
 }
+test('review actions expose rejection only while reviewing and respect its separate permission and shared guard',async()=>{
+  const f=fixture();f.set({items:[{id:566,title:'待审核'},{id:567,title:'已审核',status:'workflow_review_pass'}]});await f.sync();
+  const [review,execution]=f.get('list').children,buttons=review.children[1].children,reject=buttons[1];
+  assert.equal(buttons.length,2);assert.equal(reject.textContent,'审核拒绝');assert.equal(reject.hidden,false);
+  reject.click();await tick();assert.ok(f.calls.some(c=>c.name==='reject'&&c.value===566));
+  assert.equal(execution.children[1].children[1].hidden,true);
+  f.set({canReject:false});await f.sync();assert.equal(reject.disabled,true);assert.equal(buttons[0].disabled,false);
+  f.set({canReject:true,items:[{id:566,title:'待核实',approvalStatus:'unknown'},{id:567,title:'已审核',status:'workflow_review_pass'}]});await f.sync();
+  assert.equal(reject.disabled,true);assert.equal(buttons[0].disabled,true);
+});
+
+test('rejection confirmation collects a required reason and replies with the original token',async()=>{
+  const f=fixture();f.setConfirm(async options=>{
+    const field=options.content.children.find(child=>child.className==='archery-rejection-reason').children.find(child=>child.tagName==='textarea');
+    assert.equal(field.required,true);assert.equal(field.maxLength,1000);field.value='  请补充变更依据  ';return true;
+  });
+  await f.confirmation({operation:'reject',token:'reject-one',item:{id:566,title:'变更工单'}});
+  assert.equal(f.confirmations[0].title,'审核拒绝工单 #566？');assert.equal(f.confirmations[0].confirmLabel,'审核拒绝');assert.equal(f.confirmations[0].danger,true);
+  assert.deepEqual(JSON.parse(JSON.stringify(f.calls.at(-1))),{name:'confirm-approval',value:{token:'reject-one',confirmed:true,remark:'请补充变更依据'}});
+});
+
 test('approval confirmation renders the main-process item and replies only with the issued token and explicit choice',async()=>{
   const f=fixture(),request={token:'main-request',item:{id:566,title:'<img src=x>',submitter:'测试人',instance:'实例',database:'数据库'}};
   await f.confirmation(request);assert.equal(f.confirmations[0].owner,f.get('view'));
@@ -148,7 +169,7 @@ test('the header reports connection failures accurately and only toggles automat
 test('MCP detail and approval do not require an external browser action',async()=>{
   const f=fixture();f.set({items:[{id:566,title:'待审核'}]});await f.sync();
   const controls=f.get('list').children[0].children[1];
-  assert.equal(controls.children.length,1);assert.equal(controls.children[0].disabled,false);
+  assert.equal(controls.children.length,2);assert.equal(controls.children[0].disabled,false);assert.equal(controls.children[1].textContent,'审核拒绝');
   f.get('list').children[0].children[0].click();await tick();
   const box=f.get('list').children[0].children[2];assert.equal(box.hidden,false);
   assert.ok(!box.children.some(child=>child.textContent==='在浏览器打开'));

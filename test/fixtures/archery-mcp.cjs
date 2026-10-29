@@ -13,7 +13,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
   }else if(request.method==='tools/call'&&request.params.name==='work_order_detail') {
     const id=request.params.arguments.order_id;
     result={content:[],structuredContent:{status:'success',data:{workflow_id:id,workflow:{id,is_offline_export:0},sql_content:'SELECT 1;',review_content:'测试审核',execute_result:''}}};
-  }else if(request.method==='tools/call'&&['work_order_approve','work_order_execute'].includes(request.params.name)) {
+  }else if(request.method==='tools/call'&&['work_order_approve','work_order_terminate','work_order_execute'].includes(request.params.name)) {
     const [id]=request.params.arguments.order_ids;
     result={content:[],structuredContent:{status:'success',data:{succeeded:[id],failed:[],unknown:[],remaining:[],results:[{order_id:id,status:'success',message:'passed'}]}}};
   }else {process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:request.id,error:{code:-32601,message:'not permitted'}})+'\n');return;}

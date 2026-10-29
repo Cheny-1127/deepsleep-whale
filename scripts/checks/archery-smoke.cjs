@@ -12,17 +12,17 @@ const {shell,Notification,dialog}=require('electron');Notification.isSupported=(
 const crypto=require('node:crypto'),cacheModule=require(${JSON.stringify(path.join(root,'src/channels/archery-cache.cjs'))}),createCache=cacheModule.createArcheryCache;
 const testStorage={isEncryptionAvailable:()=>true,getSelectedStorageBackend:()=> 'test',encryptString(text){const iv=crypto.randomBytes(12),cipher=crypto.createCipheriv('aes-256-gcm',Buffer.alloc(32,7),iv),body=Buffer.concat([cipher.update(text,'utf8'),cipher.final()]);return Buffer.concat([iv,body,cipher.getAuthTag()]);},decryptString(bytes){const cipher=crypto.createDecipheriv('aes-256-gcm',Buffer.alloc(32,7),bytes.subarray(0,12));cipher.setAuthTag(bytes.subarray(-16));return Buffer.concat([cipher.update(bytes.subarray(12,-16)),cipher.final()]).toString('utf8');}};
 cacheModule.createArcheryCache=options=>createCache({...options,safeStorage:testStorage});
-global.archerySmoke={calls:[],details:[],opened:[],approvals:[],executions:[],executed:false,extraReady:false,confirmations:[],largeConfirmations:[],largeConfirm:false,largeDetail:false,failDetail:false,deferDetail:false,status:'workflow_manreviewing',confirm:false,fail:false,approved:false};shell.openExternal=async url=>global.archerySmoke.opened.push(url);
+global.archerySmoke={calls:[],details:[],opened:[],approvals:[],rejections:[],orderId:566,rejected:false,executions:[],executed:false,extraReady:false,confirmations:[],largeConfirmations:[],largeConfirm:false,largeDetail:false,failDetail:false,deferDetail:false,status:'workflow_manreviewing',confirm:false,fail:false,approved:false};shell.openExternal=async url=>global.archerySmoke.opened.push(url);
 dialog.showMessageBox=async options=>{if(options.title==='展开完整工单详情'){global.archerySmoke.largeConfirmations.push(options);return {response:global.archerySmoke.largeConfirm?1:0};}global.archerySmoke.confirmations.push(options);return {response:global.archerySmoke.confirm?1:0};};
 const channel=require(${JSON.stringify(path.join(root,'src/channels/archery-pending.cjs'))}),create=channel.createArcheryPending;
 channel.createArcheryPending=options=>create({...options,intervalMs:1000,
-readConfig:()=>({fingerprint:'synthetic-account',baseUrl:'https://archery.example.com',canApprove:true,canDetail:true,canExecute:true,canList:true}),
+readConfig:()=>({fingerprint:'synthetic-account',baseUrl:'https://archery.example.com',canApprove:true,canReject:true,canDetail:true,canExecute:true,canList:true}),
 createClient:()=>({close(){},async pending(page,{mode='approve'}={}){global.archerySmoke.calls.push(page);if(global.archerySmoke.fail)throw Error('fixture-secret');
-const items=page===2||global.archerySmoke.executed||(mode==='approve'?global.archerySmoke.approved:global.archerySmoke.status!=='workflow_review_pass')?[]:[{order_id:566,order_type:'work_order',title:'测试工单 <img src=x onerror=alert(1)>',submitter:'测试人员',instance:'测试实例',database:'测试库',status:global.archerySmoke.status,created_at:'2026-10-20 00:30'}];if(mode==='execute'&&global.archerySmoke.extraReady)items.push({order_id:567,order_type:'work_order',title:'同时待执行的另一笔工单',status:'workflow_review_pass'});return {structuredContent:{status:'success',data:{items,pagination:{page,page_size:20,total:mode==='execute'?42:null,source_total:42,has_more:page<3,next_page:page<3?page+1:null,scope:mode==='execute'?'matching_orders':'source_page_filtered'}}}};},async detail(id,{allowLarge}){
+const items=page===2||global.archerySmoke.rejected||global.archerySmoke.executed||(mode==='approve'?global.archerySmoke.approved:global.archerySmoke.status!=='workflow_review_pass')?[]:[{order_id:global.archerySmoke.orderId,order_type:'work_order',title:'测试工单 <img src=x onerror=alert(1)>',submitter:'测试人员',instance:'测试实例',database:'测试库',status:global.archerySmoke.status,created_at:'2026-10-20 00:30'}];if(mode==='execute'&&global.archerySmoke.extraReady)items.push({order_id:567,order_type:'work_order',title:'同时待执行的另一笔工单',status:'workflow_review_pass'});return {structuredContent:{status:'success',data:{items,pagination:{page,page_size:20,total:mode==='execute'?42:null,source_total:42,has_more:page<3,next_page:page<3?page+1:null,scope:mode==='execute'?'matching_orders':'source_page_filtered'}}}};},async detail(id,{allowLarge}){
 global.archerySmoke.details.push({id,allowLarge});if(global.archerySmoke.deferDetail)await new Promise(resolve=>global.archerySmoke.releaseDetail=resolve);if(global.archerySmoke.failDetail)throw Error('fixture-secret');
 if(global.archerySmoke.largeDetail&&!allowLarge)return {structuredContent:{status:'needs_confirmation',data:{order_id:id,order_type:'work_order',response_bytes:40000}}};
 return {structuredContent:{status:'success',data:{workflow_id:id,workflow:{id,is_offline_export:0,status:'workflow_manreviewing',group_name:'测试组',db_name:'测试库'},sql_content:'SELECT * FROM fixture_table; -- <img src=x onerror=alert(1)>'+String.fromCharCode(10)+('SELECT '+ 'fixture_value,'.repeat(40)+'1;'+String.fromCharCode(10)).repeat(30),review_content:[{message:'审核检查完成'}],execute_result:'尚未执行'}}};
-},async approve(id){global.archerySmoke.approvals.push(id);global.archerySmoke.approved=true;global.archerySmoke.status='workflow_review_pass';return {structuredContent:{status:'success',data:{succeeded:[id],failed:[],unknown:[],remaining:[],results:[{order_id:id,status:'success'}]}}};},async execute(id){global.archerySmoke.executions.push(id);global.archerySmoke.executed=true;return {structuredContent:{status:'success',data:{succeeded:[id],failed:[],unknown:[],remaining:[],results:[{order_id:id,status:'success'}]}}};}})});
+},async approve(id){global.archerySmoke.approvals.push(id);global.archerySmoke.approved=true;global.archerySmoke.status='workflow_review_pass';return {structuredContent:{status:'success',data:{succeeded:[id],failed:[],unknown:[],remaining:[],results:[{order_id:id,status:'success'}]}}};},async reject(id,{remark}){global.archerySmoke.rejections.push({id,remark});global.archerySmoke.rejected=true;global.archerySmoke.status='workflow_abort';return {structuredContent:{status:'success',data:{succeeded:[id],failed:[],unknown:[],remaining:[],results:[{order_id:id,status:'success'}]}}};},async execute(id){global.archerySmoke.executions.push(id);global.archerySmoke.executed=true;return {structuredContent:{status:'success',data:{succeeded:[id],failed:[],unknown:[],remaining:[],results:[{order_id:id,status:'success'}]}}};}})});
 require(${JSON.stringify(path.join(root,'src/main.cjs'))});`);
 let app;
 const launch=()=>electron.launch({executablePath:require('electron'),args:[bootstrap],env:{...process.env,WHALE_DATA_DIR:dir,CODEX_HOME:dir}});
@@ -37,6 +37,37 @@ const launch=()=>electron.launch({executablePath:require('electron'),args:[boots
   assert.ok(await panel.locator('#home-view').isHidden());assert.ok(await panel.locator('#mail-view').isHidden());
   assert.equal(await panel.locator('.archery-order img').count(),0);assert.match(await panel.locator('#archery-count').textContent(),/本页 1 条/);
   assert.deepEqual(await app.evaluate(()=>global.archerySmoke.details),[]);
+  const reject=panel.locator('.archery-actions').getByRole('button',{name:'审核拒绝',exact:true});
+  for(const width of [760,1060]){
+    await app.evaluate(({BrowserWindow},width)=>{const win=BrowserWindow.getAllWindows().find(win=>win.webContents.getURL().endsWith('/index.html'));win.setMinimumSize(640,600);win.setSize(width,900);},width);
+    const layout=await panel.locator('.archery-order').evaluate(row=>{
+      const buttons=[...row.querySelectorAll('.archery-actions button')].map(b=>b.getBoundingClientRect());
+      return {sameHeight:buttons[0].height===buttons[1].height,aligned:buttons[0].top===buttons[1].top,separate:buttons[0].right<=buttons[1].left,overflow:document.querySelector('main').scrollWidth>document.querySelector('main').clientWidth};
+    });
+    assert.deepEqual(layout,{sameHeight:true,aligned:true,separate:true,overflow:false});
+    await panel.locator('.archery-message').hover();
+    assert.equal(await panel.locator('.archery-order').evaluate(row=>getComputedStyle(row).backgroundColor!=='rgba(0, 0, 0, 0)'&&getComputedStyle(row.querySelector('.archery-message')).backgroundColor==='rgba(0, 0, 0, 0)'),true,'整行统一高亮，摘要不再形成独立色块');
+    await panel.screenshot({path:path.join(root,`out/archery-review-actions-${width}.png`),fullPage:true});
+  }
+  if(process.env.WHALE_ARCHERY_LAYOUT_ONLY==='1'){
+    await panel.locator('.archery-message').click();await panel.locator('.archery-detail pre').first().waitFor();
+    await panel.locator('#archery-heading').hover();
+    assert.equal(await panel.locator('.archery-order').evaluate(row=>getComputedStyle(row).backgroundColor!=='rgba(0, 0, 0, 0)'&&getComputedStyle(row.querySelector('.archery-message')).backgroundColor==='rgba(0, 0, 0, 0)'),true,'展开后摘要与审核按钮继续共用整行底色');
+    await panel.screenshot({path:path.join(root,'out/archery-unified-order-expanded.png'),fullPage:true});
+    await panel.locator('.archery-message').click();assert.equal(await panel.locator('.archery-detail').isHidden(),true);
+    assert.deepEqual(await app.evaluate(()=>global.archerySmoke.approvals),[]);assert.deepEqual(await app.evaluate(()=>global.archerySmoke.rejections),[]);
+    assert.deepEqual(await app.evaluate(()=>global.testWindowPolicy.events),[]);assert.deepEqual(errors,[]);
+    console.log('Archery layout OK: unified row background on hover and expansion, 760/1060 widths, aligned actions, no overflow, expand/collapse, hidden isolated window');return;
+  }
+  await reject.click();const rejection=panel.locator('.ui-confirm-dialog');await rejection.waitFor({state:'visible'});
+  const rejectConfirm=rejection.getByRole('button',{name:'审核拒绝',exact:true});
+  await rejectConfirm.click();assert.equal(await rejection.isVisible(),true,'未填原因不能提交');
+  await rejection.getByRole('textbox',{name:'拒绝原因',exact:true}).fill('   ');await rejectConfirm.click();
+  assert.equal(await rejection.isVisible(),true,'空白原因不能提交');assert.deepEqual(await app.evaluate(()=>global.archerySmoke.rejections),[]);
+  await rejection.getByRole('textbox',{name:'拒绝原因',exact:true}).fill('请补充回滚方案');
+  await rejection.getByRole('button',{name:'取消',exact:true}).click();await rejection.waitFor({state:'detached'});
+  assert.deepEqual(await app.evaluate(()=>global.archerySmoke.rejections),[],'取消拒绝不调用 MCP');
+  await panel.waitForFunction(()=>!document.querySelector('.archery-actions button').disabled);
   await panel.locator('.archery-actions').getByRole('button',{name:'审核通过',exact:true}).click();
   const initialConfirmation=panel.locator('.ui-confirm-dialog');await initialConfirmation.waitFor({state:'visible'});
   assert.equal(await initialConfirmation.locator('pre').count(),0);assert.deepEqual(await app.evaluate(()=>global.archerySmoke.details),[],'未点击获取详情，不调用接口');
@@ -182,9 +213,21 @@ const launch=()=>electron.launch({executablePath:require('electron'),args:[boots
   assert.match(await panel.locator('#archery-feedback').textContent(),/执行请求已受理.*最终结果/);
   assert.deepEqual(await app.evaluate(()=>global.archerySmoke.confirmations),[],'审核和执行都使用应用内弹窗');
 
+  await app.evaluate(()=>{global.archerySmoke.orderId=568;global.archerySmoke.executed=false;global.archerySmoke.approved=false;global.archerySmoke.status='workflow_manreviewing';});
+  const currentReject=panel.locator('.archery-actions').getByRole('button',{name:'审核拒绝',exact:true});
+  await panel.locator('#archery-refresh').click();await currentReject.waitFor({state:'visible'});
+  await currentReject.click();await confirmation.waitFor({state:'visible'});
+  assert.match(await confirmation.locator('h2').textContent(),/审核拒绝工单 #568/);
+  await confirmation.getByRole('textbox',{name:'拒绝原因',exact:true}).fill('  请补充回滚方案  ');
+  await panel.screenshot({path:path.join(root,'out/archery-reject-confirmation.png'),fullPage:true});
+  await confirmation.getByRole('button',{name:'审核拒绝',exact:true}).click();
+  await panel.waitForFunction(()=>document.querySelectorAll('.archery-order').length===0);
+  assert.deepEqual(await app.evaluate(()=>global.archerySmoke.rejections),[{id:568,remark:'请补充回滚方案'}]);
+  assert.deepEqual(await app.evaluate(()=>global.archerySmoke.approvals),[566]);assert.deepEqual(await app.evaluate(()=>global.archerySmoke.executions),[566]);
+  assert.match(await panel.locator('#archery-feedback').textContent(),/已审核拒绝/);
   await panel.locator('#nav-home').click();assert.ok(await panel.locator('#archery-view').isHidden());
   const count=await app.evaluate(()=>global.archerySmoke.calls.length);
   await panel.waitForTimeout(1400);assert.ok((await app.evaluate(()=>global.archerySmoke.calls.length))>count,'polling continues with the page hidden');
   assert.deepEqual(await app.evaluate(()=>global.testWindowPolicy.events),[]);
-  assert.deepEqual(errors,[]);console.log('Archery UI smoke OK: SQL/results without review, cached paging and restart, status-only refresh, explicit reload, large-content consent, hidden layouts, in-app approval with on-demand details and cached preview, Enter/Esc/navigation cancellation, unified review/execution list with mixed actions and automatic verified status transition, one-order approval and execution with separate confirmation, cancellation, cached SQL and IPC isolation');
+  assert.deepEqual(errors,[]);console.log('Archery UI smoke OK: SQL/results without review, cached paging and restart, status-only refresh, explicit reload, large-content consent, hidden layouts, in-app approval with on-demand details and cached preview, Enter/Esc/navigation cancellation, unified review/execution list with mixed actions and automatic verified status transition, one-order approval, reason-required rejection and execution with separate confirmation, cancellation, cached SQL and IPC isolation');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{if(app)await app.close();fs.rmSync(dir,{recursive:true,force:true});});

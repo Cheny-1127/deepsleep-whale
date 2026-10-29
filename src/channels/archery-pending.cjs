@@ -5,7 +5,7 @@ const {createArcheryCache}=require('./archery-cache.cjs');
 const INTERVAL_MS=5*60*1000;
 
 // 轮询属于主进程，关闭或切换页面不会停止；快照只返回摘要，详情由独立缓存按账号隔离。
-function createArcheryPending({readConfig=readArcheryConfig,createClient=createArcheryMcp,confirmApproval=async()=>false,confirmExecution=async()=>false,
+function createArcheryPending({readConfig=readArcheryConfig,createClient=createArcheryMcp,confirmApproval=async()=>false,confirmRejection=async()=>false,confirmExecution=async()=>false,
   confirmLargeDetail=async()=>false,cache=createArcheryCache(),
   clock={now:()=>Date.now(),setTimeout,clearTimeout},intervalMs=INTERVAL_MS,settingsFile}={}) {
   let closed=false,timer,flight=null,controller,client=null,config=null,page=1,enabled=true;
@@ -17,9 +17,10 @@ function createArcheryPending({readConfig=readArcheryConfig,createClient=createA
   } catch {} // 首次使用或配置损坏时默认开启，不覆盖原文件。
   const approvals=new Map(),largeDetails=new Map();let contentRevision=0;
   const accountKey=()=>config?.accountKey||config?.fingerprint;
-  const approvalKey=(id,operation='approve')=>`${accountKey()}:${id}:${operation}`;
-  const eligible=(operation='approve')=>Boolean(moduleEnabled&&(operation==='execute'?config?.canExecute&&config?.canList:config?.canApprove)&&client&&state==='connected'&&lastChecked!==null&&clock.now()-lastChecked<5*60*1000);
-  function snapshot(){return {state,error,notice,enabled,canListExecute:Boolean(config?.canList),contentRevision,canDetail:Boolean(config?.canDetail&&(client&&state==='connected'||items.some(item=>cache.has(accountKey(),item.id)))),canApprove:eligible(),canExecute:eligible('execute'),busy:Boolean(flight),page,
+  // 通过与拒绝共用审核防重，不能在结果未知时改点相反动作绕过核实；执行仍单独确认。
+  const approvalKey=(id,operation='approve')=>`${accountKey()}:${id}:${operation==='reject'?'approve':operation}`;
+  const eligible=(operation='approve')=>Boolean(moduleEnabled&&(operation==='execute'?config?.canExecute&&config?.canList:operation==='reject'?config?.canReject:config?.canApprove)&&client&&state==='connected'&&lastChecked!==null&&clock.now()-lastChecked<5*60*1000);
+  function snapshot(){return {state,error,notice,enabled,canListExecute:Boolean(config?.canList),contentRevision,canDetail:Boolean(config?.canDetail&&(client&&state==='connected'||items.some(item=>cache.has(accountKey(),item.id)))),canApprove:eligible(),canReject:eligible('reject'),canExecute:eligible('execute'),busy:Boolean(flight),page,
     items:items.map(item=>({...item,approvalStatus:approvals.get(approvalKey(item.id))||'',executionStatus:approvals.get(approvalKey(item.id,'execute'))||''})),hasMore,sourceTotal,lastChecked,intervalMs};}
   function clearTimer(){clock.clearTimeout(timer);timer=null;}
   function dropClient(){const old=client;client=null;if(old)void Promise.resolve().then(()=>old.close()).catch(()=>{});}
@@ -98,14 +99,14 @@ function createArcheryPending({readConfig=readArcheryConfig,createClient=createA
     }).finally(()=>{flight=null;controller=null;schedule();}).then(()=>snapshot());
     return flight;
   }
-  function perform(operation,id,confirm=operation==='execute'?confirmExecution:confirmApproval) {
-    const executing=operation==='execute',label=executing?'执行':'审核';
+  function perform(operation,id,confirm=operation==='execute'?confirmExecution:operation==='reject'?confirmRejection:confirmApproval) {
+    const executing=operation==='execute',rejecting=operation==='reject',label=executing?'执行':rejecting?'审核拒绝':'审核';
     if(flight)throw new Error('正在处理 Archery 请求，请稍后操作。');
     currentConfig();
     const item=items.find(item=>item.id===id);
     if(!Number.isSafeInteger(id)||!item)throw new Error('请从当前待处理列表选择工单。');
     const key=approvalKey(id,operation);
-    // 未知审核结果不能借工单状态变化绕过核实；两种动作分别记录防重。
+    // 未知审核结果不能借工单状态变化绕过核实；审核与执行分别记录防重。
     if(approvals.has(key)||approvals.get(approvalKey(id))==='unknown')throw new Error('此工单已处理或结果待核实，请打开工单查看。');
     if(item.status!==(executing?'workflow_review_pass':'workflow_manreviewing'))throw Error('工单状态不支持此操作，请刷新列表。');
     if(!eligible(operation))throw new Error(`${label}不可用，请先刷新列表，并确认全局配置开放对应工具。`);
@@ -136,19 +137,20 @@ function createArcheryPending({readConfig=readArcheryConfig,createClient=createA
         }
         if(closed)return;
         if(!moduleEnabled||generation!==moduleGeneration){notice=`模块已关闭，本次${label}已取消。`;return;}
-        if(confirmed!==true){notice=`已取消${label}工单 #${id}。`;return;}
+        const remark=rejecting&&typeof confirmed?.remark==='string'?confirmed.remark.trim():'';
+        if(rejecting?confirmed?.confirmed!==true||!remark||remark.length>1000:confirmed!==true){notice=`已取消${label}工单 #${id}。`;return;}
         currentConfig();
         if(!eligible(operation))throw new Error('列表已过期，请刷新后重新确认操作。');
         sent=true;
-        const result=approvalResult(await client[operation](id,{signal:controller.signal}),id);
+        const result=approvalResult(await client[operation](id,{signal:controller.signal,...(rejecting?{remark}:{})}),id);
         if(closed)return;
         currentConfig();
         approvals.set(key,result);
         if(result==='success') {
-          if(executing)items=items.filter(item=>item.id!==id);
+          if(executing||rejecting)items=items.filter(item=>item.id!==id);
           // 审核受理不代表所有审批节点结束，自动只读核对真实状态后再显示执行按钮。
           else refreshAfterApproval=true;
-          notice=executing?`工单 #${id} 执行请求已受理，最终结果以工单详情为准。`:`工单 #${id} 已审核通过，未请求执行 SQL。`;
+          notice=executing?`工单 #${id} 执行请求已受理，最终结果以工单详情为准。`:rejecting?`工单 #${id} 已审核拒绝。`:`工单 #${id} 已审核通过，未请求执行 SQL。`;
         }else {
           dropClient();
           notice=result==='failed'?`工单 #${id} ${label}未完成，未自动重试，请刷新后核实。`:
@@ -219,7 +221,7 @@ function createArcheryPending({readConfig=readArcheryConfig,createClient=createA
     if(!moduleEnabled)throw Error('Archery 已关闭，请先开启');
     if(name==='refresh')return refresh();
     if(name==='set-enabled')return setEnabled(value);
-    if(name==='approve'||name==='execute')return perform(name,value,confirm);
+    if(name==='approve'||name==='reject'||name==='execute')return perform(name,value,confirm);
     if(name==='detail'||name==='detail-large'||name==='detail-refresh')return detail(value,name==='detail-large',name==='detail-refresh');
     if(name==='page') {
       if(flight)throw new Error('正在刷新，请稍后翻页。');

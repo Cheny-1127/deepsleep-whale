@@ -254,17 +254,26 @@ button,input{-webkit-app-region:no-drag}.studio{display:flex;background:var(--ui
 .archery-connection-card{margin-bottom:16px}.archery-connection-card summary{cursor:pointer;font-weight:600}.archery-connection-card form{margin-top:14px}.archery-connection-card label{display:block;margin-bottom:8px;font-size:12px;color:var(--ui-text-subtle)}.archery-config-path,.archery-config-actions{display:flex;align-items:center;gap:8px}.archery-config-path input{flex:1;min-width:0}.archery-config-path button{flex-shrink:0}.archery-config-actions{flex-wrap:wrap}
 
 /* 工单详情按需展开；SQL 使用独立滚动区域，避免长语句撑宽整个页面。 */
-.archery-order{display:grid;grid-template-columns:minmax(0,1fr) auto}
+.archery-order{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:12px;margin-top:12px;padding:12px;border:1px solid var(--ui-border);border-radius:10px}
+/* 摘要与操作共用整行底色，悬停或展开时不再只高亮左侧摘要。 */
+.archery-order:hover,.archery-order:has(>.archery-message[aria-expanded="true"]){background:var(--ui-canvas)}
+.archery-actions{align-self:start;flex-wrap:nowrap;margin-top:12px}
+.archery-actions button{min-height:32px;padding:5px 12px;font-size:12px;border-radius:6px}
+.archery-actions .archery-reject{color:var(--ui-danger);border-color:var(--ui-border-control);background:var(--ui-surface)}
+.archery-actions .archery-reject:hover:not(:disabled){background:var(--ui-danger-surface);border-color:var(--ui-danger)}
+.archery-rejection-reason{display:block;margin:0 0 16px;font-size:12px;color:var(--ui-text-muted)}
+.archery-rejection-reason textarea{display:block;width:100%;margin-top:8px;resize:vertical}
 button.archery-message{display:block;width:100%;min-width:0;padding:12px;border-radius:8px;background:transparent;color:var(--ui-text);text-align:left;line-height:1.6;white-space:normal;overflow-wrap:anywhere}
 .archery-message .archery-title{display:block;font-size:14px;font-weight:650}.archery-message-meta{display:block;margin:8px 0;font-size:11px;color:#71816f}.archery-message small{display:block}
-button.archery-message:hover,button.archery-message[aria-expanded="true"]{background:var(--ui-canvas)}button.archery-message:focus-visible{outline:2px solid var(--ui-accent);outline-offset:2px}
+button.archery-message:focus-visible{outline:2px solid var(--ui-accent);outline-offset:2px}
 .archery-detail{grid-column:1/-1;min-width:0;padding:16px;border:1px solid var(--ui-border);border-radius:10px;background:var(--ui-canvas)}
 .archery-detail h3{margin:16px 0 8px;font-size:12px}.archery-detail p{font-size:12px;line-height:1.7}.archery-detail pre{margin:0;padding:12px;max-height:360px;overflow:auto;border-radius:6px;background:var(--ui-surface);font-size:12px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}.archery-detail>.text-button{margin-top:14px}.archery-detail-error{color:#b42318}
 /* 审核弹窗复用详情内容，长 SQL 独立滚动，确认按钮保持在弹窗底部可见。 */
 .ui-confirm-dialog:has(.archery-approval-detail){width:min(740px,calc(100vw - 48px))}
 .archery-approval-detail pre{max-height:220px}.archery-approval-detail{margin-bottom:16px}
 .ui-confirm-dialog:has(.archery-approval-detail) .ui-confirm-actions{position:sticky;bottom:-24px;padding-top:16px;background:var(--ui-surface)}
-@media(max-width:600px){.archery-order{grid-template-columns:minmax(0,1fr)}.archery-actions{justify-content:flex-start}}
+/* 窄窗口将操作放到摘要下方，避免两个审核按钮挤压标题和数据库信息。 */
+@media(max-width:800px){.archery-order{grid-template-columns:minmax(0,1fr);gap:8px}.archery-actions{justify-content:flex-end;flex-wrap:wrap;margin-top:0;padding:0 12px}}
 
 /* 操作说明只在问号悬停或键盘聚焦时显示。 */
 .shortcuts-title{display:inline-flex;align-items:flex-start;gap:4px}

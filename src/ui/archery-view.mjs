@@ -13,16 +13,23 @@ export function createArcheryView() {
       return;
     }
     confirmationToken=request.token;
-    let confirmed=false;
+    let confirmed=false,reason=null;
     try{
-      const item=request.item,executing=request.operation==='execute';
-      confirmed=await confirmAction({owner:$('view'),title:`${executing?'执行':'审核通过'}工单 #${item.id}？`,
+      const item=request.item,executing=request.operation==='execute',rejecting=request.operation==='reject',label=executing?'执行':rejecting?'审核拒绝':'审核通过';
+      const detail=createApprovalDetail(request),content=rejecting?document.createElement('div'):detail;
+      if(rejecting){
+        const field=document.createElement('label');field.className='archery-rejection-reason';field.textContent='拒绝原因（必填）';
+        reason=document.createElement('textarea');reason.required=true;reason.maxLength=1000;reason.rows=3;reason.placeholder='说明需要修改或补充的内容';reason.setAttribute('aria-label','拒绝原因');
+        reason.addEventListener('input',()=>reason.setCustomValidity(''));
+        field.append(reason);content.append(field,detail);
+      }
+      confirmed=await confirmAction({owner:$('view'),title:`${label}工单 #${item.id}？`,
         message:`${item.title}\n提交人：${item.submitter||'—'}\n实例：${item.instance||'—'}\n数据库：${item.database||'—'}${executing?'\n确认后将请求执行这一笔工单的 SQL，受理后请查看最终执行结果。':''}`,
-        content:createApprovalDetail(request),confirmLabel:executing?'执行':'审核通过'});
+        content,confirmLabel:label,danger:rejecting,validate:rejecting?()=>{reason.setCustomValidity(reason.value.trim()?'':'请填写拒绝原因。');return reason.reportValidity();}:null});
     }catch{/* 弹窗无法展示时按取消处理，不保留待确认请求。 */}finally{
       if(confirmationToken===request.token)confirmationToken=null;
       // 只回传本次令牌与明确确认结果；账号、工单编号及权限由主进程再次检查。
-      try{await invoke('confirm-approval',{token:request.token,confirmed});}catch{}
+      try{await invoke('confirm-approval',{token:request.token,confirmed,...(confirmed&&reason?{remark:reason.value.trim()}:{})});}catch{}
     }
   });
   function createApprovalDetail(request){
@@ -76,7 +83,7 @@ export function createArcheryView() {
     $('previous').disabled=busy||data.busy||data.page<=1;
     $('next').disabled=busy||data.busy||!data.hasMore;
     $('status').disabled=busy||data.busy;
-    for(const {button,id} of approvalButtons)updateAction(button,data.items.find(item=>item.id===id),data);
+    for(const {button,id,operation} of approvalButtons)updateAction(button,data.items.find(item=>item.id===id),data,operation);
     for(const entry of detailRows.values()){
       for(const button of [entry.trigger,entry.more,entry.retry,entry.reload].filter(Boolean))button.disabled=busy||data.busy||data.canDetail===false;
     }
@@ -121,19 +128,22 @@ export function createArcheryView() {
       updateAction(approve,item,data);
       // 每次点击读取当前行状态，避免轮询只更新文案却仍触发旧动作。
       approve.addEventListener('click',()=>{if(!approve.disabled&&!approve.hidden)void act(entry.item.status==='workflow_review_pass'?'execute':'approve',entry.item.id);});
-      approvalButtons.push({button:approve,id:item.id});controls.append(approve);
+      const reject=document.createElement('button');reject.type='button';updateAction(reject,item,data,'reject');
+      reject.addEventListener('click',()=>{if(!reject.disabled&&!reject.hidden)void act('reject',entry.item.id);});
+      approvalButtons.push({button:approve,id:item.id},{button:reject,id:item.id,operation:'reject'});controls.append(approve,reject);
       row.append(copy,controls,box);return row;
     });
     $('list').replaceChildren(...rows);
   }
   // 同屏逐行判断动作，结束等状态不显示按钮；未知审核结果也会阻止该工单进入执行。
-  function updateAction(button,item,data){
-    const executing=item?.status==='workflow_review_pass',valid=executing||item?.status==='workflow_manreviewing';
+  function updateAction(button,item,data,operation){
+    const rejecting=operation==='reject',executing=!rejecting&&item?.status==='workflow_review_pass',valid=executing||item?.status==='workflow_manreviewing';
     const status=executing?(item?.executionStatus|| (item?.approvalStatus==='unknown'?'unknown':'')):item?.approvalStatus;
-    const allowed=executing?data.canExecute:data.canApprove;
+    const allowed=executing?data.canExecute:rejecting?data.canReject:data.canApprove;
+    button.className=rejecting?'outline archery-reject':executing?'primary':'soft';
     button.hidden=!valid;
     button.disabled=busy||data.busy||!allowed||Boolean(status)||!valid;
-    button.textContent=({unknown:'结果待核实',failed:'请刷新后核实',success:executing?'已请求执行':'已审核通过'})[status]||(executing?'执行':'审核通过');
+    button.textContent=rejecting?'审核拒绝':({unknown:'结果待核实',failed:'请刷新后核实',success:executing?'已请求执行':'已审核通过'})[status]||(executing?'执行':'审核通过');
     button.title=status==='unknown'?'请核实此工单的处理结果':allowed?'每笔操作前需要单独确认':'请刷新列表，并确认全局配置开放对应工具';
   }
   function renderConnection(data){
@@ -145,7 +155,7 @@ export function createArcheryView() {
     if(data.error)$('connection-feedback').textContent=data.error;
     else if(!connectionDirty){
       const allowed=data.permissions||{};
-      $('connection-feedback').textContent=`工具权限：详情${allowed.detail?'已开放':'未开放'} · 审核${allowed.approve?'已开放':'未开放'} · 执行${allowed.execute?'已开放':'未开放'}`;
+      $('connection-feedback').textContent=`工具权限：详情${allowed.detail?'已开放':'未开放'} · 通过${allowed.approve?'已开放':'未开放'} · 拒绝${allowed.reject?'已开放':'未开放'} · 执行${allowed.execute?'已开放':'未开放'}`;
     }
     updateConnectionControl();
   }

@@ -10,7 +10,7 @@ function fixture(t){
 }
 test('missing default source is visible; chosen source persists without copying credentials',t=>{
   const f=fixture(t),source=f.create();assert.equal(source.snapshot().valid,false);assert.equal(source.snapshot().configFile,path.join(f.home,'config.toml'));
-  const snapshot=source.save(f.configFile);assert.equal(snapshot.valid,true);assert.deepEqual(snapshot.permissions,{detail:true,approve:true,execute:true});
+  const snapshot=source.save(f.configFile);assert.equal(snapshot.valid,true);assert.deepEqual(snapshot.permissions,{detail:true,approve:true,reject:true,execute:true});
   assert.equal(source.read().server.env.ARCHERY_PASSWORD,'fixture-secret');
   assert.equal(f.create().snapshot().configFile,f.configFile);assert.equal(f.create().read().server.env.ARCHERY_USERNAME,'fixture-user');
   assert.doesNotMatch(JSON.stringify(snapshot),/fixture-secret|fixture-user|command/);

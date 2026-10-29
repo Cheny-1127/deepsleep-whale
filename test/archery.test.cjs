@@ -7,17 +7,49 @@ function response(page=1,{items=[{order_id:566,order_type:'work_order',title:'�
   return {structuredContent:{status:'success',data:{items:items.map(item=>({status:'workflow_manreviewing',...item})),pagination:{page,page_size:20,total:null,source_total:total,has_more:more,next_page:more?page+1:null,scope:'source_page_filtered'}}}};
 }
 function fixture(t,options={}) {
-  let config={fingerprint:'account-a',baseUrl:'https://archery.example.com',canApprove:true,canDetail:true,canList:false,canExecute:true},request=async page=>response(page),now=1000,confirm=async()=>false,approval=async id=>approved(id),detail=async id=>detailResponse(id),largeConfirm=async()=>false;
-  const jobs=new Set(),calls=[],clients=[],confirmations=[],approvalCalls=[],executionCalls=[],detailCalls=[],largeConfirmations=[];
+  let config={fingerprint:'account-a',baseUrl:'https://archery.example.com',canApprove:true,canReject:true,canDetail:true,canList:false,canExecute:true},request=async page=>response(page),now=1000,confirm=async()=>false,approval=async id=>approved(id),detail=async id=>detailResponse(id),largeConfirm=async()=>false;
+  const jobs=new Set(),calls=[],clients=[],confirmations=[],approvalCalls=[],rejectionCalls=[],executionCalls=[],detailCalls=[],largeConfirmations=[];
   const clock={now:()=>now,setTimeout:(fn,ms)=>{const job={fn,ms};jobs.add(job);return job;},clearTimeout:job=>jobs.delete(job)};
   const receiver=createArcheryPending({clock,readConfig:()=>{if(config instanceof Error)throw config;return config;},
-    createClient:()=>{const client={closed:0,close(){this.closed++;},pending(page,options){calls.push({page,...options});return request(page,options);},execute(id,options){executionCalls.push({id,...options});return approval(id,options);},approve(id,options){approvalCalls.push({id,...options});return approval(id,options);},detail(id,options){detailCalls.push({id,...options});return detail(id,options);}};clients.push(client);return client;},
+    createClient:()=>{const client={closed:0,close(){this.closed++;},pending(page,options){calls.push({page,...options});return request(page,options);},reject(id,options){rejectionCalls.push({id,...options});return approval(id,options);},execute(id,options){executionCalls.push({id,...options});return approval(id,options);},approve(id,options){approvalCalls.push({id,...options});return approval(id,options);},detail(id,options){detailCalls.push({id,...options});return detail(id,options);}};clients.push(client);return client;},
     confirmLargeDetail:async item=>{largeConfirmations.push(item);return largeConfirm(item);},
     confirmApproval:async item=>{confirmations.push(item);return confirm(item);},settingsFile:options.settingsFile});
   t.after(()=>receiver.close());
-  return {enableExecution(){config={...config,accountKey:config.accountKey||config.fingerprint,fingerprint:config.fingerprint+'-list',canList:true};},receiver,jobs,calls,clients,confirmations,approvalCalls,executionCalls,detailCalls,largeConfirmations,setDetail:fn=>detail=fn,setLargeConfirm:fn=>largeConfirm=fn,setConfirm:fn=>confirm=fn,setApproval:fn=>approval=fn,setNow:value=>now=value,setConfig:value=>config=value,setRequest:fn=>request=fn,
+  return {enableExecution(){config={...config,accountKey:config.accountKey||config.fingerprint,fingerprint:config.fingerprint+'-list',canList:true};},receiver,jobs,calls,clients,confirmations,approvalCalls,rejectionCalls,executionCalls,detailCalls,largeConfirmations,setDetail:fn=>detail=fn,setLargeConfirm:fn=>largeConfirm=fn,setConfirm:fn=>confirm=fn,setApproval:fn=>approval=fn,setNow:value=>now=value,setConfig:value=>config=value,setRequest:fn=>request=fn,
     async fire(){assert.equal(jobs.size,1);const job=[...jobs][0];assert.equal(job.ms,INTERVAL_MS);jobs.delete(job);now+=job.ms;job.fn();await tick();}};
 }
+
+test('reject requires its own permission, current review status and an explicit reason; success never approves or executes',async t=>{
+  const f=fixture(t);await f.receiver.action('refresh');
+  assert.equal(f.receiver.snapshot().canReject,true);
+  for(const choice of [false,true,{confirmed:true,remark:'   '},{confirmed:true,remark:'x'.repeat(1001)}]){
+    await f.receiver.action('reject',566,async()=>choice);assert.equal(f.rejectionCalls.length,0);
+  }
+  await f.receiver.action('reject',566,async(item,preview)=>{
+    assert.equal(item.id,566);assert.equal(preview.operation,'reject');return {confirmed:true,remark:'  缺少回滚说明  '};
+  });
+  assert.equal(f.rejectionCalls.length,1);assert.equal(f.rejectionCalls[0].id,566);assert.equal(f.rejectionCalls[0].remark,'缺少回滚说明');
+  assert.equal(f.approvalCalls.length,0);assert.equal(f.executionCalls.length,0);assert.equal(f.receiver.snapshot().items.length,0);
+  assert.match(f.receiver.snapshot().notice,/已审核拒绝/);
+  const g=fixture(t);g.setConfig({fingerprint:'restricted',canApprove:true,canReject:false});await g.receiver.action('refresh');
+  await assert.rejects(g.receiver.action('reject',566,async()=>assert.fail('未开放权限不能确认')),/不可用/);
+  g.setConfig({fingerprint:'reject-only',canReject:true,canApprove:false});await g.receiver.action('refresh');
+  assert.equal(g.receiver.snapshot().canApprove,false);assert.equal(g.receiver.snapshot().canReject,true);
+  g.setRequest(async page=>response(page,{items:[{order_id:566,order_type:'work_order',status:'workflow_review_pass'}]}));await g.receiver.action('refresh');
+  await assert.rejects(g.receiver.action('reject',566),/状态/);
+});
+
+test('unknown rejection and approval share the review guard across refresh and opposite actions',async t=>{
+  for(const first of ['approve','reject']){
+    const f=fixture(t);f.enableExecution();f.setRequest(async(page,{mode})=>mode==='execute'?emptyExecutionPage(page):response(page));await f.receiver.action('refresh');f.setApproval(async()=>{throw Error('timeout');});
+    await f.receiver.action(first,566,async()=>first==='reject'?{confirmed:true,remark:'需要修改 SQL'}:true);
+    assert.equal(f.receiver.snapshot().items[0].approvalStatus,'unknown');await f.receiver.action('refresh');
+    for(const next of ['approve','reject'])await assert.rejects(f.receiver.action(next,566),/待核实/);
+    f.setRequest(async(page,{mode})=>mode==='execute'?executionPage(page):response(page,{items:[]}));await f.receiver.action('refresh');
+    await assert.rejects(f.receiver.action('execute',566,async()=>true),/待核实/);
+    assert.equal(f.rejectionCalls.length+f.approvalCalls.length,1);assert.equal(f.executionCalls.length,0);
+  }
+});
 
 test('module pause aborts reads without changing auto refresh and late responses cannot repopulate items',async t=>{
   const f=fixture(t);let release;f.setRequest(()=>new Promise(resolve=>release=resolve));
@@ -181,6 +213,11 @@ test('global config loads stdio credentials privately and validates disabled too
   assert.equal(config.server.env.ARCHERY_PASSWORD,'fixture-secret');assert.equal(config.baseUrl,'https://archery.example.com');assert.equal(config.canApprove,true);
   write('disabled_tools = ["work_order_approve"]');const restricted=readArcheryConfig({home:dir,env:{ARCHERY_PASSWORD:'fixture-secret'}});
   assert.equal(restricted.canApprove,false);assert.notEqual(restricted.fingerprint,config.fingerprint);
+  assert.equal(restricted.canReject,true,'通过权限不等于拒绝权限');
+  write('disabled_tools = ["work_order_terminate"]');const noReject=readArcheryConfig({home:dir,env:{ARCHERY_PASSWORD:'fixture-secret'}});
+  assert.equal(noReject.canReject,false);assert.equal(noReject.canApprove,true);assert.notEqual(noReject.fingerprint,config.fingerprint);
+  write('enabled_tools = ["work_order_pending_list","work_order_terminate"]');const rejectOnly=readArcheryConfig({home:dir,env:{ARCHERY_PASSWORD:'fixture-secret'}});
+  assert.equal(rejectOnly.canReject,true);assert.equal(rejectOnly.canApprove,false);
   assert.notEqual(readArcheryConfig({home:dir,env:{ARCHERY_PASSWORD:'changed'}}).fingerprint,config.fingerprint);
   for(const header of ['enabled = false','disabled_tools = ["work_order_pending_list"]','enabled_tools = ["work_order_execute"]','args = [1]']) {
     write(header);assert.throws(()=>readArcheryConfig({home:dir}),error=>error.archeryConfig&&!error.message.includes('fixture-secret'));
@@ -366,6 +403,32 @@ test('approval responses require the exact requested ID and confirmed success in
   assert.equal(approvalResult(approved(566,'needs_confirmation'),566),'failed');
   assert.equal(approvalResult({content:[{type:'text',text:JSON.stringify(approved(566).structuredContent)}]},566),'success');
   assert.throws(()=>approvalResult({isError:true},566));
+});
+
+test('rejection rechecks the account, list age and module generation after confirmation',async t=>{
+  for(const change of [f=>f.setConfig({fingerprint:'other-account',canReject:true}),f=>f.setNow(301001),f=>f.receiver.setModuleEnabled(false)]){
+    const f=fixture(t);await f.receiver.action('refresh');
+    await f.receiver.action('reject',566,async()=>{change(f);return {confirmed:true,remark:'需要修改'};});
+    assert.equal(f.rejectionCalls.length,0);
+  }
+});
+
+test('stdio rejection uses terminate with one ID and the entered reason and never calls cancel, approve or execute',async t=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'whale-archery-reject-wire-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  const trace=path.join(dir,'trace.jsonl'),config={canReject:true,server:{command:process.execPath,args:[path.join(__dirname,'fixtures/archery-mcp.cjs')],env:{TRACE_FILE:trace}},startupMs:3000,timeoutMs:3000};
+  const client=createArcheryMcp(config);
+  try{
+    await assert.rejects(client.reject(566,{remark:'原因'}),/rejection_unavailable/);
+    await client.pending(1);
+    for(const remark of ['', '  ', 'x'.repeat(1001)])await assert.rejects(client.reject(566,{remark}),/rejection_unavailable/);
+    config.canReject=false;await assert.rejects(client.reject(566,{remark:'原因'}),/rejection_unavailable/);config.canReject=true;
+    assert.equal(approvalResult(await client.reject(566,{remark:'  缺少回滚方案  '}),566),'success');
+  }finally{await client.close();}
+  const requests=fs.readFileSync(trace,'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(requests.filter(r=>r.method==='initialize').length,1);
+  assert.deepEqual(requests.filter(r=>r.method==='tools/call').map(r=>r.params),[
+    {name:'work_order_pending_list',arguments:{page:1,page_size:20}},
+    {name:'work_order_terminate',arguments:{order_ids:[566],remark:'缺少回滚方案'}}]);
 });
 
 test('stdio approval uses the existing listed session, exactly one ID, fixed remark and no execution tool',async t=>{

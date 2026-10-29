@@ -26,13 +26,18 @@ function createArcheryConfirmation({getWindow=()=>null,timeoutMs=5*60*1000}={}) 
       for(const event of ['hide','close'])listen(window,event);
       timer=setTimeout(cancel,timeoutMs);timer.unref?.();
       // 动作来自主进程已校验的调用；页面回复只消费令牌，审核令牌不能授权后续执行。
-      try{sender.send('archery-confirmation',{token,item,operation:preview.operation==='execute'?'execute':'approve',cachedDetail:preview.cachedDetail||null,canDetail:preview.canDetail===true});}catch{finish(false);}
+      try{sender.send('archery-confirmation',{token,item,operation:['execute','reject'].includes(preview.operation)?preview.operation:'approve',cachedDetail:preview.cachedDetail||null,canDetail:preview.canDetail===true});}catch{finish(false);}
     });
   }
   function reply(sender,value) {
     if(!pending||pending.sender!==sender||pending.token!==value?.token||typeof value.confirmed!=='boolean')return false;
     if(value.confirmed&&pending.reading)return false;
-    pending.finish(value.confirmed);return true;
+    // 原因只属于主进程发起的拒绝令牌；页面回复不能把通过确认改成拒绝或指定其他工单。
+    if(value.confirmed&&pending.preview.operation==='reject'){
+      if(typeof value.remark!=='string'||!value.remark.trim()||value.remark.trim().length>1000)return false;
+      pending.finish({confirmed:true,remark:value.remark.trim()});
+    }else pending.finish(value.confirmed);
+    return true;
   }
   async function detail(sender,value){
     const current=pending;

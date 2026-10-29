@@ -18,7 +18,7 @@ function createArcheryConnection({dataDir,home=process.env.CODEX_HOME||path.join
     let config,error=loadError;
     if(!error)try{config=read();}catch(cause){error=cause.archeryConfig?cause.message:'无法读取 Archery 配置，请检查文件。';}
     // 快照仅暴露路径、校验说明与工具权限，不返回启动参数和环境变量。
-    return {configFile,defaultFile,valid:Boolean(config),error,permissions:config?{detail:config.canDetail,approve:config.canApprove,execute:config.canExecute}:null};
+    return {configFile,defaultFile,valid:Boolean(config),error,permissions:config?{detail:config.canDetail,approve:config.canApprove,reject:config.canReject,execute:config.canExecute}:null};
   }
   function save(value){
     if(typeof value!=='string'||!path.isAbsolute(value)||path.basename(value)!=='config.toml')throw Error('请选择 Codex 全局 config.toml 文件的绝对路径。');
