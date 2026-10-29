@@ -423,7 +423,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
         await archery.action('refresh');
         return {value:connection};
       }
-      return {value:await archery.action(name,value,['approve','execute'].includes(name)?(item,preview)=>archeryConfirmation.request(event.sender,item,preview):undefined)};
+      return {value:await archery.action(name,value,['approve','reject','execute'].includes(name)?(item,preview)=>archeryConfirmation.request(event.sender,item,preview):undefined)};
     }catch(error){return {error:error.message};}
   });
   // 额度页只读网关已保存的快照，token 不进入渲染进程，也不刷新上游额度。
