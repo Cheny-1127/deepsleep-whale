@@ -42,8 +42,9 @@ function createPetMenu({getPet,snapshot,performAction,showPanel,restartApp,prote
     }catch{return;}
     if(request!==sequence||pet.isDestroyed()||!pet.isVisible()||!art||![art.left,art.right,art.top].every(Number.isFinite))return;
     if(!menu||menu.isDestroyed()) {
+      // macOS 面板可接收键盘焦点而不激活整个应用，避免把后台小屋带到前台。
       menu=new BrowserWindow({width:400,height:400,show:false,transparent:true,frame:false,resizable:false,hasShadow:false,
-        alwaysOnTop:true,skipTaskbar:true,webPreferences:{preload:path.join(__dirname,'../ui/pet-menu-preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true}});
+        type:'panel',alwaysOnTop:true,skipTaskbar:true,webPreferences:{preload:path.join(__dirname,'../ui/pet-menu-preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true}});
       protect(menu);
       menu.setVisibleOnAllWorkspaces(true,{visibleOnFullScreen:true});
       menu.on('blur',close);
@@ -64,6 +65,7 @@ function createPetMenu({getPet,snapshot,performAction,showPanel,restartApp,prote
     if(bounds.width<1||bounds.height<1||bounds.x<area.x||bounds.y<area.y||
       bounds.x+bounds.width>area.x+area.width||bounds.y+bounds.height>area.y+area.height)return false;
     menu.setBounds(bounds);
+    // 非激活面板仍需键盘焦点，以保留方向键、Enter 和 Esc 操作。
     if(!menu.isVisible()){menu.show();menu.focus();}
     return true;
   });
