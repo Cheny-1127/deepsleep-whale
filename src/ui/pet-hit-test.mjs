@@ -1,7 +1,7 @@
 // 透明窗口仍是矩形；只在鼠标命中人物、角标、气泡或可见操作栏时接收点击。
 export function createPetHitTest() {
   if(!document.body.classList.contains('floating'))return;
-  const targets='#pet-art, #pet-subscriptions-badge, .speech, .pet-controls';
+  const targets='#pet-art, #pet-store-button, #pet-subscriptions-badge, .speech, .pet-controls';
   const pressed=new Set();
   let point=null,interactive=null,version=0,queued=false;
   function apply() {

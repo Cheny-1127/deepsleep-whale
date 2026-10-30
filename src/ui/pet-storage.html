@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'none'">
+  <title>鲸尾书签</title>
+  <link rel="stylesheet" href="pet-storage.css">
+</head>
+<body data-side="right">
+  <button id="pet-storage-tab" type="button" aria-label="恢复鲸鱼娘" title="点击恢复鲸鱼娘，拖动调整位置">
+    <span class="tab-surface" aria-hidden="true"></span>
+    <svg class="tail" viewBox="0 0 44 40" aria-hidden="true">
+      <defs><linearGradient id="tail-color" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#94bad1"/><stop offset="1" stop-color="#5887a7"/></linearGradient></defs>
+      <path d="M22 33c0-13-14-8-17-22 9-2 15 2 17 10 2-8 8-12 17-10-3 14-17 9-17 22Z" fill="url(#tail-color)"/>
+      <path d="M10 14c3 0 6 2 8 5m16-5c-3 0-6 2-8 5" fill="none" stroke="#e2f0f8" stroke-width="1.7" stroke-linecap="round" opacity=".8"/>
+    </svg>
+    <span id="attention" hidden aria-hidden="true"></span>
+  </button>
+  <script type="module" src="pet-storage.mjs"></script>
+</body>
+</html>

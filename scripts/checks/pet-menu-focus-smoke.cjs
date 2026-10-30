@@ -7,11 +7,11 @@ async function main() {
   if(process.platform!=='darwin'){console.log('Pet menu focus: macOS only');return;}
   const {_electron:electron}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'whale-menu-focus-')),apps=[],errors=[];
-  fs.writeFileSync(path.join(dir,'pet.html'),'<div id="pet-art" style="width:180px;height:220px;background:#dbe8e0">测试桌宠</div>');
+  fs.writeFileSync(path.join(dir,'pet.html'),'<div id="pet-art" style="width:180px;height:220px;background:#dbe8e0">测试桌宠</div><button id="pet-store-button">收纳</button><script>document.getElementById("pet-store-button").onclick=()=>window.whale.action("store-pet");</script>');
   fs.writeFileSync(path.join(dir,'index.html'),'<p>测试小屋</p>');
   fs.writeFileSync(path.join(dir,'cover.html'),'<p>模拟遮挡小屋的其他应用</p>');
   fs.writeFileSync(path.join(dir,'bootstrap.cjs'),`
-    const {app,BrowserWindow}=require('electron'),path=require('node:path');
+    const {app,BrowserWindow,ipcMain}=require('electron'),path=require('node:path');
     app.setPath('userData',path.join(__dirname,process.env.WHALE_FOCUS_ROLE));
     app.setActivationPolicy('accessory');
     global.fixture={active:false,activations:0,panelFocus:0,panelOpens:0,events:[]};
@@ -28,11 +28,18 @@ async function main() {
       }
       fixture.panel=new BrowserWindow({...options,width:1060,height:770});
       fixture.panel.on('focus',()=>fixture.panelFocus++);
-      fixture.pet=new BrowserWindow({...options,width:220,height:320,frame:false});
+      fixture.pet=new BrowserWindow({...options,width:220,height:320,frame:false,
+        webPreferences:{preload:${JSON.stringify(path.join(root,'src/ui/preload.cjs'))},contextIsolation:true,nodeIntegration:false,sandbox:true}});
       fixture.pet.setVisibleOnAllWorkspaces(true,{visibleOnFullScreen:true});
       const {createPetMenu}=require(${JSON.stringify(path.join(root,'src/app/pet-menu.cjs'))});
-      fixture.menu=createPetMenu({getPet:()=>fixture.pet,snapshot:()=>({state:'idle',activity:{state:'idle'}}),
-        performAction(){},restartApp(){},protect(){},showPanel(){
+      const {createPetStorage}=require(${JSON.stringify(path.join(root,'src/app/pet-storage.cjs'))});
+      fixture.storage=createPetStorage({getPet:()=>fixture.pet,protect(){},onRestore(){},onChange(){},
+        closeOverlays:()=>fixture.menu.close(),onContextMenu:()=>fixture.menu.open(),onHide(){fixture.storage.hide();fixture.pet.hide();}});
+      app.on('before-quit',()=>fixture.storage.stop());
+      ipcMain.handle('action',()=>fixture.storage.store());
+      fixture.menu=createPetMenu({getPet:()=>fixture.storage.activeWindow(),snapshot:()=>({state:'idle',activity:{state:'idle'},petStored:fixture.storage.isStored()}),
+        performAction(name){return name==='store-pet'?fixture.storage.store():fixture.storage.restore();},
+        hidePet(){fixture.storage.hide();fixture.pet.hide();},restartApp(){},protect(){},showPanel(){
           fixture.panelOpens++;fixture.panel.setFocusable(true);fixture.panel.show();fixture.panel.focus();
         }});
       fixture.pet.webContents.on('context-menu',fixture.menu.open);
@@ -76,7 +83,7 @@ async function main() {
     assert.deepEqual(await target.evaluate(()=>({activations:fixture.activations,panelFocus:fixture.panelFocus})),before,
       '打开右键菜单不能激活整个应用或把后台小屋带到前台');
     assert.equal(await cover.evaluate(()=>fixture.active),true);
-    await menu.keyboard.press('ArrowDown');await menu.keyboard.press('ArrowDown');await menu.keyboard.press('ArrowDown');
+    await menu.keyboard.press('ArrowDown');await menu.keyboard.press('ArrowDown');await menu.keyboard.press('ArrowDown');await menu.keyboard.press('ArrowDown');
     assert.equal(await menu.evaluate(()=>document.activeElement.dataset.id),'hide','非激活菜单仍接受键盘操作');
     await menu.keyboard.press('Enter');
     await waitFor(target,f=>!f.pet.isVisible()&&!f.menu.isOpen());
@@ -90,6 +97,31 @@ async function main() {
     assert.deepEqual(await target.evaluate(()=>({activations:fixture.activations,panelFocus:fixture.panelFocus})),before,
       '鼠标点击隐藏也不能把小屋带到前台');
     assert.equal(await target.evaluate(()=>fixture.panelOpens),0);
+    // 从后台小屋场景收纳，再点击真实非激活书签恢复，应用和小屋都不能被带到前台。
+    await target.evaluate(()=>fixture.pet.showInactive());
+    await driver.open();await menu.getByRole('menuitem',{name:'收纳到边缘',exact:true}).click();
+    await waitFor(target,f=>f.storage.isStored()&&f.storage.isVisible()&&!f.pet.isVisible());
+    const tab=target.windows().find(page=>page.url().endsWith('/pet-storage.html'));
+    assert.deepEqual(await target.evaluate(()=>({activations:fixture.activations,panelFocus:fixture.panelFocus})),before);
+    await tab.locator('#pet-storage-tab').click();
+    await waitFor(target,f=>!f.storage.isStored()&&f.pet.isVisible());
+    assert.deepEqual(await target.evaluate(()=>({activations:fixture.activations,panelFocus:fixture.panelFocus})),before);
+    assert.equal(await cover.evaluate(()=>fixture.active),true,'恢复书签不能抢走其他应用的激活状态');
+    await driver.open();await menu.getByRole('menuitem',{name:'收纳到边缘',exact:true}).click();
+    await waitFor(target,f=>f.storage.isStored()&&f.storage.isVisible());
+    await tab.locator('#pet-storage-tab').click({button:'right'});
+    await menu.getByRole('menuitem',{name:'恢复桌宠',exact:true}).click();
+    await waitFor(target,f=>!f.storage.isStored()&&f.pet.isVisible());
+    assert.deepEqual(await target.evaluate(()=>({activations:fixture.activations,panelFocus:fixture.panelFocus})),before);
+    assert.equal(await target.evaluate(()=>fixture.panelOpens),0);
+    // 与正式人物窗口一致地允许聚焦，确认新按钮本身也不会把后台小屋带出。
+    await target.evaluate(()=>fixture.pet.setFocusable(true));
+    await pet.locator('#pet-store-button').click();
+    await waitFor(target,f=>f.storage.isStored()&&f.storage.isVisible());
+    assert.deepEqual(await target.evaluate(()=>({activations:fixture.activations,panelFocus:fixture.panelFocus})),before);
+    await tab.locator('#pet-storage-tab').click();
+    await waitFor(target,f=>!f.storage.isStored()&&f.pet.isVisible());
+    await target.evaluate(()=>fixture.pet.setFocusable(false));
     await target.evaluate(()=>fixture.pet.showInactive());
     await driver.open();await menu.getByRole('menuitem',{name:'打开小屋',exact:true}).click();
     await waitFor(target,f=>f.panelOpens===1&&f.panel.isFocused()&&f.active);
@@ -103,7 +135,7 @@ async function main() {
     await waitFor(target,f=>!f.menu.isOpen());
     assert.equal((await driver.geometry()).visible,false,'Esc 仍会关闭菜单');
     assert.deepEqual(errors,[]);
-    console.log('Pet menu focus OK: background house preserved, mouse/keyboard hide, explicit house opening, blur/Esc dismissal');
+    console.log('Pet menu focus OK: background house preserved, mouse/keyboard hide, store/bookmark/menu restore, explicit house opening, blur/Esc dismissal');
   } catch(error) {
     for(const app of apps)console.error(await app.evaluate(({BrowserWindow})=>({events:fixture.events.slice(-24),active:fixture.active,
       windows:BrowserWindow.getAllWindows().map(win=>({id:win.id,visible:win.isVisible(),focused:win.isFocused()}))})));

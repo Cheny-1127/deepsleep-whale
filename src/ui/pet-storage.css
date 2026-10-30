@@ -1,0 +1,24 @@
+*{box-sizing:border-box}
+html,body{width:100%;height:100%;margin:0;overflow:hidden;background:transparent;user-select:none}
+body{--peek-x:3px;--peek-y:0px;--tail-angle:-90deg}
+#pet-storage-tab{position:relative;display:grid;place-items:center;width:100%;height:100%;padding:0;border:0;background:transparent;cursor:pointer;touch-action:none;outline:none}
+.tab-surface{position:absolute;inset:5px -8px 5px 5px;border-radius:55% 0 0 55% / 50%;background:linear-gradient(120deg,#f8fcff,#e2eef6);box-shadow:inset 1px 1px 0 #ffffffda,0 2px 6px #517b951c;transform:translate(var(--peek-x),var(--peek-y));transition:transform .18s ease,box-shadow .18s ease;pointer-events:none}
+.tail{position:relative;width:31px;height:31px;transform:rotate(var(--tail-angle)) scale(.9);transition:transform .18s ease;pointer-events:none}
+#pet-storage-tab:hover .tab-surface,#pet-storage-tab:focus-visible .tab-surface{transform:translate(0,0);box-shadow:inset 1px 1px 0 #fff,0 2px 7px #517b9526}
+#pet-storage-tab:hover .tail,#pet-storage-tab:focus-visible .tail{transform:rotate(var(--tail-angle)) scale(1)}
+#pet-storage-tab:active .tail{transform:rotate(var(--tail-angle)) scale(.84)}
+#pet-storage-tab:focus-visible .tab-surface{outline:2px solid #7ca6c1;outline-offset:-3px}
+#pet-storage-tab.dragging{cursor:grabbing}
+#pet-storage-tab.dragging .tail{transform:rotate(var(--tail-angle)) scale(.94)}
+#attention{position:absolute;top:12px;left:11px;width:6px;height:6px;border:1px solid #f8fcff;border-radius:50%;background:#eeb274;box-shadow:0 0 0 2px #eeb27418;pointer-events:none}
+body[data-side="left"]{--peek-x:-3px;--tail-angle:90deg}
+body[data-side="left"] .tab-surface{inset:5px 5px 5px -8px;border-radius:0 55% 55% 0 / 50%}
+body[data-side="top"]{--peek-x:0px;--peek-y:-3px;--tail-angle:180deg}
+body[data-side="top"] .tab-surface{inset:-8px 5px 5px;border-radius:0 0 50% 50% / 0 0 55% 55%}
+body[data-side="bottom"]{--peek-x:0px;--peek-y:3px;--tail-angle:0deg}
+body[data-side="bottom"] .tab-surface{inset:5px 5px -8px;border-radius:50% 50% 0 0 / 55% 55% 0 0}
+body[data-side="top"] #attention,body[data-side="bottom"] #attention{top:9px;left:13px}
+.stored .tail{animation:tail-arrive .24s cubic-bezier(.2,.8,.3,1)}
+@keyframes tail-arrive{from{opacity:0;transform:rotate(var(--tail-angle)) scale(.55)}to{opacity:1;transform:rotate(var(--tail-angle)) scale(.9)}}
+@media(prefers-reduced-motion:reduce){.tail,.tab-surface{transition:none}.stored .tail{animation:none}}
+[hidden]{display:none!important}

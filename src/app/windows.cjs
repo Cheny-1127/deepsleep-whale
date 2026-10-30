@@ -3,6 +3,7 @@ const { app, BrowserWindow, ipcMain, screen, Menu, Tray, nativeImage } = require
 const path = require('node:path');
 const {createPetMenu}=require('./pet-menu.cjs');
 const {createPetRanking}=require('./pet-ranking.cjs');
+const {createPetStorage}=require('./pet-storage.cjs');
 
 // 此模块只负责 Electron 窗口、菜单和拖动；任务状态和交互规则由应用层传入。
 function createWindows({ snapshot, performAction, collapseReminders, rankingSnapshot, rankingRefresh, rankingSelect }) {
@@ -24,7 +25,9 @@ function createWindows({ snapshot, performAction, collapseReminders, rankingSnap
     win.webContents.setWindowOpenHandler(() => ({ action:'deny' }));
     win.webContents.on('will-navigate', event => event.preventDefault());
   }
-  const petMenu=createPetMenu({getPet:()=>pet,snapshot,performAction,showPanel,restartApp,protect});
+  const petStorage=createPetStorage({getPet:()=>pet,protect,onRestore:()=>resizePet(snapshot()),onChange:updateTrayMenu,
+    closeOverlays:()=>{closeAccountMenu();petMenu.close();petRanking.close();},onContextMenu:()=>petMenu.open(),onHide:hidePet});
+  const petMenu=createPetMenu({getPet:()=>petStorage.activeWindow(),snapshot:()=>({...snapshot(),petStored:petStorage.isStored()}),performAction,showPanel,restartApp,protect,hidePet});
   const petRanking=createPetRanking({getPet:()=>pet,snapshot:rankingSnapshot,refresh:rankingRefresh,select:rankingSelect,protect});
   function createPanel() {
     panel = new BrowserWindow({ width:1060, height:770, minWidth:860, minHeight:680, title:'', backgroundColor:'#f5f7f4', webPreferences:preferences() });
@@ -104,10 +107,11 @@ function createWindows({ snapshot, performAction, collapseReminders, rankingSnap
   ipcMain.on('pet-accounts-close', event => {if (fromAccounts(event)) closeAccountMenu();});
   function updateTrayMenu() {
     if (!tray || tray.isDestroyed() || !pet || pet.isDestroyed()) return;
-    const visible = pet.isVisible();
+    const visible = pet.isVisible()||petStorage.isVisible();
     tray.setContextMenu(Menu.buildFromTemplate([
       { label:'打开小屋', click:showPanel },
-      { label:visible ? '隐藏桌宠' : '显示桌宠', click:() => pet.isVisible() ? pet.hide() : pet.show() },
+      ...(visible?[{label:petStorage.isStored()?'恢复桌宠':'收纳到边缘',click:()=>petStorage.isStored()?petStorage.restore():void petStorage.store().catch(()=>{})}]:[]),
+      { label:visible ? '隐藏桌宠' : '显示桌宠', click:() => visible ? hidePet() : petStorage.restore() },
       { type:'separator' },
       { label:'重启', click:restartApp },
       { label:'退出', click:() => app.quit() }
@@ -132,7 +136,7 @@ function createWindows({ snapshot, performAction, collapseReminders, rankingSnap
     pet.on('close', event => { if (!quitting) { event.preventDefault(); pet.hide(); } });
   }
   function resizePet(data) {
-    if (!pet || pet.isDestroyed()) return;
+    if (!pet || pet.isDestroyed() || petStorage.isStored()) return;
     const bounds = pet.getBounds();
     // 分类及展开规则与提醒视图一致，避免自动展示的列表被收起尺寸的窗口裁切。
     const view = data.reminderView || (data.busyExpanded ? 'busy' : data.activity.pending ? 'pending' : data.activity.unread ? 'completed' : data.activity.working ? 'busy' : 'completed');
@@ -173,11 +177,12 @@ function createWindows({ snapshot, performAction, collapseReminders, rankingSnap
   app.on('second-instance', showPanel);
   // 忽略窗口初始化前的启动激活事件；启动后点击 Dock 仍可主动打开小屋。
   app.on('activate', () => {if (pet && !pet.isDestroyed()) showPanel();});
-  app.on('before-quit', () => { quitting = true;closeAccountMenu();petMenu.close();petRanking.close(); });
+  function hidePet(){petStorage.hide();pet?.hide();updateTrayMenu();}
+  app.on('before-quit', () => { quitting = true;petStorage.stop();closeAccountMenu();petMenu.close();petRanking.close(); });
 
   return {
     showPanel, showReminders, showPlanner, showSubscriptions, chooseTrackingAccount,
-    isPetVisible:()=>Boolean(pet&&!pet.isDestroyed()&&pet.isVisible()),
+    isPetVisible:()=>Boolean(pet&&!pet.isDestroyed()&&(pet.isVisible()||petStorage.isVisible())),
     isPanel:sender=>sender===panel?.webContents,
     isPet:sender=>sender===pet?.webContents,
     toggleRanking:id=>{petMenu.close();return petRanking.toggle(id);},
@@ -194,12 +199,14 @@ function createWindows({ snapshot, performAction, collapseReminders, rankingSnap
     },
     broadcast(data) {
       resizePet(data);
+      petStorage.refresh(data);
       petMenu.refresh();
       for (const win of [panel, pet]) if (win && !win.isDestroyed()) win.webContents.send('snapshot', data);
     },
     chime() { pet.webContents.send('chime'); },
-    showPet() { pet.show(); },
-    hidePet() { pet.hide(); }
+    storePet:()=>petStorage.store(),
+    showPet:()=>petStorage.restore(),
+    hidePet
   };
 }
 

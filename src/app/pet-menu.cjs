@@ -4,7 +4,7 @@ const path=require('node:path');
 const SPECIAL_ACTIONS=require('../shared/special-actions.js');
 
 // 参考 dsh-pet 的独立面板与实测布局；单独承载菜单，人物窗口不扩容、不位移。
-function createPetMenu({getPet,snapshot,performAction,showPanel,restartApp,protect}) {
+function createPetMenu({getPet,snapshot,performAction,showPanel,restartApp,protect,hidePet=()=>getPet()?.hide()}) {
   let menu,loading,active=null,sequence=0;
   const enabled=()=>{
     const current=snapshot();
@@ -13,13 +13,16 @@ function createPetMenu({getPet,snapshot,performAction,showPanel,restartApp,prote
   // 主进程只执行白名单动作；点击时重查锁定状态，不能依赖菜单打开时的旧状态。
   const actions=new Map([
     ...['feed','pat','happy','angry',...Object.keys(SPECIAL_ACTIONS)].map(id=>[id,()=>{if(enabled())performAction(id);}]),
-    ['panel',showPanel],['hide',()=>getPet()?.hide()],['restart',restartApp]
+    ['panel',showPanel],['hide',hidePet],['restart',restartApp],
+    ['storage',()=>{void Promise.resolve(performAction(snapshot().petStored?'restore-pet':'store-pet')).catch(()=>{});}]
   ]);
-  const items=[
+  const items=()=>[
+    ...(snapshot().petStored?[]:[
     {id:'emotions',label:'互动表情',icon:'♡',children:[['喂饭','feed'],['摸头','pat'],['开心','happy'],['生气','angry']].map(([label,id])=>({id,label}))},
     {id:'programs',label:'小节目',icon:'✦',children:Object.entries(SPECIAL_ACTIONS).map(([id,clip])=>({id,label:clip.label}))},
-    {separator:true},
+    {separator:true}]),
     {id:'panel',label:'打开小屋',icon:'⌂'},
+    {id:'storage',label:snapshot().petStored?'恢复桌宠':'收纳到边缘',icon:'⇥'},
     {id:'hide',label:'隐藏桌宠',icon:'◌'},
     {separator:true},
     {id:'restart',label:'重启',icon:'↻'}
@@ -36,7 +39,7 @@ function createPetMenu({getPet,snapshot,performAction,showPanel,restartApp,prote
     let art;
     try {
       art=await pet.webContents.executeJavaScript(`(() => {
-        const r=document.getElementById('pet-art')?.getBoundingClientRect();
+        const r=document.querySelector('#pet-art, #pet-storage-tab')?.getBoundingClientRect();
         return r?{left:r.left,right:r.right,top:r.top}:null;
       })()`);
     }catch{return;}
@@ -54,7 +57,7 @@ function createPetMenu({getPet,snapshot,performAction,showPanel,restartApp,prote
     if(request!==sequence||pet.isDestroyed()||!pet.isVisible())return;
     const bounds=pet.getContentBounds(),area=screen.getDisplayMatching(pet.getBounds()).workArea;
     active={id:request,area,enabled:enabled()};
-    menu.webContents.send('pet-menu-open',{id:request,area,enabled:active.enabled,items,
+    menu.webContents.send('pet-menu-open',{id:request,area,enabled:active.enabled,items:items(),
       anchor:{left:bounds.x+art.left,right:bounds.x+art.right,top:bounds.y+art.top}});
   }
   const isCurrent=(event,id)=>event.sender===menu?.webContents&&active?.id===id;
