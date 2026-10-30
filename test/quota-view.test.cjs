@@ -81,6 +81,7 @@ test('seconds drafts show a live duration, survive polling and save without fetc
 
 test('seconds remain editable and save silently while a refresh is running',async()=>{
   const view=fixture();view.set({checkedAt:1000,busy:true});await view.open();
+  assert.equal(view.get('status').textContent,'正在读取');assert.equal(view.get('status').hidden,false);
   assert.equal(view.get('interval-value').disabled,false);
   view.get('interval-value').value='30';view.get('interval-value').handlers.input();
   await view.get('interval-form').handlers.submit({preventDefault(){}});
@@ -200,6 +201,7 @@ test('account refresh switches show saved choices and send the account ID when c
   assert.equal(toggle(view.get('list').children[0]).textContent, '关闭');
   assert.equal(toggle(view.get('list').children[0]), original,'保留滑块节点以播放过渡');
   assert.equal(view.get('status').textContent, '已暂停刷新');
+  assert.equal(view.get('status').hidden, false);
   assert.equal(view.get('refresh').disabled, false);
   await view.open();assert.equal(view.calls.filter(name => name === 'refresh').length, 0);
   original.click();await new Promise(setImmediate);
@@ -276,7 +278,7 @@ test('reset countdown updates locally without rebuilding rows or refreshing the 
 test('a cache save error stays separate from network success and clears after saving recovers', async () => {
   const view = fixture();
   view.set({checkedAt: 1000, cacheError: '本地额度缓存保存失败'});await view.open();
-  assert.equal(view.get('status').textContent, '已同步');
+  assert.equal(view.get('status').textContent, '');assert.equal(view.get('status').hidden, true);
   assert.equal(view.get('cache-error').hidden, false);assert.match(view.get('cache-error').textContent, /缓存保存失败/);
   view.set({cacheError: ''});await view.poll();assert.equal(view.get('cache-error').hidden, true);
 });
@@ -422,7 +424,7 @@ test('a successful timestamp of zero is cached and does not start another networ
   view.set({checkedAt: 0, attemptedAt: 0, nextRefreshAt: 300000});
   await view.open();
   assert.deepEqual(view.calls, ['snapshot']);
-  assert.equal(view.get('status').textContent, '已同步');
+  assert.equal(view.get('status').textContent, '');assert.equal(view.get('status').hidden, true);
   assert.equal(view.get('checked'), undefined);
 });
 
@@ -458,6 +460,7 @@ test('failure badge contains the failure time and stays red through retries unti
   await view.open();
   const expected = `同步更新失败（${new Date(2000).toLocaleString('zh-CN')}）`;
   assert.equal(view.get('status').textContent, expected);
+  assert.equal(view.get('status').hidden, false);
   assert.match(view.get('status').className, /quota-sync-failed/);
   view.set({busy: true, nextRefreshAt: null});
   await view.poll();
@@ -465,9 +468,11 @@ test('failure badge contains the failure time and stays red through retries unti
   assert.match(view.get('status').className, /quota-sync-failed/);
   view.set({busy: false, checkedAt: 4000, error: '', failedAt: null, nextRefreshAt: 304000});
   await view.poll();
-  assert.equal(view.get('status').textContent, '已同步');
+  assert.equal(view.get('status').textContent, '');assert.equal(view.get('status').hidden, true);
   assert.doesNotMatch(view.get('status').className, /quota-sync-failed/);
   assert.equal(view.get('error').hidden, true);
+  view.set({error:'读取失败',failedAt:5000});await view.poll();
+  assert.equal(view.get('status').hidden,false);assert.match(view.get('status').textContent,/^同步更新失败/);
 });
 
 

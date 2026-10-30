@@ -133,8 +133,11 @@ export function createQuotaView() {
     const accounts = Array.isArray(data.accounts) ? data.accounts : [];
     const paused = accounts.length > 0 && accounts.every(account => account.refreshEnabled === false);
     const failedTime = data.failedAt != null ? `（${new Date(data.failedAt).toLocaleString('zh-CN')}）` : '';
+    // checkedAt 只表示本机读过网关快照；账号行已有刷新时间，正常状态不重复显示成功徽标。
+    // 失败提示优先于读取中，重试时保留失败时间；恢复成功后隐藏徽标及其占位。
     $('status').className = data.error ? 'pill quota-sync-failed' : 'pill';
-    $('status').textContent = data.error ? `同步更新失败${failedTime}` : refreshing ? '正在读取' : paused ? '已暂停刷新' : data.checkedAt != null ? '已同步' : '等待读取';
+    $('status').textContent = data.error ? `同步更新失败${failedTime}` : refreshing ? '正在读取' : paused ? '已暂停刷新' : data.checkedAt != null ? '' : '等待读取';
+    $('status').hidden = !$('status').textContent;
     $('error').textContent = data.error || '';
     $('error').hidden = !data.error;
     $('cache-error').textContent = data.cacheError || '';
