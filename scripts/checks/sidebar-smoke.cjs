@@ -81,7 +81,7 @@ async function hold(id) {
       const a=common.getBoundingClientRect(),b=child.getBoundingClientRect();
       return {fonts:[common,child,heading].map(el=>getComputedStyle(el).fontSize),weights:[common,child,heading].map(el=>getComputedStyle(el).fontWeight),indent:b.left-a.left,heights:[common,child,document.querySelector('#nav-hooks')].map(el=>el.getBoundingClientRect().height)};
     });
-    assert.deepEqual(metrics.fonts,['15px','13px','13px'],'常用菜单更醒目，收纳菜单保持原尺寸');assert.deepEqual(metrics.weights,['500','500','500']);assert.ok(metrics.indent>=24,'收纳项保留原缩进');
+    assert.deepEqual(metrics.fonts,['13px','13px','13px'],'常用菜单、收纳菜单和更多入口使用原有统一字号');assert.deepEqual(metrics.weights,['500','500','500']);assert.ok(metrics.indent>=24,'收纳项保留原缩进');
     assert.equal(new Set(metrics.heights).size,1,'缩进后长菜单保持单行 '+JSON.stringify(metrics));
     for(const mode of ['editing','normal']) {
       if(mode==='normal')await panel.locator('#sidebar-organize').click();
