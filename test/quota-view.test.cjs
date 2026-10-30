@@ -9,6 +9,7 @@ function fixture() {
   class Element {
     constructor(tag) { this.tagName = tag; this.children = []; this.handlers = {}; this.attributes = {}; this.dataset = {}; this.style = {}; this.textContent = ''; this.hidden = false; this.disabled = false; }
     setAttribute(name, value) { this.attributes[name] = value; }
+    getAttribute(name) { return this.attributes[name]; }
     append(...children) { this.children.push(...children);children.forEach(child=>child.parent=this); }
     remove() { if(this.parent)this.parent.children=this.parent.children.filter(child=>child!==this); }
     showPopover() {}
@@ -192,13 +193,18 @@ test('account refresh switches show saved choices and send the account ID when c
   const toggle = row => row.children[4].children[0];
   assert.equal(toggle(view.get('list').children[0]).attributes['aria-checked'], 'true');
   assert.equal(toggle(view.get('list').children[1]).attributes['aria-checked'], 'false');
-  toggle(view.get('list').children[0]).click();
+  const original = toggle(view.get('list').children[0]);
+  original.click();
   await new Promise(setImmediate);
   assert.equal(JSON.stringify(view.saves), JSON.stringify([{id: 5, enabled: false}]));
-  assert.equal(toggle(view.get('list').children[0]).textContent, '已关闭');
+  assert.equal(toggle(view.get('list').children[0]).textContent, '关闭');
+  assert.equal(toggle(view.get('list').children[0]), original,'保留滑块节点以播放过渡');
   assert.equal(view.get('status').textContent, '已暂停刷新');
   assert.equal(view.get('refresh').disabled, false);
   await view.open();assert.equal(view.calls.filter(name => name === 'refresh').length, 0);
+  original.click();await new Promise(setImmediate);
+  assert.equal(original.textContent,'开启');
+  assert.deepEqual(JSON.parse(JSON.stringify(view.saves)),[{id:5,enabled:false},{id:5,enabled:true}]);
 });
 
 test('saving choices disables controls and a rejected save restores the previous switch state', async () => {
