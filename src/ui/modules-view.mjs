@@ -13,7 +13,7 @@ export function createModulesView({render}) {
     const toggle=document.createElement('button');toggle.type='button';toggle.className='module-toggle';toggle.id=id+'-module-toggle';
     toggle.setAttribute('role','switch');toggle.setAttribute('aria-label','开启'+label);toggle.setAttribute('aria-controls',content.id);toggle.disabled=true;
     const caption=document.createElement('span');caption.className='module-toggle-label';
-    const track=document.createElement('span');track.className='module-toggle-track';track.setAttribute('aria-hidden','true');toggle.append(caption,track);
+    const track=document.createElement('span');track.className='module-toggle-track';track.setAttribute('aria-hidden','true');track.append(caption);toggle.append(track);
     actions.append(toggle);header.append(actions);
     const error=document.createElement('p');error.className='ui-alert module-error';error.setAttribute('role','alert');error.hidden=true;page.insertBefore(error,content);
     rows.set(id,{page,content,actions,toggle,caption,error});

@@ -22,6 +22,7 @@ if(!process.versions.electron) {
       await win.webContents.executeJavaScript(`
         window.menuFixture={accounts:[{id:5,name:'missing-account',upstreamMissing:true,refreshEnabled:false}],removed:[]};
         window.whale={quota:async(name,id)=>{
+          if(name==='set-refresh')menuFixture.accounts=menuFixture.accounts.map(account=>account.id===id.id?{...account,refreshEnabled:id.enabled}:account);
           if(name==='remove-account'){menuFixture.removed.push(id);menuFixture.accounts=[];}
           return {value:{accounts:menuFixture.accounts,checkedAt:1,nextRefreshAt:8640000000000000}};
         }};
@@ -42,6 +43,22 @@ if(!process.versions.electron) {
       const isOpen=()=>evaluate(`!!document.querySelector('.quota-account-menu:popover-open')`);
       const rightClick=()=>click('#quota-list .quota-account','right');
       await delay(150);
+      await evaluate(`window.switchButton=document.querySelector('.quota-table .quota-refresh-toggle');window.switchFrames=[];
+        switchButton.addEventListener('transitionrun',event=>{
+          if(event.pseudoElement!=='::after')return;
+          const until=performance.now()+300;
+          function sample(){switchFrames.push(new DOMMatrixReadOnly(getComputedStyle(switchButton,'::after').transform).m41);if(performance.now()<until)requestAnimationFrame(sample);}
+          requestAnimationFrame(sample);
+        });`);
+      await click('.quota-table .quota-refresh-toggle');await delay(250);
+      const slide=await evaluate(`({same:switchButton===document.querySelector('.quota-table .quota-refresh-toggle'),frames:switchFrames,label:switchButton.textContent,background:getComputedStyle(switchButton).backgroundColor})`);
+      assert.equal(slide.same,true,'保存后保留开关节点');
+      assert.equal(slide.label,'开启');assert.equal(slide.background,'rgb(197, 232, 211)');
+      assert.ok(slide.frames.some(x=>x>1&&x<33),'滑块应经过中间位置，不能瞬移');
+      assert.equal(slide.frames.at(-1),34);
+      await click('.quota-table .quota-refresh-toggle');await delay(250);
+      assert.equal(await evaluate(`switchButton.textContent`),'关闭');
+      assert.equal(await evaluate(`getComputedStyle(switchButton).backgroundColor`),'rgb(225, 228, 226)');
       await evaluate('window.scrollTo(0,180)');await delay(100);
       await rightClick();
       await delay(2200); // 覆盖 mouseUp 和页面的本地状态轮询。
@@ -61,7 +78,7 @@ if(!process.versions.electron) {
       await click('dialog[open] .primary');
       assert.equal(await evaluate('menuFixture.removed.join()'),'5','明确确认后才删除');
       assert.equal(await evaluate(`document.querySelectorAll('#quota-list tr').length`),0);
-      console.log('Quota account menu: real right-click, polling, outside click, Escape, cancel and confirmed removal OK');
+      console.log('Quota: real switch sliding and colors, right-click, polling, outside click, Escape, cancel and confirmed removal OK');
     } finally {win.destroy();app.quit();}
   }).catch(error=>{console.error(error);app.exit(1);});
   app.on('quit',()=>fs.rmSync(dir,{recursive:true,force:true}));

@@ -104,6 +104,12 @@ export function createQuotaView() {
     const hours=Math.floor(seconds/3600),minutes=Math.floor(seconds%3600/60),rest=seconds%60;
     return [hours?`${hours}时`:'',minutes?`${minutes}分`:'',rest?`${rest}秒`:''].filter(Boolean).join('')||'0秒';
   }
+  function updateRefreshToggle(button, enabled, disabled, intervalLabel) {
+    button.setAttribute('aria-checked', String(enabled));
+    button.textContent = enabled ? '开启' : '关闭';
+    button.title = enabled ? `参与每 ${intervalLabel}及手动刷新` : '保留已有额度，仍检查上游账号是否存在';
+    button.disabled = disabled;
+  }
   function intervalControls() {
     if (!intervalDirty) $('interval-value').value=String(savedSeconds());
     const raw=$('interval-value').value,seconds=Number(raw);
@@ -154,8 +160,12 @@ export function createQuotaView() {
     $('five-hour-hint').hidden = !fiveHourUnavailable;
     // 本地快照轮询时更新倒计时，不重建未变化的账号行，也不额外请求接口。
     for (const {label, at} of resetLabels) label.textContent = resetCountdown(at);
-    for (const button of refreshButtons) button.disabled = refreshing || saving;
-    const key = JSON.stringify([accounts, settings.map(([key]) => data.listSettings?.[key] !== false), intervalLabel]);
+    const byId = new Map(accounts.map(account => [account.id, account]));
+    for (const {button, id} of refreshButtons) {
+      updateRefreshToggle(button, byId.get(id)?.refreshEnabled !== false, refreshing || saving, intervalLabel);
+    }
+    // 单独切换刷新状态时保留按钮节点，让滑块从当前位置过渡。
+    const key = JSON.stringify([accounts.map(({refreshEnabled, ...account}) => account), settings.map(([key]) => data.listSettings?.[key] !== false), intervalLabel]);
     if (key === listKey) return;
     listKey = key;
     closeAccountMenu?.();
@@ -188,12 +198,9 @@ export function createQuotaView() {
       toggle.className = 'quota-refresh-toggle';
       toggle.setAttribute('role', 'switch');
       toggle.setAttribute('aria-label', `${name} · 刷新`);
-      toggle.setAttribute('aria-checked', String(enabled));
-      toggle.textContent = enabled ? '已开启' : '已关闭';
-      toggle.title = enabled ? `参与每 ${intervalLabel}及手动刷新` : '保留已有额度，仍检查上游账号是否存在';
-      toggle.disabled = refreshing || saving;
-      toggle.addEventListener('click', () => void setRefreshEnabled(account.id, !enabled));
-      refreshButtons.push(toggle);
+      updateRefreshToggle(toggle, enabled, refreshing || saving, intervalLabel);
+      toggle.addEventListener('click', () => void setRefreshEnabled(account.id, toggle.getAttribute('aria-checked') !== 'true'));
+      refreshButtons.push({button:toggle, id:account.id});
       // 单账号成功时间独立于整轮刷新；旧缓存未知时不借用整轮时间。
       const syncedAt = document.createElement('td');
       syncedAt.className = 'quota-account-synced';
