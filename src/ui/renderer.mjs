@@ -104,6 +104,10 @@ function render(data) {
   plannerView.render(data.planner);
   wechatView.render(data.wechat);
   shortcutsView.render(data);
+  const storeButton=$('pet-store-button');
+  // 已有可用的收纳手势时收起重复入口；取消绑定或关闭快捷操作后自动恢复图标。
+  if(storeButton)storeButton.hidden=data.modules?.shortcuts!==false&&
+    ['doubleClick','tripleClick'].some(key=>data.shortcuts?.[key]==='store-pet');
   subscriptionsView?.renderSummary(data.subscriptions);
   const subscriptionsBadge=$('pet-subscriptions-badge');
   if(subscriptionsBadge) {
@@ -189,7 +193,7 @@ document.querySelectorAll('[data-action]').forEach(button=>button.addEventListen
 document.querySelectorAll('[data-demo]').forEach(button=>button.addEventListener('click',()=>action('demo',button.dataset.demo)));
 if (floating) {
   createPetGestures({element:$('pet-art'),action,drag:(...args)=>window.whale.drag(...args),
-    enabled:()=>lastData?.modules?.shortcuts!==false&&lastData?.shortcuts?.tripleClick!=='none'});
+    enabled:()=>lastData?.modules?.shortcuts!==false,bindings:()=>lastData?.shortcuts});
 } else {
   $('pet-art').addEventListener('click',()=>action('touch'));
   $('pet-art').addEventListener('keydown',event=>{ if(event.key==='Enter'||event.key===' ') { event.preventDefault(); action('touch'); } });

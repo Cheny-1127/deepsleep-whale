@@ -179,9 +179,9 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   async function performAction(action, value) {
     if(['copy-hook-config','refresh-hooks','hook-source','hook-event'].includes(action)&&!modules.enabled('hooks'))throw Error('Hooks 模块已关闭，请先开启');
     // 连击只提交手势，实际动作以主进程已保存的白名单配置为准。
-    if(action==='shortcut-triple') {
+    if(action==='shortcut-double'||action==='shortcut-triple') {
       if(!modules.enabled('shortcuts'))return snapshot();
-      const target=shortcuts.snapshot().tripleClick;
+      const target=shortcuts.snapshot()[action==='shortcut-double'?'doubleClick':'tripleClick'];
       return target==='none'?snapshot():performAction(target);
     }
     if (['feed','pat','touch','happy','angry'].includes(action) || Object.hasOwn(SPECIAL_ACTIONS, action)) {
@@ -252,6 +252,8 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     else if (action === 'toggle-pet') windows.isPetVisible()?windows.hidePet():windows.showPet();
     else if (action === 'show-pet') windows.showPet();
     else if (action === 'hide-pet') windows.hidePet();
+    else if (action === 'store-pet') await windows.storePet();
+    else if (action === 'restore-pet') windows.showPet();
     else if (action === 'quit') app.quit();
     broadcast();
     return snapshot();

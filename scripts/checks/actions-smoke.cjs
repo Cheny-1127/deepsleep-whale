@@ -66,7 +66,7 @@ const root=path.resolve(__dirname, '../..');
     assert.deepEqual(edge.bounds,petBeforeMenu,'opening the menu must not resize or move the pet');
     const labels=()=>menu.getByRole('menu',{name:'桌宠菜单',exact:true}).getByRole('menuitem').allTextContents();
     const text=await labels();
-    assert.deepEqual(text.map(value=>value.replace(/^[♡✦⌂◌↻]/u,'').replace(/›$/u,'')),['互动表情','小节目','打开小屋','隐藏桌宠','重启']);
+    assert.deepEqual(text.map(value=>value.replace(/^[♡✦⌂⇥◌↻]/u,'').replace(/›$/u,'')),['互动表情','小节目','打开小屋','收纳到边缘','隐藏桌宠','重启']);
     await menu.getByRole('menuitem',{name:'互动表情'}).hover();
     assert.deepEqual(await menu.getByRole('menu',{name:'互动表情',exact:true}).getByRole('menuitem').allTextContents(),['喂饭','摸头','开心','生气']);
     await menu.getByRole('menuitem',{name:'小节目',exact:true}).hover();

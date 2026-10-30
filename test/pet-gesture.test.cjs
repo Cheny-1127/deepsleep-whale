@@ -1,17 +1,17 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 
-function fixture({enabled=true}={}) {
+function fixture({enabled=true,bindings={doubleClick:'none',tripleClick:'panel'}}={}) {
   const handlers={},windowHandlers={},actions=[],drags=[],jobs=new Map();
   let now=0,nextId=0;
   const element={addEventListener:(name,fn)=>handlers[name]=fn,setPointerCapture(){},contains:target=>target===element};
   const clock={now:()=>now,setTimeout:(fn,ms)=>{const id=++nextId;jobs.set(id,{fn,at:now+ms});return id;},clearTimeout:id=>jobs.delete(id)};
   const source=fs.readFileSync(path.join(__dirname,'../src/ui/pet-gestures.mjs'),'utf8').replace('export function','function');
-  vm.runInNewContext(source+'\ncreatePetGestures({element,action:name=>actions.push(name),drag:(...args)=>drags.push(args),enabled:()=>enabled,clock});',
-    {element,actions,drags,clock,enabled,window:{addEventListener:(name,fn)=>windowHandlers[name]=fn}});
+  vm.runInNewContext(source+'\ncreatePetGestures({element,action:name=>actions.push(name),drag:(...args)=>drags.push(args),enabled:()=>enabled,bindings:()=>bindings,clock});',
+    {element,actions,drags,clock,enabled,bindings,window:{addEventListener:(name,fn)=>windowHandlers[name]=fn}});
   const emit=(name,extra={})=>handlers[name]?.({button:0,pointerId:1,screenX:100,screenY:100,preventDefault(){},...extra});
   const advance=ms=>{now+=ms;for(const [id,job] of [...jobs])if(job.at<=now){jobs.delete(id);job.fn();}};
-  return {actions,drags,emit,advance,click(){emit('pointerdown');emit('pointerup');},blur:()=>windowHandlers.blur?.(),outside:()=>windowHandlers.pointerdown?.({target:{}})};
+  return {actions,drags,emit,advance,setBindings:patch=>Object.assign(bindings,patch),click(){emit('pointerdown');emit('pointerup');},blur:()=>windowHandlers.blur?.(),outside:()=>windowHandlers.pointerdown?.({target:{}})};
 }
 test('three clicks perform the shortcut once without ordinary touch actions',()=>{
   const f=fixture();f.click();f.advance(100);f.click();f.advance(100);f.click();
@@ -44,4 +44,27 @@ test('normal capture release retains clicks, while a slow third click stays ordi
 test('clicking a bubble or another control breaks the character click sequence',()=>{
   const f=fixture();f.click();f.advance(50);f.click();f.outside();f.click();f.advance(401);
   assert.deepEqual(f.actions,['touch']);
+});
+test('double and triple bindings coexist and a triple never executes the double binding first',()=>{
+  const f=fixture({bindings:{doubleClick:'panel',tripleClick:'store-pet'}});
+  f.click();f.advance(100);f.click();assert.deepEqual(f.actions,[]);
+  f.advance(401);assert.deepEqual(f.actions,['shortcut-double']);
+  f.click();f.advance(100);f.click();f.advance(100);f.click();
+  assert.deepEqual(f.actions,['shortcut-double','shortcut-triple']);
+  f.advance(500);assert.deepEqual(f.actions,['shortcut-double','shortcut-triple']);
+});
+test('a double-only binding executes on the second click without waiting for a disabled triple',()=>{
+  const f=fixture({bindings:{doubleClick:'panel',tripleClick:'none'}});
+  f.click();f.advance(100);f.click();assert.deepEqual(f.actions,['shortcut-double']);
+  f.advance(500);assert.deepEqual(f.actions,['shortcut-double']);
+});
+test('disabling both bindings keeps immediate ordinary touches',()=>{
+  const f=fixture({bindings:{doubleClick:'none',tripleClick:'none'}});
+  f.click();f.click();f.click();assert.deepEqual(f.actions,['touch','touch','touch']);
+});
+test('changing bindings cancels a pending sequence instead of running the newly assigned action',()=>{
+  const f=fixture({bindings:{doubleClick:'panel',tripleClick:'store-pet'}});
+  f.click();f.advance(100);f.click();f.setBindings({doubleClick:'feed'});f.advance(401);
+  assert.deepEqual(f.actions,[]);
+  f.click();f.advance(100);f.click();f.advance(401);assert.deepEqual(f.actions,['shortcut-double']);
 });
