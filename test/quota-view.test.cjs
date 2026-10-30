@@ -7,9 +7,13 @@ const vm = require('node:vm');
 
 function fixture() {
   class Element {
-    constructor(tag) { this.tagName = tag; this.children = []; this.handlers = {}; this.attributes = {}; this.textContent = ''; this.hidden = false; this.disabled = false; }
+    constructor(tag) { this.tagName = tag; this.children = []; this.handlers = {}; this.attributes = {}; this.dataset = {}; this.style = {}; this.textContent = ''; this.hidden = false; this.disabled = false; }
     setAttribute(name, value) { this.attributes[name] = value; }
-    append(...children) { this.children.push(...children); }
+    append(...children) { this.children.push(...children);children.forEach(child=>child.parent=this); }
+    remove() { if(this.parent)this.parent.children=this.parent.children.filter(child=>child!==this); }
+    showPopover() {}
+    hidePopover() { this.handlers.toggle?.({newState:'closed'}); }
+    getBoundingClientRect() { return {left:0,bottom:20,width:190,height:42}; }
     replaceChildren(...children) { this.children = children; }
     addEventListener(name, handler) { this.handlers[name] = handler; }
     click() { return this.handlers.click?.(); }
@@ -21,7 +25,8 @@ function fixture() {
   let data = {accounts: [], error: '', checkedAt: null, attemptedAt: null, failedAt: null, nextRefreshAt: null, busy: false};
   let now = 1000;
   class TestDate extends Date { static now() { return now; } }
-  const calls = [], intervals = [], saves = [];
+  const calls = [], intervals = [], saves = [], confirmations = [];
+  let confirmed = true;
   let save = async value => {
     if (value.unit) {const ms=value.value*({seconds:1000,minutes:60000,hours:3600000}[value.unit]);data={...data,refreshInterval:value,refreshIntervalMs:ms,refreshIntervalLabel:value.value+' '+({seconds:'秒',minutes:'分钟',hours:'小时'}[value.unit]),nextRefreshAt:now+ms};return {value:data};}
     if (Object.keys(value).some(key => key.startsWith('show'))) {data = {...data, listSettings: {...data.listSettings, ...value}};return {value: data};}
@@ -30,11 +35,11 @@ function fixture() {
   };
   const tick = () => new Promise(setImmediate);
   elements.get('quota-view').hidden = true;
-  const window = {whale: {quota: async (name, value) => { calls.push(name); if (name === 'set-refresh' || name === 'set-list' || name === 'set-interval') {saves.push(value);return save(value);} if (name === 'refresh') data = {...data, checkedAt: now, attemptedAt: now, failedAt: null, error: '', nextRefreshAt: now + 300000, busy: false}; return {value: data}; }}};
-  const source = fs.readFileSync(path.join(__dirname, '../src/ui/quota-view.mjs'), 'utf8').replace('export function', 'function');
-  vm.runInNewContext(source + '\ncreateQuotaView();', {window, document: {addEventListener() {}, getElementById: id => elements.get(id), createElement: tag => new Element(tag), createElementNS: (_ns, tag) => new Element(tag)}, Date: TestDate, setTimeout, setInterval(callback) { intervals.push(callback); }});
+  const window = {innerWidth:1000,innerHeight:800,whale: {quota: async (name, value) => { calls.push(name); if (name === 'remove-account') data = {...data, accounts:data.accounts.filter(account=>account.id!==value)}; if (name === 'set-refresh' || name === 'set-list' || name === 'set-interval') {saves.push(value);return save(value);} if (name === 'refresh') data = {...data, checkedAt: now, attemptedAt: now, failedAt: null, error: '', nextRefreshAt: now + 300000, busy: false}; return {value: data}; }}};
+  const source = fs.readFileSync(path.join(__dirname, '../src/ui/quota-view.mjs'), 'utf8').replace(/^import .*;\n/gm, '').replace('export function', 'function');
+  vm.runInNewContext(source + '\ncreateQuotaView();', {window, updateSidebarStatus() {}, confirmAction:async options=>{confirmations.push(options);return confirmed;}, document: {addEventListener() {}, removeEventListener() {}, getElementById: id => elements.get(id), createElement: tag => new Element(tag), createElementNS: (_ns, tag) => new Element(tag)}, Date: TestDate, setTimeout, setInterval(callback) { intervals.push(callback); }});
   const get = id => elements.get('quota-' + id);
-  return {get, calls, saves, setSave: fn => {save = fn;}, setNow: value => { now = value; }, set: value => { data = {...data, ...value}; },
+  return {get, calls, saves, confirmations, setConfirmed:value=>{confirmed=value;}, setSave: fn => {save = fn;}, setNow: value => { now = value; }, set: value => { data = {...data, ...value}; },
     async open() { get('view').hidden = false; elements.get('nav-quota').click(); await tick(); },
     async poll() { intervals.forEach(callback => callback()); await tick(); },
     async refresh() { get('refresh').click(); await tick(); }};
@@ -192,7 +197,7 @@ test('account refresh switches show saved choices and send the account ID when c
   assert.equal(JSON.stringify(view.saves), JSON.stringify([{id: 5, enabled: false}]));
   assert.equal(toggle(view.get('list').children[0]).textContent, '已关闭');
   assert.equal(view.get('status').textContent, '已暂停刷新');
-  assert.equal(view.get('refresh').disabled, true);
+  assert.equal(view.get('refresh').disabled, false);
   await view.open();assert.equal(view.calls.filter(name => name === 'refresh').length, 0);
 });
 
@@ -276,7 +281,7 @@ test('subscription appears beside the account details and missing types remain u
   await view.open();
   const labels = view.get('list').children.map(row => row.children[1].children[0].children[0]);
   assert.deepEqual(labels.map(label => label.textContent), ['Pro 100', 'Pro 200', '订阅未知', '<img src=x>']);
-  assert.ok(labels.every(label => label.tagName === 'span' && label.children.length === 0));
+  assert.ok(labels.every(label => label.tagName === 'button' && label.children.length === 0));
 });
 
 test('platform reset badges display available cards without treating missing data as zero', async () => {
@@ -285,6 +290,45 @@ test('platform reset badges display available cards without treating missing dat
   await view.open();
   assert.deepEqual(view.get('list').children.map(row => row.children[1].children[0].children[1].textContent), ['重置次数 0', '重置次数 2', '重置次数 —']);
   assert.deepEqual(view.get('list').children.map(row => row.children[1].children[0].children[1].title), ['可用重置卡：0 张', '可用重置卡：2 张', '暂无重置卡数据']);
+});
+
+test('account removal requires a context menu selection and explicit confirmation', async () => {
+  const view=fixture();view.set({accounts:[{id:1,name:'账号'}],checkedAt:1000});await view.open();
+  const open=async()=>{view.get('list').children[0].children[0].handlers.contextmenu({type:'contextmenu',clientX:40,clientY:80,preventDefault(){}});await new Promise(setImmediate);};
+  assert.equal(view.get('list').children[0].children[4].children.length,1,'only the refresh switch remains');
+  await open();view.get('view').children.at(-1).handlers.keydown({key:'Escape',preventDefault(){}});await new Promise(setImmediate);
+  assert.equal(view.confirmations.length,0);assert.ok(!view.calls.includes('remove-account'));
+  view.setConfirmed(false);await open();view.get('view').children.at(-1).children[0].click();await new Promise(setImmediate);
+  assert.equal(view.get('list').children.length,1);assert.ok(!view.calls.includes('remove-account'));
+  assert.match(view.confirmations[0].message,/账号/);
+  view.setConfirmed(true);await open();view.get('view').children.at(-1).children[0].click();await new Promise(setImmediate);
+  assert.equal(view.get('list').children.length,0);assert.ok(view.calls.includes('remove-account'));
+});
+
+test('an upstream missing account is marked on its whole row', async () => {
+  const view=fixture();view.set({accounts:[{id:1,name:'账号',upstreamMissing:true}],checkedAt:1000});await view.open();
+  const cell=view.get('list').children[0].children[0];
+  assert.match(view.get('list').children[0].className,/quota-account-missing/);assert.match(cell.title,/上游账号不存在/);
+});
+
+test('reset expiry shows the earliest time and all dates in the count tooltip', async () => {
+  const view = fixture();
+  view.set({accounts: [{id: 1, name: '账号', resetCardCount: 2, resetCardExpiresAt: ['2026-11-05T08:00:00', '2026-12-05T09:30:00'], subscriptionExpiresAt:'2026-11-19T15:07:00'}]});
+  await view.open();
+  const row = view.get('list').children[0];
+  const [plan, reset] = row.children[1].children[0].children;
+  const expiry = row.children[1].children[1];
+  assert.equal(expiry.textContent, '账号到期：\n2026-11-19 15:07');
+  assert.equal(plan.attributes['aria-pressed'], 'true');
+  reset.click();
+  assert.equal(expiry.textContent, '重置卡到期：\n2026-11-05 08:00');
+  assert.equal(reset.attributes['aria-pressed'], 'true');
+  assert.match(reset.title, /2026-11-05 08:00\n2026-12-05 09:30/);
+  view.set({accounts: [{id: 1, name: '账号', resetCardCount: 0}]});
+  await view.poll();
+  assert.equal(view.get('list').children[0].children[1].children[1].textContent, '暂无可用重置卡');
+  plan.click();
+  assert.match(expiry.textContent, /^账号到期：\n\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
 });
 
 

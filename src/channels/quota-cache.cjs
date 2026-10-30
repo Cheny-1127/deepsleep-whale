@@ -10,13 +10,14 @@ function cachedAccount(item) {
   const expiresAt=text(item.subscriptionExpiresAt);
   // 只保存界面所需的摘要；读取时也过滤额外字段，不能带入凭据。
   // 旧缓存缺少账号同步时间时保留未知，不能用整轮时间补齐暂停或失败账号的时间。
-  return {id:item.id,name:text(item.name)||'',lastSyncedAt:timestamp(item.lastSyncedAt),fiveHourRemaining:percent(item.fiveHourRemaining),sevenDayRemaining:percent(item.sevenDayRemaining),
+  return {id:item.id,name:text(item.name)||'',lastSyncedAt:timestamp(item.lastSyncedAt),...(item.upstreamMissing===true?{upstreamMissing:true}:{}),fiveHourRemaining:percent(item.fiveHourRemaining),sevenDayRemaining:percent(item.sevenDayRemaining),
     creditsBalance:typeof item.creditsBalance==='number'&&Number.isFinite(item.creditsBalance)&&item.creditsBalance>=0?item.creditsBalance:null,
     fiveHourResetAt:text(item.fiveHourResetAt)&&Number.isFinite(Date.parse(item.fiveHourResetAt))?item.fiveHourResetAt:null,
     sevenDayResetAt:text(item.sevenDayResetAt)&&Number.isFinite(Date.parse(item.sevenDayResetAt))?item.sevenDayResetAt:null,
     fiveHourWindowMinutes:typeof item.fiveHourWindowMinutes==='number'&&Number.isFinite(item.fiveHourWindowMinutes)&&item.fiveHourWindowMinutes>=0?item.fiveHourWindowMinutes:null,
     sevenDayWindowMinutes:typeof item.sevenDayWindowMinutes==='number'&&Number.isFinite(item.sevenDayWindowMinutes)&&item.sevenDayWindowMinutes>=0?item.sevenDayWindowMinutes:null,
     resetCardCount:Number.isSafeInteger(item.resetCardCount)&&item.resetCardCount>=0?item.resetCardCount:null,
+    resetCardExpiresAt:Array.isArray(item.resetCardExpiresAt)?item.resetCardExpiresAt.filter(value=>typeof value==='string'&&Number.isFinite(Date.parse(value))).sort((a,b)=>Date.parse(a)-Date.parse(b)):[],
     subscriptionType:text(item.subscriptionType),platform:text(item.platform),authType:text(item.authType),
     subscriptionExpiresAt:expiresAt&&Number.isFinite(Date.parse(expiresAt))?expiresAt:null};
 }

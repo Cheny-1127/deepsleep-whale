@@ -44,16 +44,38 @@ test('legacy or invalid account sync times remain unknown rather than inheriting
   assert.equal(f.calls.length,1);
 });
 
+test('cached reset card dates survive restart and invalid entries are discarded',async t=>{
+  const f=fixture(t),first=f.create();await first.refresh();first.close();
+  const saved=JSON.parse(fs.readFileSync(f.cacheFile,'utf8'));
+  saved.accounts[0].resetCardExpiresAt=['2026-12-01T00:00:00Z','invalid','2026-11-01T00:00:00Z'];
+  fs.writeFileSync(f.cacheFile,JSON.stringify(saved));
+  assert.deepEqual(f.create().snapshot().accounts[0].resetCardExpiresAt,['2026-11-01T00:00:00Z','2026-12-01T00:00:00Z']);
+});
+
+test('removing a local account persists across restart',async t=>{
+  const f=fixture(t),first=f.create();await first.refresh();
+  first.setRefreshEnabled({id:5,enabled:false});first.removeAccount(5);first.close();
+  assert.deepEqual(f.create().snapshot().accounts,[]);
+  assert.equal(f.calls.length,1);
+});
+
+test('upstream missing marker survives restart',async t=>{
+  const f=fixture(t),first=f.create();await first.refresh();first.close();
+  const saved=JSON.parse(fs.readFileSync(f.cacheFile,'utf8'));saved.accounts[0].upstreamMissing=true;
+  fs.writeFileSync(f.cacheFile,JSON.stringify(saved));
+  assert.equal(f.create().snapshot().accounts[0].upstreamMissing,true);
+});
+
 test('custom interval and account switches survive restart without overwriting each other',async t=>{
   const f=fixture(t),first=f.create();await first.refresh();
   first.setRefreshInterval({value:2,unit:'hours'});first.setRefreshEnabled({id:5,enabled:false});
-  first.setRefreshInterval({value:30,unit:'seconds'});assert.equal(first.snapshot().nextRefreshAt,null);
-  assert.equal(f.jobs.size,0);assert.equal(f.calls.length,1);first.close();
+  first.setRefreshInterval({value:30,unit:'seconds'});assert.equal(first.snapshot().nextRefreshAt,31000);
+  assert.equal(f.jobs.size,1);assert.equal(f.calls.length,1);first.close();
   const restored=f.create();assert.deepEqual(restored.snapshot().refreshInterval,{value:30,unit:'seconds'});
-  assert.equal(restored.snapshot().accounts[0].refreshEnabled,false);assert.equal(restored.snapshot().nextRefreshAt,null);
-  f.setNow(2000);restored.setRefreshEnabled({id:5,enabled:true});assert.equal(restored.snapshot().nextRefreshAt,32000);restored.close();
-  f.setNow(3000);const again=f.create();assert.equal(again.snapshot().nextRefreshAt,32000);
-  assert.ok([...f.jobs].some(job=>job.ms===29000));assert.equal(f.calls.length,1);
+  assert.equal(restored.snapshot().accounts[0].refreshEnabled,false);assert.equal(restored.snapshot().nextRefreshAt,31000);
+  f.setNow(2000);restored.setRefreshEnabled({id:5,enabled:true});assert.equal(restored.snapshot().nextRefreshAt,31000);restored.close();
+  f.setNow(3000);const again=f.create();assert.equal(again.snapshot().nextRefreshAt,31000);
+  assert.ok([...f.jobs].some(job=>job.ms===28000));assert.equal(f.calls.length,1);
 });
 
 test('legacy and invalid intervals use the default; independent settings win when a cache write failed',async t=>{
@@ -102,8 +124,8 @@ test('cached fields are allowlisted and paused accounts remain paused after rest
   const saved=JSON.parse(fs.readFileSync(f.cacheFile,'utf8'));saved.accounts[0].credentials={access_token:'injected'};
   fs.writeFileSync(f.cacheFile,JSON.stringify(saved));f.setNow(400000);
   const restarted=f.create(),cached=restarted.snapshot();
-  assert.equal(cached.accounts[0].refreshEnabled,false);assert.ok(!JSON.stringify(cached).includes('injected'));assert.equal(cached.nextRefreshAt,null);
-  await restarted.refresh();assert.equal(f.calls.length,1);
+  assert.equal(cached.accounts[0].refreshEnabled,false);assert.ok(!JSON.stringify(cached).includes('injected'));assert.equal(cached.nextRefreshAt,301000);
+  await restarted.refresh();assert.equal(f.calls.length,2);
   restarted.setRefreshEnabled({id:5,enabled:true});
   assert.equal(restarted.snapshot().nextRefreshAt,700000,'从本地缓存恢复的账号重新开启后应恢复轮询');
 });
