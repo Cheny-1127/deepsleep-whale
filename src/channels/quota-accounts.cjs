@@ -46,8 +46,10 @@ function projectAccount(item) {
   // 只有点数、没有百分比窗口的账号也要保留，供账号下方点数展示。
   if (fiveHourUsed == null && sevenDayUsed == null && creditsBalance == null) return null;
   // 剩余额度由网关已保存的已用百分比折算，不携带凭据，也不据此请求上游。
-  // 只读取可用张数，不向页面传递完整重置卡快照。
+  // 只读取可用张数和到期时间，不向页面传递完整重置卡快照。
   const resetCardCount = item.extra?.codex_reset_credit_snapshot?.available_count;
+  const cards = item.extra?.codex_reset_credit_snapshot?.credits;
+  const resetCardExpiresAt = Array.isArray(cards) ? cards.map(card => card?.expires_at).filter(value => typeof value === 'string' && Number.isFinite(Date.parse(value))).sort((a,b) => Date.parse(a)-Date.parse(b)) : [];
   const expiresAt = item.credentials?.subscription_expires_at;
   const resetAt = key => {
     const value = item[key] ?? item.extra?.[key];
@@ -68,6 +70,7 @@ function projectAccount(item) {
     fiveHourWindowMinutes: windowMinutes('codex_5h_window_minutes'),
     sevenDayWindowMinutes: windowMinutes('codex_7d_window_minutes'),
     resetCardCount: Number.isSafeInteger(resetCardCount) && resetCardCount >= 0 ? resetCardCount : null,
+    resetCardExpiresAt,
     subscriptionType: subscriptionLabel(item.credentials),
     platform: typeof item.platform === 'string' ? item.platform : null,
     authType: typeof item.type === 'string' ? item.type : null,
@@ -81,26 +84,36 @@ async function readAccountData({token, tokenFile, baseUrl, fetchImpl = fetch, si
   const origin = String(baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
   signal?.throwIfAborted();
   const response = await fetchImpl(`${origin}/api/v1/admin/accounts${route}`, {headers: {'x-api-key': apiKey}, signal});
-  if (!response.ok) throw new Error(response.status === 401 ? 'token 无效，无法读取账号额度' : '读取账号额度失败');
+  if (!response.ok) {
+    const error = new Error(response.status === 401 ? 'token 无效，无法读取账号额度' : '读取账号额度失败');
+    if (response.status === 404) error.code = 'ACCOUNT_NOT_FOUND';
+    throw error;
+  }
   const body = await response.json();
   signal?.throwIfAborted();
   return body?.data && typeof body.data === 'object' ? body.data : body;
 }
 
-async function listAccountQuotas(options = {}) {
-  const accounts = [];
+async function readAccountList(options = {}) {
+  const accounts = [], accountIds = new Set();
   for (let page = 1; page <= 10; page++) {
     const data = await readAccountData(options, `?page=${page}&page_size=100`);
     if (!Array.isArray(data?.items)) throw new Error('读取账号额度失败');
     for (const item of data.items) {
+      if (!Number.isSafeInteger(item?.id)) throw new Error('读取账号额度失败');
+      accountIds.add(item.id);
       const account = projectAccount(item);
       if (account) accounts.push(account);
     }
     const pages = Number.isInteger(data?.pages) ? data.pages : 1;
-    if (page >= pages) return accounts;
+    if (page >= pages) return {accounts, accountIds};
   }
   // 不把被截断的列表当成完整结果，避免为剩余账号逐个补发请求。
   throw new Error('账号列表超过读取上限，未完成同步');
+}
+
+async function listAccountQuotas(options = {}) {
+  return (await readAccountList(options)).accounts;
 }
 
 // 首次请求后启动轮询；由主进程持有，切换或关闭小屋不影响后续刷新。
@@ -137,7 +150,6 @@ function createQuotaPanel({token, tokenFile, dataDir, baseUrl, fetchImpl, clock 
     for (const key of Object.keys(DEFAULT_LIST_SETTINGS)) if (typeof saved?.[key] === 'boolean') listSettings[key] = saved[key];
     if (!['showName', 'showPlatform', 'showRemaining', 'showSyncedAt', 'showRefresh'].some(key => listSettings[key])) listSettings = {...DEFAULT_LIST_SETTINGS};
   } catch {} // 列配置独立于额度缓存，切换账号或刷新失败也保留显示偏好。
-  const allPaused = () => state.accounts.length > 0 && state.accounts.every(account => disabledAccountIds.has(account.id));
   function snapshot() {
     // 首次读取时恢复轮询；先返回缓存，按原定刷新时间计算剩余等待。
     if (resumeCache && !closed) {
@@ -158,7 +170,7 @@ function createQuotaPanel({token, tokenFile, dataDir, baseUrl, fetchImpl, clock 
   }
   function schedule(at = clock.now() + intervalMs()) {
     clearTimer();
-    if (closed || allPaused()) return;
+    if (closed) return;
     // 请求完成后再等待配置的间隔，避免短周期堆积请求；单账号刷新沿用原计划。
     nextRefreshAt = at;
     timer = clock.setTimeout(() => void refresh(), Math.max(0, at - clock.now()));
@@ -172,7 +184,6 @@ function createQuotaPanel({token, tokenFile, dataDir, baseUrl, fetchImpl, clock 
     }
     // 全量请求覆盖所有账号，同账号请求可合并；其他刷新范围等待当前请求完成。
     if (flight) return flightAccountId === null || flightAccountId === accountId ? flight : flight.then(() => refresh(accountId));
-    if (accountId === null && allPaused()) return Promise.resolve(snapshot());
     resumeCache = false;
     flightAccountId = accountId;
     // 单账号刷新不重置全量同步时间，避免推迟其他账号的自动刷新。
@@ -199,7 +210,7 @@ function createQuotaPanel({token, tokenFile, dataDir, baseUrl, fetchImpl, clock 
           return;
         }
         // 每轮先完整读取列表，再按本地开关合并；暂停账号保留数据和最后成功同步时间。
-        const accounts = await listAccountQuotas(options);
+        const {accounts, accountIds} = await readAccountList(options);
         if (closed) return;
         const listed = new Map(accounts.map(account => [account.id, account]));
         const previousIds = new Set(state.accounts.map(account => account.id));
@@ -210,7 +221,14 @@ function createQuotaPanel({token, tokenFile, dataDir, baseUrl, fetchImpl, clock 
           return {...account, lastSyncedAt: listedAt};
         };
         state = {...state, accounts: [
-          ...state.accounts.map(account => disabledAccountIds.has(account.id) || !listed.has(account.id) ? account : synced(listed.get(account.id))),
+          ...state.accounts.map(account => {
+            if (disabledAccountIds.has(account.id)) {
+              // 暂停额度更新不暂停存在性检查；使用原始账号 ID，不能把无额度账号误判为删除。
+              const {upstreamMissing, ...previous} = account;
+              return accountIds.has(account.id) ? previous : {...previous, upstreamMissing:true};
+            }
+            return !listed.has(account.id) ? account : synced(listed.get(account.id));
+          }),
           ...[...listed.values()].filter(account => !previousIds.has(account.id)).map(account => disabledAccountIds.has(account.id) ? {...account, lastSyncedAt: null} : synced(account))
         ]};
         let failed = false;
@@ -222,9 +240,14 @@ function createQuotaPanel({token, tokenFile, dataDir, baseUrl, fetchImpl, clock 
             if (closed) return;
             state = {...state, accounts: state.accounts.map(item => item.id === id ? {...account, lastSyncedAt: clock.now()} : item)};
             pendingIds.delete(id);accountRefreshErrors.set(id, '');
-          } catch {
+          } catch (error) {
             if (closed) return;
             signal.throwIfAborted();
+            if (error.code === 'ACCOUNT_NOT_FOUND') {
+              state = {...state, accounts: state.accounts.map(account => account.id === id ? {...account, upstreamMissing: true} : account)};
+              pendingIds.delete(id);accountRefreshErrors.delete(id);
+              continue;
+            }
             failed = true; // 补取失败保留该账号旧值，继续处理其他缺失账号。
           }
         }
@@ -232,6 +255,11 @@ function createQuotaPanel({token, tokenFile, dataDir, baseUrl, fetchImpl, clock 
         if (!closed) state = {...state, error: '', failedAt: null, checkedAt: clock.now()};
       } catch (error) {
         if (closed) return;
+        if (accountId !== null && error.code === 'ACCOUNT_NOT_FOUND') {
+          state = {...state, accounts: state.accounts.map(account => account.id === accountId ? {...account, upstreamMissing: true} : account)};
+          accountRefreshErrors.delete(accountId);
+          return;
+        }
         // 失败保留上次成功数据；不向页面透传网络库可能包含凭据的原始错误。
         const known = ['尚未配置管理 Key，请填写 .env 或配置 token 文件', 'token 文件是空的', 'token 无效，无法读取账号额度', '读取账号额度失败', '账号列表超过读取上限，未完成同步'];
         // 记录本轮连续失败的起点；后续重试失败不推进此时间。
@@ -258,6 +286,16 @@ function createQuotaPanel({token, tokenFile, dataDir, baseUrl, fetchImpl, clock 
     if (!Number.isSafeInteger(id) || id <= 0) return Promise.reject(Error('请选择有效账号'));
     return refresh(id);
   }
+  function removeAccount(id) {
+    if (closed || flight) throw new Error('正在刷新或页面已关闭，请稍后重试');
+    if (!Number.isSafeInteger(id) || !state.accounts.some(account => account.id === id)) throw new Error('该账号已不可用');
+    const previous = state.accounts;
+    state = {...state, accounts: previous.filter(account => account.id !== id)};
+    try { cache.save({...state, nextRefreshAt, refreshIntervalMs:intervalMs()});cacheError = ''; }
+    catch { state = {...state, accounts: previous};throw new Error('删除本地账号失败，请重试'); }
+    accountRefreshErrors.delete(id);
+    return snapshot();
+  }
   function close() {
     closed = true; clearTimer(); clock.clearTimeout(deadline); controller?.abort();
     state = {...state, busy: false};
@@ -270,8 +308,7 @@ function createQuotaPanel({token, tokenFile, dataDir, baseUrl, fetchImpl, clock 
     if (value.enabled) next.delete(value.id);else next.add(value.id);
     saveRefreshSettings(next,refreshInterval);
     disabledAccountIds = next;
-    if (allPaused()) clearTimer();
-    else if (!timer && state.accounts.length) schedule();
+    if (!timer && state.accounts.length) schedule();
     saveCache();
     return snapshot();
   }
@@ -309,7 +346,7 @@ function createQuotaPanel({token, tokenFile, dataDir, baseUrl, fetchImpl, clock 
     listSettings = next;
     return snapshot();
   }
-  return {snapshot, refresh: () => refresh(), refreshAccount, close, setRefreshEnabled, setRefreshInterval, setListSettings};
+  return {snapshot, refresh: () => refresh(), refreshAccount, removeAccount, close, setRefreshEnabled, setRefreshInterval, setListSettings};
 }
 
 module.exports = {projectAccount, listAccountQuotas, createQuotaPanel, remainingPercent};

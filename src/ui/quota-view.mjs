@@ -1,4 +1,5 @@
 import { updateSidebarStatus } from './sidebar-view.mjs';
+import { confirmAction } from './confirm-dialog.mjs';
 const $ = id => document.getElementById('quota-' + id);
 const columns = [['showName', 'show-name', 'name-heading'], ['showPlatform', 'show-platform', 'platform-heading'],
   ['showRemaining', 'show-remaining', 'remaining-heading'], ['showSyncedAt', 'show-synced-at', 'synced-at-heading'], ['showRefresh', 'show-refresh', 'refresh-heading']];
@@ -11,6 +12,13 @@ function resetCountdown(at) {
   if (minutes >= 1440) return `${Math.floor(minutes / 1440)}d ${Math.floor(minutes % 1440 / 60)}h`;
   if (minutes >= 60) return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
   return `${minutes}m`;
+}
+
+function dateTime(at) {
+  const date = new Date(at);
+  if (!Number.isFinite(date.getTime())) return null;
+  const pad = value => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 // 未取得额度时显示缺失状态，不能画成 0% 或仍在读取的进度条。
@@ -44,11 +52,12 @@ function quotaMetric(name, period, remaining) {
 }
 
 // 订阅与重置卡成组，所有接口文字都按纯文本显示。
-function quotaPlatform(account) {
+function quotaPlatform(account, selected, onSelect) {
   const cell = document.createElement('td');
   cell.className = 'quota-platform';
   function chip(text, className) {
-    const label = document.createElement('span');
+    const label = document.createElement('button');
+    label.type = 'button';
     label.className = `quota-chip ${className}`;
     label.textContent = text;
     return label;
@@ -58,11 +67,24 @@ function quotaPlatform(account) {
   const known = Number.isSafeInteger(account.resetCardCount) && account.resetCardCount >= 0;
   const reset = chip(`重置次数 ${known ? account.resetCardCount : '—'}`, 'quota-reset-count');
   reset.title = known ? `可用重置卡：${account.resetCardCount} 张` : '暂无重置卡数据';
-  subscription.append(chip(account.subscriptionType || '订阅未知', 'quota-subscription'), reset);
+  const dates = (known && account.resetCardCount > 0 && Array.isArray(account.resetCardExpiresAt) ? account.resetCardExpiresAt : []).map(dateTime).filter(Boolean);
+  if (dates.length) reset.title += `\n到期时间：\n${dates.join('\n')}`;
+  const plan = chip(account.subscriptionType || '订阅未知', 'quota-subscription');
+  subscription.append(plan, reset);
   const expiry = document.createElement('div');
   expiry.className = 'quota-expiry';
-  const date = account.subscriptionExpiresAt ? new Date(account.subscriptionExpiresAt) : null;
-  expiry.textContent = date && Number.isFinite(date.getTime()) ? `到期 ${date.toISOString().slice(0, 10)}` : '到期时间未知';
+  const subscriptionDate = account.subscriptionExpiresAt ? dateTime(account.subscriptionExpiresAt) : null;
+  const accountText = subscriptionDate ? `账号到期：\n${subscriptionDate}` : '账号到期时间未知';
+  const resetText = dates.length ? `重置卡到期：\n${dates[0]}` : known && account.resetCardCount === 0 ? '暂无可用重置卡' : '重置卡到期时间未知';
+  function select(value) {
+    plan.setAttribute('aria-pressed', String(value === 'subscription'));
+    reset.setAttribute('aria-pressed', String(value === 'reset'));
+    expiry.textContent = value === 'reset' ? resetText : accountText;
+    onSelect(value);
+  }
+  plan.addEventListener('click', () => select('subscription'));
+  reset.addEventListener('click', () => select('reset'));
+  select(selected);
   cell.append(subscription, expiry);
   return cell;
 }
@@ -71,6 +93,8 @@ export function createQuotaView() {
   if (!$('view')) return;
   let latest = null, busy = false, syncing = false, saving = false, listKey = '', sequence = 0, refreshButtons = [], resetLabels = [];
   let intervalDirty = false;
+  const selectedExpiry = new Map();
+  let closeAccountMenu = null;
   // 兼容已保存的分钟/小时配置；界面统一显示秒，不在读取时改写旧设置。
   function savedSeconds() {
     const saved=latest?.refreshInterval||{value:5,unit:'minutes'};
@@ -113,7 +137,7 @@ export function createQuotaView() {
     $('table').hidden = !accounts.length;
     $('empty').hidden = Boolean(accounts.length);
     $('empty').textContent = data.checkedAt != null ? '没有记下额度的账号。' : refreshing ? '正在读取账号额度…' : '尚未读取账号额度。';
-    $('refresh').disabled = refreshing || saving || paused;
+    $('refresh').disabled = refreshing || saving;
     $('refresh').textContent = refreshing ? '正在刷新…' : '立即刷新';
     const showFiveHour = data.listSettings?.showFiveHour !== false;
     for (const [key, control, heading] of settings) {
@@ -134,16 +158,29 @@ export function createQuotaView() {
     const key = JSON.stringify([accounts, settings.map(([key]) => data.listSettings?.[key] !== false), intervalLabel]);
     if (key === listKey) return;
     listKey = key;
+    closeAccountMenu?.();
     refreshButtons = [];
     resetLabels = [];
     $('list').replaceChildren(...accounts.map(account => {
       const row = document.createElement('tr');
+      if (account.upstreamMissing) row.className = 'quota-account-missing';
       const title = document.createElement('th');
       title.className = 'quota-account';
+      if (account.upstreamMissing) {
+        title.title = '上游账号不存在；右键管理本地账号';
+      }
       title.setAttribute('scope', 'row');
       const name = account.name || `账号 #${account.id}`;
       // 账号名称始终按纯文本展示，长名称只换行，不挤偏额度列。
       title.textContent = name;
+      title.tabIndex = 0;
+      title.setAttribute('aria-haspopup', 'menu');
+      if (!account.upstreamMissing) title.title = '右键管理本地账号';
+      const openMenu = event => { event.preventDefault(); void accountMenu(account, title, event); };
+      title.addEventListener('contextmenu', openMenu);
+      title.addEventListener('keydown', event => {
+        if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) openMenu(event);
+      });
       const refreshCell = document.createElement('td');
       const toggle = document.createElement('button');
       const enabled = account.refreshEnabled !== false;
@@ -153,7 +190,7 @@ export function createQuotaView() {
       toggle.setAttribute('aria-label', `${name} · 刷新`);
       toggle.setAttribute('aria-checked', String(enabled));
       toggle.textContent = enabled ? '已开启' : '已关闭';
-      toggle.title = enabled ? `参与每 ${intervalLabel}及手动刷新` : '保留已有数据，刷新时跳过此账号';
+      toggle.title = enabled ? `参与每 ${intervalLabel}及手动刷新` : '保留已有额度，仍检查上游账号是否存在';
       toggle.disabled = refreshing || saving;
       toggle.addEventListener('click', () => void setRefreshEnabled(account.id, !enabled));
       refreshButtons.push(toggle);
@@ -220,7 +257,13 @@ export function createQuotaView() {
       credits.hidden = data.listSettings?.showCredits === false;
       credits.setAttribute('aria-label', credits.title);
       title.append(credits);
-      row.append(title, quotaPlatform(account), windows, syncedAt, refreshCell);
+      if (account.upstreamMissing) {
+        const missing = document.createElement('div');
+        missing.className = 'quota-missing-label';
+        missing.textContent = '上游账号不存在 · 右键管理';
+        title.append(missing);
+      }
+      row.append(title, quotaPlatform(account, selectedExpiry.get(account.id) || 'subscription', value => selectedExpiry.set(account.id, value)), windows, syncedAt, refreshCell);
       columns.forEach(([key], index) => { row.children[index].hidden = data.listSettings?.[key] === false; });
       return row;
     }));
@@ -242,8 +285,7 @@ export function createQuotaView() {
         const lastSync = data.attemptedAt ?? data.checkedAt;
         const due = data.nextRefreshAt != null ? Date.now() >= data.nextRefreshAt :
           lastSync == null || Date.now() - lastSync >= (data.refreshIntervalMs ?? 300000);
-        const paused = data.accounts?.length > 0 && data.accounts.every(account => account.refreshEnabled === false);
-        if (checkFreshness && $('view').dataset.moduleEnabled!=='false' && !data.busy && due && !paused) await refresh();
+        if (checkFreshness && $('view').dataset.moduleEnabled!=='false' && !data.busy && due) await refresh();
       }
     } catch {
       if (stamp === sequence) {
@@ -281,6 +323,69 @@ export function createQuotaView() {
       saving = false;
       if (latest) render(latest);
     }
+  }
+  let accountMenuOpen = false;
+  function showAccountMenu(anchor, event) {
+    const menu = document.createElement('div'), item = document.createElement('button');
+    // 右键在 mouseDown 时打开；auto 弹层会在同次 mouseUp 时被浏览器误关。
+    menu.className = 'quota-account-menu';menu.popover = 'manual';menu.setAttribute('role','menu');
+    menu.setAttribute('aria-label','账号操作');
+    item.type = 'button';item.className = 'ui-menu-item ui-danger-action';
+    item.setAttribute('role','menuitem');item.textContent = '删除本地账号…';
+    menu.append(item);$('view').append(menu);
+    return new Promise(resolve => {
+      let action = null, finished = false;
+      const close = () => {
+        if (finished) return;
+        finished = true;
+        menu.hidePopover();
+        document.removeEventListener('whale-view-changed', navigation);
+        document.removeEventListener('scroll', close, true);
+        document.removeEventListener('pointerdown', outside, true);
+        closeAccountMenu = null;menu.remove();resolve(action);
+      };
+      closeAccountMenu = close;
+      const navigation = () => { if ($('view').hidden || $('view').inert) close(); };
+      const outside = pointer => { if (!menu.contains(pointer.target)) close(); };
+      document.addEventListener('whale-view-changed', navigation);
+      document.addEventListener('scroll', close, true);
+      document.addEventListener('pointerdown', outside, true);
+      item.addEventListener('click', () => { action = 'remove';close(); });
+      menu.addEventListener('keydown', key => {
+        if (key.key === 'Escape' || key.key === 'Tab') { close();if (key.key === 'Escape') {key.preventDefault();anchor.focus({preventScroll:true});} }
+        if (key.key === 'ArrowDown' || key.key === 'ArrowUp') {key.preventDefault();item.focus();}
+      });
+      menu.showPopover();
+      const rect = anchor.getBoundingClientRect(), size = menu.getBoundingClientRect();
+      const x = event.type === 'contextmenu' ? event.clientX : rect.left;
+      const y = event.type === 'contextmenu' ? event.clientY : rect.bottom;
+      menu.style.left = `${Math.max(8,Math.min(x,window.innerWidth-size.width-8))}px`;
+      menu.style.top = `${Math.max(8,Math.min(y,window.innerHeight-size.height-8))}px`;
+      item.focus({preventScroll:true});
+    });
+  }
+  async function accountMenu(account, anchor, event) {
+    if (accountMenuOpen || busy || saving || latest?.busy) return;
+    accountMenuOpen = true;
+    try {
+      const action = await showAccountMenu(anchor, event);
+      if (action !== 'remove') return;
+      const confirmed = await confirmAction({owner:$('view'), title:'删除本地账号？',
+        message:`确定删除“${account.name || `账号 #${account.id}`}”这个本地账号？上游账号不会被删除；若它仍存在，下次刷新会重新显示。`,
+        confirmLabel:'删除本地账号', danger:true});
+      if (confirmed) await removeAccount(account.id);
+    } catch (error) { $('settings-error').textContent = error.message; $('settings-error').hidden = false; }
+    finally { accountMenuOpen = false; }
+  }
+  async function removeAccount(id) {
+    if (busy || saving || latest?.busy) return;
+    sequence++;
+    saving = true;
+    $('settings-error').hidden = true;
+    render(latest);
+    try { render(await invoke('remove-account', id)); selectedExpiry.delete(id); }
+    catch (error) { $('settings-error').textContent = error.message; $('settings-error').hidden = false; }
+    finally { saving = false; if (latest) render(latest); }
   }
   $('refresh').addEventListener('click', () => void refresh());
   function intervalChanged() {

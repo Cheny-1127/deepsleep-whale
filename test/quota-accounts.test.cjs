@@ -8,7 +8,7 @@ const {projectAccount, listAccountQuotas, createQuotaPanel} = require('../src/ch
 
 test('account quota is the remaining percent and drops credentials', () => {
   const account = projectAccount({id: 5, name: 'yuchaoyuan-codex', platform: 'openai', codex_5h_used_percent: 0, codex_7d_used_percent: 4, credentials: {access_token: 'secret'}});
-  assert.deepEqual(account, {id: 5, name: 'yuchaoyuan-codex', fiveHourRemaining: 100, sevenDayRemaining: 96, creditsBalance: null, fiveHourResetAt: null, sevenDayResetAt: null, fiveHourWindowMinutes: null, sevenDayWindowMinutes: null, resetCardCount: null, subscriptionType: null, platform: 'openai', authType: null, subscriptionExpiresAt: null});
+  assert.deepEqual(account, {id: 5, name: 'yuchaoyuan-codex', fiveHourRemaining: 100, sevenDayRemaining: 96, creditsBalance: null, fiveHourResetAt: null, sevenDayResetAt: null, fiveHourWindowMinutes: null, sevenDayWindowMinutes: null, resetCardCount: null, resetCardExpiresAt: [], subscriptionType: null, platform: 'openai', authType: null, subscriptionExpiresAt: null});
   assert.equal(projectAccount({id: 6, name: 'zzz-codex', extra: {codex_5h_used_percent: 85, codex_7d_used_percent: 120}}).fiveHourRemaining, 15);
   assert.equal(projectAccount({id: 6, name: 'zzz-codex', extra: {codex_5h_used_percent: 85, codex_7d_used_percent: 120}}).sevenDayRemaining, 0);
   assert.equal(projectAccount({id: 1, name: 'no-quota'}), null);
@@ -69,6 +69,12 @@ test('reset cards distinguish zero, available cards and missing or invalid snaps
   assert.equal(account(2).resetCardCount, 2);
   for (const value of [undefined, null, -1, 1.5, '2', Infinity]) assert.equal(account(value).resetCardCount, null);
   assert.ok(!JSON.stringify(account(2)).includes('private-details'));
+});
+
+test('reset card expiry dates are validated and ordered without exposing other card data', () => {
+  const account = projectAccount({id: 5, codex_5h_used_percent: 20, extra: {codex_reset_credit_snapshot: {available_count: 2, credits: [{expires_at:'2026-12-01T00:00:00Z', secret:'private'}, {expires_at:'2026-11-01T00:00:00Z'}, {expires_at:'invalid'}]}}});
+  assert.deepEqual(account.resetCardExpiresAt, ['2026-11-01T00:00:00Z', '2026-12-01T00:00:00Z']);
+  assert.ok(!JSON.stringify(account).includes('private'));
 });
 
 test('list reads account quotas and never returns the token', async t => {
@@ -310,15 +316,26 @@ test('refresh choices persist and list refreshes update only enabled accounts', 
   assert.equal(f.calls.at(-1), '/api/v1/admin/accounts');
 });
 
-test('all paused accounts issue no requests and keep the last successful timestamp', async t => {
+test('all paused accounts still check presence while preserving quota timestamps', async t => {
   const f = selectedAccountsFixture(t);await f.panel.refresh();
   const before = f.panel.snapshot();
   f.panel.setRefreshEnabled({id: 5, enabled: false});f.panel.setRefreshEnabled({id: 6, enabled: false});
-  assert.equal(f.panel.snapshot().nextRefreshAt, null);
-  await f.panel.refresh();assert.equal(f.calls.length, 1);
-  assert.equal(f.panel.snapshot().checkedAt, before.checkedAt);
+  assert.ok(f.panel.snapshot().nextRefreshAt != null);
+  await f.panel.refresh();assert.equal(f.calls.length, 2);
+  assert.deepEqual(f.panel.snapshot().accounts.map(a=>a.lastSyncedAt),before.accounts.map(a=>a.lastSyncedAt));
   f.panel.setRefreshEnabled({id: 6, enabled: true});
   assert.ok(f.panel.snapshot().nextRefreshAt != null);
+});
+
+test('paused missing accounts recover by raw ID even without quota, and failed lists preserve presence',async t=>{
+  const f=pollingFixture(t);await f.panel.refresh();f.panel.setRefreshEnabled({id:5,enabled:false});
+  const before=f.panel.snapshot().accounts[0];
+  f.setRequest(async()=>({ok:true,json:async()=>({items:[],pages:1})}));
+  assert.equal((await f.panel.refresh()).accounts[0].upstreamMissing,true);
+  f.setRequest(async()=>{throw Error('offline');});
+  assert.equal((await f.panel.refresh()).accounts[0].upstreamMissing,true);
+  f.setRequest(async()=>({ok:true,json:async()=>({items:[{id:5}],pages:1})}));
+  assert.deepEqual((await f.panel.refresh()).accounts[0],before);
 });
 
 test('list refresh merges enabled accounts, supplements only missing ones and timestamps each success',async t=>{
@@ -337,7 +354,8 @@ test('list refresh merges enabled accounts, supplements only missing ones and ti
   assert.deepEqual(merged.accounts.map(a=>a.id),[1,2,3,4,6,5],'保留已有账号顺序并追加新账号');
   for(const id of [1,2,5]) {const a=merged.accounts.find(a=>a.id===id);assert.equal(a.lastSyncedAt,2000);assert.equal(a.fiveHourRemaining,80);}
   assert.equal(merged.accounts.find(a=>a.id===4).lastSyncedAt,3000);
-  for(const id of [3,6]) assert.deepEqual(merged.accounts.find(a=>a.id===id),initial.accounts.find(a=>a.id===id),'暂停账号无论是否在列表中均保留旧值');
+  assert.deepEqual(merged.accounts.find(a=>a.id===3),initial.accounts.find(a=>a.id===3));
+  assert.deepEqual(merged.accounts.find(a=>a.id===6),{...initial.accounts.find(a=>a.id===6),upstreamMissing:true});
   f.setNow(4000);f.setRequest(async()=>({ok:true,json:async()=>item(2,40)}));await f.panel.refreshAccount(2);
   const single=f.panel.snapshot();assert.equal(single.accounts.find(a=>a.id===2).lastSyncedAt,4000);
   assert.equal(single.checkedAt,merged.checkedAt);
@@ -352,6 +370,28 @@ test('a failed missing-account supplement preserves its timestamp while list suc
   await f.panel.refresh();const after=f.panel.snapshot();
   assert.deepEqual(after.accounts[0],before.accounts[0]);assert.equal(after.accounts[1].lastSyncedAt,3000);
   assert.equal(after.checkedAt,before.checkedAt);assert.ok(after.accountRefreshErrors[5]);assert.equal(after.accountRefreshErrors[6],'');
+});
+
+test('missing accounts are marked only when their detail returns 404 and recover when listed',async t=>{
+  const f=pollingFixture(t);await f.panel.refresh();
+  f.setRequest(async url=>new URL(url).pathname.endsWith('/5') ? {ok:false,status:404} : {ok:true,json:async()=>({items:[],pages:1})});
+  const result=await f.panel.refresh();
+  assert.equal(result.accounts[0].upstreamMissing,true);assert.equal(result.error,'');
+  f.setRequest(async()=>({ok:true,json:async()=>({items:[{id:5,codex_5h_used_percent:30}],pages:1})}));
+  assert.equal((await f.panel.refresh()).accounts[0].upstreamMissing,undefined);
+});
+
+test('local removal works for paused accounts and a listed account can return',async t=>{
+  const f=pollingFixture(t);await f.panel.refresh();f.panel.setRefreshEnabled({id:5,enabled:false});
+  assert.deepEqual(f.panel.removeAccount(5).accounts,[]);
+  await f.panel.refresh();assert.equal(f.panel.snapshot().accounts[0].id,5);
+});
+
+test('a single account 404 marks it missing without deleting it',async t=>{
+  const f=pollingFixture(t);await f.panel.refresh();
+  f.setRequest(async()=>({ok:false,status:404}));
+  const result=await f.panel.refreshAccount(5);
+  assert.equal(result.accounts[0].upstreamMissing,true);assert.equal(result.accounts.length,1);
 });
 
 test('all list pages are read before fallback and incomplete lists never trigger account requests or mutate timestamps',async t=>{
