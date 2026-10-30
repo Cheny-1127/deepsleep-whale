@@ -37,7 +37,15 @@ export function createMessageSubscriptionsView() {
   // 仅当前阅读范围保留点击翻译的消息，避免标为已读后被未读筛选立即移除。
   const readingTranslations = new Set();
   const expandedBodies = new Set();
-  let data, filter = '', pending = false, loading = false, lastContent = '', revision = 0;
+  let data, filter = '', pending = false, loading = false, lastContent = '', revision = 0, unreadJumpPending = false;
+  function jumpToUnread() {
+    if (!unreadJumpPending || loading || pending || !data || view.hidden || $('subscriptions-panel-feed').hidden) return;
+    unreadJumpPending = false;
+    const cards = [...$('subscriptions-posts').children];
+    // 保留已读消息作为上下文；仅定位，不改变筛选或阅读状态。
+    const target = cards.find(card=>card.querySelector('.subscriptions-unread-dot')) || cards[0] || $('subscriptions-empty');
+    target.scrollIntoView({block:'start',behavior:'instant'});
+  }
   function renderSummary(summary) {
     const count = summary?.unread || 0;
     $('subscriptions-badge').hidden = count === 0;
@@ -176,7 +184,7 @@ export function createMessageSubscriptionsView() {
     const names = new Map(data.accounts.map(a=>[a.username,a.displayName || data.posts.find(p=>p.username===a.username && p.displayName)?.displayName || `@${a.username}`]));
     // 定时只读快照不重建未变化的列表，避免打断键盘焦点和正在阅读的位置。
     const content = JSON.stringify([data.accounts,data.posts,filter,$('subscriptions-unread').checked,pending]);
-    if (content === lastContent) return;lastContent = content;
+    if (content === lastContent) {jumpToUnread();return;}lastContent = content;
     renderPicker();
     $('subscriptions-managed-accounts').replaceChildren();
     $('subscriptions-manage-empty').hidden = data.accounts.length > 0;
@@ -309,12 +317,12 @@ export function createMessageSubscriptionsView() {
     for (const body of $('subscriptions-posts').querySelectorAll('.subscriptions-post-body')) updateBodyState(body);
     $('subscriptions-empty').hidden = posts.length > 0;
     $('subscriptions-empty').textContent = !data.accounts.length ? '还没有订阅，添加一个 X 账号开始阅读。' : $('subscriptions-unread').checked ? '暂时没有未读动态。' : data.busy ? '正在读取公开动态，首次检查最多需要半分钟…' : '暂无动态。可点击“刷新动态”；新获取的动态默认未读。';
-    restore();
+    restore();jumpToUnread();
   }
   async function load() {
     if (view.hidden || loading || pending) return;loading = true;const requestedAt = revision;
     try {const result = await window.whale.subscriptions('snapshot');if (requestedAt !== revision) return;if (result.error) throw Error(result.error);data = result.value;render();}
-    catch (err) {error(err.message || '无法读取订阅。');}finally {loading = false;}
+    catch (err) {error(err.message || '无法读取订阅。');}finally {loading = false;jumpToUnread();}
   }
   function updateBodyState(body) {
     const expanded = !body.classList.contains('is-collapsed');
@@ -386,15 +394,14 @@ export function createMessageSubscriptionsView() {
     readingTranslations.clear();lastContent='';
     showView('subscriptions');
     filter='';picker.open=false;$('subscriptions-search').value='';
-    $('subscriptions-unread').checked=true;
-    selectTab(tabs[0]);void load();
+    selectTab(tabs[0]);unreadJumpPending=true;void load();
   });
   // 只缓存译文，不记住展开状态；再次进入或重启后均需主动点击才显示。
   // 离开时也清空，防止尚未完成的翻译在返回页面后自动展开。
   new MutationObserver(()=>{
     expandedTranslations.clear();expandedBodies.clear();readingTranslations.clear();lastContent = '';
     if (view.hidden && addDialog.open) addDialog.close();
-    if (view.hidden) picker.open = false;
+    if (view.hidden) {picker.open = false;unreadJumpPending = false;}
     if (!view.hidden) {selectTab(tabs[0]);render();void load();}
   }).observe(view,{attributes:true,attributeFilter:['hidden']});
   void load();return {renderSummary};
