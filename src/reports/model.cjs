@@ -49,7 +49,9 @@ function settingsInput(value,previous=defaultSettings()) {
     const job=text(item.job,500),project=text(item.project,100),environment=text(item.environment,50),target=text(item.target,100),userIds=text(item.userIds,1000);
     if(!job||job.split('/').some(v=>!v||v==='.'||v==='..')||/[\0\r\n?#\\]/.test(job)||!project||!userIds)throw Error('Jenkins 来源需填写任务路径、项目名和发布人账号');
     if(unique.has(job))throw Error('Jenkins 任务不能重复');unique.add(job);
-    return {job,project,environment,target,userIds,deploySuccess:item.deploySuccess===true};
+    const aliases=[...new Set(text(item.repositoryAliases,2000).split(/[,，\n]/).map(v=>v.trim()).filter(Boolean))];
+    if(aliases.length>10||aliases.some(v=>!/^[\w.-]+(?:\/[\w.-]+)+$/.test(v)||v.split('/').some(part=>part==='.'||part==='..')))throw Error('历史仓库路径须为 group/repository，多项用逗号分隔，最多 10 项');
+    return {job,project,environment,target,userIds,deploySuccess:item.deploySuccess===true,...(aliases.length?{repositoryAliases:aliases.join(',')}:{})};
   });
   return {syncPlanner:next.syncPlanner,autoCollect:next.autoCollect,intervalMinutes:next.intervalMinutes,lookbackDays:next.lookbackDays,repositories,gitlabProjects,gitlabAuthorMode,gitlabAuthors,gitlabAuthorNames,jenkinsJobs,
     archiveDir,dailyDir:relativeDirectory(next.dailyDir,'日报'),weeklyDir:relativeDirectory(next.weeklyDir,'周报'),autoArchive:next.autoArchive,autoWeekly:next.autoWeekly,weeklyTemplate:template};

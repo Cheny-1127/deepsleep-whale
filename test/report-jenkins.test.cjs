@@ -165,3 +165,17 @@ test('personal direct commits do not inherit titles from colleague MRs in a mixe
   const f=fixture({compare:url=>({commits:url.searchParams.get('to')===B?[commit(B,'本人直接修复','CY','cy@example.test'),commit(C,'同事功能')]:[]}),mergeRequests:[{...mr,merge_commit_sha:D}],mrCommits:[commit(C,'同事功能')]});
   const items=await collectJenkins(source,f.options),{workSummary}=require('../src/reports/work-summary.cjs');assert.equal(items.length,1);assert.deepEqual(items[0].sourceMeta.mergeRequests,[]);assert.equal(workSummary(items.map(item=>({...item,id:'release'}))).items[0].title,'本人直接修复');
 });
+
+test('explicit repository aliases resolve renamed business SCM paths without accepting unrelated revisions',async()=>{
+  const renamed={...project,project:'ossv/pay-renamed',path:'ossv/pay-renamed'};
+  const scoped={...source,project:renamed.project,repositoryAliases:'ossv/pay'};
+  const f=fixture(),options={...f.options,gitlabProjects:[renamed]};
+  await assert.rejects(collectJenkins({...scoped,repositoryAliases:''},options),/业务仓库发布 SHA/);
+  const items=await collectJenkins(scoped,options);
+  assert.equal(items.length,1);assert.equal(items[0].sourceMeta.sha,B);assert.equal(items[0].sourceMeta.previousSha,A);
+  assert.equal(items[0].sourceMeta.repositoryUrl,'https://gitlab.example.test/ossv/pay-renamed');
+  const unrelated=fixture({builds:[build(2),build(1)]});
+  await assert.rejects(collectJenkins({...scoped,repositoryAliases:'ossv/another'}, {...unrelated.options,gitlabProjects:[renamed]}),/业务仓库发布 SHA/);
+  const ambiguous=build(2);ambiguous.actions.push({remoteUrls:['https://legacy.gitlab.test/ossv/pay-renamed.git'],lastBuiltRevision:{SHA1:D}});
+  await assert.rejects(collectJenkins(scoped,{...fixture({builds:[ambiguous,build(1)]}).options,gitlabProjects:[renamed]}),/业务仓库发布 SHA/);
+});

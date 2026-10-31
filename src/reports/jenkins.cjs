@@ -17,6 +17,8 @@ async function collectJenkins(source,{since,until,signal,environment,fetchImpl=f
   const projects=gitlabProjects.filter(p=>p.project===source.project||p.path===source.project);
   if(projects.length!==1)throw safe('请在 GitLab 中勾选与 Jenkins 项目名完全对应的业务仓库');
   const project={...projects[0],path:projects[0].path||projects[0].project};
+  // 仅使用此来源显式配置的历史路径；后续仍在当前 GitLab 项目中核验版本与本人提交。
+  const repositoryPaths=new Set([project.path,...(source.repositoryAliases||'').split(/[,，\n]/).map(v=>v.trim()).filter(Boolean)]);
   const jobUrl=base.href.replace(/\/+$/,'')+'/'+source.job.split('/').map(name=>'job/'+encodeURIComponent(name)).join('/')+'/';
   const headers={Authorization:'Basic '+Buffer.from(environment.jenkinsUser+':'+environment.jenkinsToken).toString('base64'),Accept:'application/json'};
   let requests=0;
@@ -48,7 +50,7 @@ async function collectJenkins(source,{since,until,signal,environment,fetchImpl=f
     if(stage.name==='发布/回滚/启动/停止'&&params.ACTION===undefined)throw safe('旧流水线缺少 ACTION，无法确认执行了发布');
     if(!Number.isSafeInteger(stage.startTimeMillis)||!Number.isFinite(stage.durationMillis)||stage.durationMillis<=0)throw safe('部署阶段缺少有效完成时间');
     if(params.IMAGE_TAG&&!['无需选择','none'].includes(params.IMAGE_TAG))throw safe('本次使用已有制品，无法从 checkout 版本确认实际发布 SHA，请先核对制品版本');
-    const revisions=(build.actions||[]).filter(a=>(a.remoteUrls||[]).some(remote=>remotePath(remote)===project.path)).map(a=>a.lastBuiltRevision?.SHA1);
+    const revisions=(build.actions||[]).filter(a=>(a.remoteUrls||[]).some(remote=>repositoryPaths.has(remotePath(remote)))).map(a=>a.lastBuiltRevision?.SHA1);
     const unique=[...new Set(revisions)];if(unique.length!==1||!sha(unique[0]))throw safe('无法唯一确认业务仓库发布 SHA，已排除流水线脚本仓库');
     const targets=params.RELEASE_SERVERS;
     const targetKey=stage.name==='Deploy to EKS'?'EKS':JSON.stringify((Array.isArray(targets)?targets:String(targets||'').split(',')).map(String).map(s=>s.trim()).filter(Boolean).sort());
