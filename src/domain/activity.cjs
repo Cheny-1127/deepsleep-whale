@@ -49,7 +49,13 @@ class Activity {
   }
   chat(id) {
     if(id.startsWith('cursor:')) {
-      let title;try {const chat=this.resolveChat(id);if(chat?.kind==='chat')title=cleanTitle(chat.title);}catch {}
+      let title;try {
+        const chat=this.resolveChat(id);
+        // 保留元数据层的子代理判定，不能被 Cursor 标题回退包装成普通聊天。
+        if(chat?.kind==='other')return chat;
+        if(chat?.kind==='chat')title=cleanTitle(chat.title);
+      }catch {}
+      // 元数据暂不可读不代表子代理；保留短 ID 回退，避免误删仍在工作的普通聊天。
       return {kind:'chat',title:`Cursor · ${title||id.slice(-8)}`};
     }
     try { return this.resolveChat(id) || {kind:'unavailable'}; }
@@ -71,12 +77,18 @@ class Activity {
   }
   reconcile(readState,now=this.clock()) {
     const before=JSON.stringify(this.notices);
+    let removed=false;
+    // Hook 可能早于侧栏元数据；稍后确认是子代理时，清掉其活动状态，不能一直等缺失的 Stop。
+    for(const id of this.sessions.keys())if(id.startsWith('cursor:')&&this.chat(id).kind==='other') {
+      this.pauseSession(id);removed=true;
+    }
     this.consolidate();
     if(readState) {
       // Stop 先于桌面侧栏刷新；保留同步窗口，陈旧或不可用状态不能清除提醒。
       this.notices=this.notices.filter(item=>sourceOf(item)==='cursor' || this.sourceRunning.codex!==true || now-item.time<3000 || readState.updatedAt<item.time || readState.unreadIds.has(item.session_id));
     }
-    return before!==JSON.stringify(this.notices);
+    // 只有活动列表被清理、未读没有变化时，也必须通知调用方刷新计数和工作动画。
+    return removed||before!==JSON.stringify(this.notices);
   }
   markRead(id) { this.notices=this.notices.filter(item=>item.id!==id); }
   // 用户明确点击提醒并确认跳转后，只清该 Cursor 对话；后台选中记录不能调用此方法。

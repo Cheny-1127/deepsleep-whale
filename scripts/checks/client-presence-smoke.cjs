@@ -6,6 +6,7 @@ const path=require('node:path');
 const net=require('node:net');
 const {DatabaseSync}=require('node:sqlite');
 const root=path.resolve(__dirname, '../..');
+const cursorSubagentsOnly=process.env.WHALE_CURSOR_SUBAGENTS_ONLY==='1';
 const dir=fs.mkdtempSync('/tmp/whale-presence-');
 const home=path.join(dir,'codex');fs.mkdirSync(home);
 const cursorHome=path.join(dir,'cursor');fs.mkdirSync(cursorHome);
@@ -29,6 +30,7 @@ const notices=[
 ];
 fs.writeFileSync(path.join(dir,'reminders.json'),JSON.stringify({version:1,notices,seen:[]}));
 fs.writeFileSync(path.join(dir,'settings.json'),JSON.stringify({sources:{codex:true,cursor:true},notifications:true}));
+if(cursorSubagentsOnly)fs.writeFileSync(path.join(dir,'modules.json'),JSON.stringify(Object.fromEntries(require('../../src/app/module-settings.cjs').MODULE_IDS.map(id=>[id,id==='hooks']))));
 fs.writeFileSync(path.join(cursorHome,'hooks.json'),JSON.stringify(require('../hooks/cursor-config.cjs').createConfig(process.execPath)));
 const hookFixture=Object.entries(require('../hooks/codex-config.cjs').createConfig(process.execPath).hooks).map(([event,groups])=>({eventName:event[0].toLowerCase()+event.slice(1),handlerType:'command',command:groups[0].hooks[0].command,enabled:true,trustStatus:'trusted'}));
 const codexBin=path.join(dir,'codex-fixture');
@@ -56,6 +58,40 @@ async function send(event) {
 }
 (async()=>{try{
  await launch();
+ if(cursorSubagentsOnly) {
+  const input=(name,index)=>({source:'cursor',hook_event_name:name,session_id:'cursor:'+ids[index],turn_id:'review'});
+  await send(input('UserPromptSubmit',1));
+  for(const index of [3,4])await send(input('PostToolUse',index));
+  await send(input('Stop',1));
+  await wait(async()=>{const s=await window.whale.snapshot();return s.activity.working===2&&s.activity.unread===3;});
+  await pet.waitForFunction(()=>document.getElementById('busy-alert').textContent.includes('2'));
+  const before=await snapshot(),notified=await app.evaluate(()=>global.notified);
+  // 模拟工具 Hook 先到，Cursor 稍后才写入审查子代理的父聊天标识。
+  const db=new DatabaseSync(cursorState);
+  try {
+   for(const index of [3,4])db.prepare('UPDATE composerHeaders SET value=? WHERE composerId=?').run(JSON.stringify({name:'审查子任务',subagentInfo:{parentComposerId:ids[1]}}),ids[index]);
+  } finally {db.close();}
+  await wait(async()=>{const s=await window.whale.snapshot();return s.activity.working===0&&s.state==='idle';});
+  await pet.waitForFunction(()=>document.getElementById('busy-alert').hidden);
+  const cleaned=await snapshot();
+  assert.ok(cleaned.activity.sessions.every(item=>![3,4].some(index=>item.session_id==='cursor:'+ids[index])));
+  assert.deepEqual(cleaned.activity.notices,before.activity.notices);
+  assert.equal(cleaned.activity.count,before.activity.count);
+  assert.equal(cleaned.nurture.totalWorkSessions,before.nurture.totalWorkSessions);
+  assert.deepEqual(await app.evaluate(()=>global.notified),notified);
+  // 已确认子代理的迟到工具或完成事件也不能重新计数、提醒或累计成长。
+  await send(input('PostToolUse',3));await send(input('Stop',4));
+  await send({...input('UserPromptSubmit',1),turn_id:'normal'});
+  await wait(async()=>(await window.whale.snapshot()).activity.working===1);
+  const regular=await snapshot();
+  assert.equal(regular.activity.count,cleaned.activity.count+1);
+  assert.equal(regular.activity.sessions.filter(item=>['working','thinking'].includes(item.state))[0].session_id,'cursor:'+ids[1]);
+  assert.equal(regular.nurture.totalWorkSessions,cleaned.nurture.totalWorkSessions);
+  assert.deepEqual(await app.evaluate(()=>global.notified),notified);
+  assert.deepEqual(errors,[]);assert.deepEqual(await app.evaluate(()=>global.testWindowPolicy.events),[]);
+  console.log('PASS: Cursor review subagents removed without stop hooks, busy bubble and animation cleared, late hooks ignored, ordinary chat retained, no completion/notification/growth replay');
+  return;
+ }
  assert.equal((await snapshot()).activity.unread,3);
  const saved=fs.readFileSync(path.join(dir,'reminders.json'),'utf8');
  await send({hook_event_name:'PermissionRequest',session_id:ids[3],turn_id:'live'});

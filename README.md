@@ -311,12 +311,14 @@ node scripts/hooks/install.cjs --install
 
 - 暂停来源后，新事件不触发动作、任务计数、成长或通知；清除该来源当前活动状态，保留已有完成提醒。重新启用后从新事件接收，不补历史或重放完成动画。
 - Codex 接收开关不修改客户端配置或信任；Cursor 总开关开启时创建或补齐全部 5 项，修改前备份并保留其他配置。逐项开关仅控制桌宠接收，不增删 JSON。关闭总开关仅暂停桌宠接收，不删除文件或事件。
-- Codex 沿用已安装的发送端和本机聊天名称、跳转、已读同步。Cursor 使用独立发送端和会话命名空间，只读本机 Cursor 的 composerHeaders 聊天标题，显示“Cursor · 标题”，读取不到时回退短 ID；不提取提示词、聊天正文、工具输入输出、账号或 transcript 文件。
+- Codex 沿用已安装的发送端和本机聊天名称、跳转、已读同步。Cursor 使用独立发送端和会话命名空间，只读本机 Cursor 的 composerHeaders 聊天标题与子代理标记，显示“Cursor · 标题”，读取不到时回退短 ID；不提取提示词、聊天正文、工具输入输出、账号或 transcript 文件。审查等派生子代理不单独计入执行中或完成提醒；标记晚于 Hook 到达时，后续同步自动清理残留，无需等待子代理结束事件。无法读取元数据时保留普通聊天，不按标题或超时猜测结束。
 - Cursor 通过智能体深链接打开对应对话；只有点击提醒并确认跳转成功、手动标为已读，或继续给该对话发送消息时，才清除对应完成提醒。后台保存的“上次选中对话”不能证明用户看过新结果，不用于自动清除。当前没有可靠的 Cursor 原生已读同步，直接在 Cursor 中查看而未发送新消息时，提醒会保留，可在小屋手动标为已读。跳转失败及其他对话的提醒保留，Codex 的已读同步不会清除 Cursor 提醒。
 
 Cursor 配置也可生成预览：`node scripts/hooks/cursor-config.cjs`，或在配置页展开“查看接入配置”。当前内置 beforeSubmitPrompt、postToolUse、postToolUseFailure、stop、sessionEnd；stop 仅 completed 记完成，aborted/error 记停止。用户已通过真实 Cursor 事件验证接收联动。第一版不接入工具权限拦截 Hook，不伪造权限检查事件。
 
 映射依据：[Cursor Hooks](https://cursor.com/docs/hooks)。接收与 UI 已用隔离的真实本地 socket/Electron 验证。
+
+子代理回归：`node --test test/chat-metadata.test.cjs test/activity.test.cjs test/client-presence.test.cjs test/hook-adapters.test.cjs`；`WHALE_CURSOR_SUBAGENTS_ONLY=1 PLAYWRIGHT_MODULE=/path/to/playwright node scripts/checks/client-presence-smoke.cjs` 使用临时数据库和隐藏窗口，检查标记延迟时的气泡、动画清理及普通聊天保留，不重放完成通知或成长。
 
 ## 验证
 
