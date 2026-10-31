@@ -14,7 +14,8 @@ fs.writeFileSync(bootstrap,`require(${JSON.stringify(path.join(__dirname,'test-w
 const {Notification,dialog,shell}=require('electron');shell.showItemInFolder=file=>{global.connectionSmoke.opened.push(file);};shell.openPath=()=>{throw Error('不得启动默认编辑器');};Notification.isSupported=()=>false;
 global.connectionSmoke={accounts:[],selected:[],opened:[],closed:0};
 dialog.showOpenDialog=async options=>{global.connectionSmoke.selected.push(options);return {canceled:false,filePaths:[${JSON.stringify(configFile)}]};};
-require(${JSON.stringify(path.join(root,'src/channels/archery-mcp.cjs'))}).createArcheryMcp=config=>({close(){global.connectionSmoke.closed++;},async pending(page){global.connectionSmoke.accounts.push({command:config.server.command,env:config.server.env});return {structuredContent:{status:'success',data:{items:[],pagination:{page,page_size:20,total:null,source_total:0,has_more:false,next_page:null,scope:'source_page_filtered'}}}};}});
+// 内置实现会分别读取待审核与待执行列表，合成分页也必须符合各自的协议。
+require(${JSON.stringify(path.join(root,'src/channels/archery-mcp.cjs'))}).createArcheryMcp=config=>({close(){global.connectionSmoke.closed++;},async pending(page,{mode='approve'}={}){global.connectionSmoke.accounts.push({command:config.server.command,env:config.server.env,mode});return {structuredContent:{status:'success',data:{items:[],pagination:{page,page_size:20,total:mode==='execute'?0:null,source_total:0,has_more:false,next_page:null,scope:mode==='execute'?'matching_orders':'source_page_filtered'}}}};}});
 require(${JSON.stringify(path.join(root,'src/main.cjs'))});`);
 let app;
 (async()=>{
@@ -22,12 +23,17 @@ let app;
   await app.firstWindow();let panel;
   for(let i=0;i<100;i++){panel=app.windows().find(page=>page.url().endsWith('/index.html'));if(panel)break;await new Promise(resolve=>setTimeout(resolve,50));}
   assert.ok(panel);const errors=[];panel.on('pageerror',error=>errors.push(error.message));await panel.locator('#nav-archery').click();
+  assert.equal(await panel.locator('#nav-plugins,#plugins-view,#plugin-view').count(),0,'正式小屋不接入插件管理或子页面');
+  assert.equal(await panel.evaluate(()=>typeof window.whale.plugins),'undefined','正式 preload 不暴露插件管理通道');
+  const loaded=await app.evaluate((_electron,file)=>Object.keys(process.getBuiltinModule('node:module').createRequire(file).cache),path.join(root,'src/main.cjs'));
+  assert.equal(loaded.some(file=>file.endsWith('/plugin-host.cjs')||file.endsWith('/plugin-store.cjs')),false,'正式启动不加载插件宿主');
+  assert.equal(loaded.some(file=>file.endsWith('/archery-pending.cjs')),true,'Archery 使用随应用携带的内置实现');
   await panel.waitForFunction(()=>document.querySelector('#archery-connection-options').open);
   assert.equal(await panel.locator('#archery-connection-state').textContent(),'未配置');
   assert.deepEqual(await app.evaluate(()=>global.connectionSmoke.accounts),[]);
   await panel.locator('#archery-choose-config').click();assert.equal(await panel.locator('#archery-config-file').inputValue(),configFile);
   await panel.locator('#archery-save-config').click();await panel.waitForFunction(()=>document.querySelector('#archery-connection-state').textContent==='已连接'&&document.querySelector('#archery-save-config').disabled&&!document.querySelector('#archery-connection-options').open);
-  assert.deepEqual(await app.evaluate(()=>global.connectionSmoke.accounts),[{command,env:{}}]);
+  assert.deepEqual(await app.evaluate(()=>global.connectionSmoke.accounts),[{command,env:{},mode:'approve'},{command,env:{},mode:'execute'}]);
   assert.equal(await panel.locator('#archery-status').textContent(),'已连接');
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir,'archery-connection.json'))),{configFile});assert.equal(fs.readFileSync(configFile,'utf8'),toml);
   const connection=(await panel.evaluate(()=>window.whale.archery('connection'))).value;assert.equal(connection.configFile,configFile);assert.doesNotMatch(JSON.stringify(connection),/fixture-secret|fixture-user/);

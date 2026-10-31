@@ -28,3 +28,15 @@ test('invalid updates and write failures preserve the last good layout',t=>{
 test('corrupt config falls back without overwriting user data',t=>{
   const f=fixture(t);fs.writeFileSync(f.file,'broken');assert.equal(f.create().snapshot().visible.length,10);assert.equal(fs.readFileSync(f.file,'utf8'),'broken');
 });
+test('trial plugin layout restores Archery in the same section and drops the plugin manager',t=>{
+  const f=fixture(t),saved={visible:['quota','plugins','home'],more:['plugin:archery','mail','plugin:other']};fs.writeFileSync(f.file,JSON.stringify(saved));
+  const settings=f.create(),state=settings.snapshot();assert.deepEqual(state.more,['archery','mail']);assert.deepEqual(state.visible.slice(0,2),['quota','home']);
+  assert.equal(state.visible.includes('archery'),false);assert.equal([...state.visible,...state.more].some(id=>id.startsWith('plugin')),false);
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.file)),saved,'读取兼容状态不改写原文件');
+  settings.update(state);assert.deepEqual(f.create().snapshot(),state);
+});
+test('trial aliases are deduplicated while new layout writes still require built-in identifiers',t=>{
+  const f=fixture(t);fs.writeFileSync(f.file,JSON.stringify({visible:['archery','plugin:archery','quota'],more:['plugin:archery','plugins']}));
+  const settings=f.create(),state=settings.snapshot();assert.equal(state.visible[0],'archery');assert.equal([...state.visible,...state.more].filter(id=>id==='archery').length,1);
+  assert.throws(()=>settings.update({visible:state.visible.map(id=>id==='archery'?'plugin:archery':id),more:state.more}),/无效/);
+});
