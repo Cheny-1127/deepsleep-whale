@@ -12,3 +12,16 @@ test('failed module writes preserve the running state and malformed files are no
   const f=fixture(t);fs.writeFileSync(f.file,'broken');const settings=f.create();assert.equal(fs.readFileSync(f.file,'utf8'),'broken');
   fs.mkdirSync(f.file+'.tmp');assert.throws(()=>settings.update('planner',false));assert.equal(settings.enabled('planner'),true);assert.equal(fs.readFileSync(f.file,'utf8'),'broken');
 });
+test('trial Archery switch is inherited only until a built-in module setting is saved',t=>{
+  const f=fixture(t),plugin=path.join(f.dataDir,'plugins/archery/installed.json');fs.mkdirSync(path.dirname(plugin),{recursive:true});fs.writeFileSync(plugin,JSON.stringify({id:'archery',enabled:false}));
+  const settings=f.create();assert.equal(settings.enabled('archery'),false);assert.equal(fs.existsSync(f.file),false);
+  settings.update('mail',false);fs.writeFileSync(plugin,JSON.stringify({id:'archery',enabled:true}));
+  assert.equal(f.create().enabled('archery'),false);settings.update('archery',true);assert.equal(f.create().enabled('archery'),true);
+  assert.equal(f.create().enabled('mail'),false);
+});
+test('trial metadata never overrides explicit module choices and malformed values are ignored',t=>{
+  const f=fixture(t),plugin=path.join(f.dataDir,'plugins/archery/installed.json');fs.mkdirSync(path.dirname(plugin),{recursive:true});
+  for(const enabled of [false,true]){fs.writeFileSync(plugin,JSON.stringify({id:'archery',enabled:!enabled}));fs.writeFileSync(f.file,JSON.stringify({archery:enabled}));assert.equal(f.create().enabled('archery'),enabled);}
+  fs.unlinkSync(f.file);
+  for(const metadata of ['broken',JSON.stringify({id:'other',enabled:false}),JSON.stringify({id:'archery',enabled:'false'})]){fs.writeFileSync(plugin,metadata);assert.equal(f.create().enabled('archery'),true);assert.equal(fs.readFileSync(plugin,'utf8'),metadata);}
+});

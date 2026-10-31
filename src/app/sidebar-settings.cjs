@@ -4,7 +4,8 @@ const MENU_IDS=['home','subscriptions','archery','hooks','wechat','mail','quota'
 
 function normalize(saved) {
   const seen=new Set();
-  const take=items=>(Array.isArray(items)?items:[]).filter(id=>{
+  // 退出插件试用后，将旧入口归回内置 Archery，保留原来的常用/更多位置并统一去重。
+  const take=items=>(Array.isArray(items)?items:[]).map(id=>id==='plugin:archery'?'archery':id).filter(id=>{
     if(!MENU_IDS.includes(id)||seen.has(id))return false;
     seen.add(id);return true;
   });
