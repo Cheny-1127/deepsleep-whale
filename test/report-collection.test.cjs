@@ -73,3 +73,14 @@ test('concurrent requests for different dates never reuse the other day collecti
   const same=reports.action('collect',{date:'2026-10-27'}),different=assert.rejects(reports.action('collect',{date:'2026-10-26'}),/正在采集其他/);
   finish([]);await Promise.all([first,same,different]);assert.equal(calls,1);
 });
+
+test('repository aliases survive settings save and restart and remain scoped to their Jenkins source',async t=>{
+  const {reports,dir}=fixture(t);
+  const job={job:'prod/service-eks',project:'ossv/serve',environment:'prod',target:'EKS',userIds:'cy',repositoryAliases:'ossv/service, ossv/old-service'};
+  await reports.action('settings',{jenkinsJobs:[job,{job:'prod/pay',project:'ossv/pay',environment:'prod',userIds:'cy'}]});
+  assert.equal(reports.snapshot().settings.jenkinsJobs[0].repositoryAliases,'ossv/service,ossv/old-service');
+  const reopened=createWorkReports({dataDir:dir,readEnvironment:()=>({})});t.after(()=>reopened.close());
+  assert.equal(reopened.snapshot().settings.jenkinsJobs[0].repositoryAliases,'ossv/service,ossv/old-service');
+  assert.equal(reopened.snapshot().settings.jenkinsJobs[1].repositoryAliases,undefined);
+  await assert.rejects(reports.action('settings',{jenkinsJobs:[{...job,repositoryAliases:'https://gitlab.test/ossv/service'}]}),/历史仓库路径/);
+});
