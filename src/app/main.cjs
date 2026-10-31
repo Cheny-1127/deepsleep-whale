@@ -602,8 +602,15 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     // 每三秒定时检测，减少反复启动 ps 的开销；启动、接收 Hook 和跳转前仍即时检测。
     setInterval(()=>void refreshClients(),3000);
     setInterval(()=>{
-      // Cursor 保存的是上次选中项，不能证明用户看过新结果；这里只同步 Codex 原生已读状态。
-      if(modules.enabled('hooks')&&activity.reconcile(titles.readState())) { saveReminders();broadcast(); }
+      if(!modules.enabled('hooks'))return;
+      const before=activity.snapshot();
+      // 同步明确的子代理标记和 Codex 已读；Cursor 上次选中项不用于推断已读。
+      if(activity.reconcile(titles.readState())) {
+        const tasks=activity.snapshot();
+        // 仅活动计数变化才校准动画，避免普通已读同步重播完成动画；清理不产生通知或成长。
+        if(tasks.working!==before.working||tasks.pending!==before.pending)behavior.task({...tasks,state:tasks.pending||tasks.working?tasks.state:'idle'});
+        saveReminders();broadcast();
+      }
     },1000);
     setInterval(() => { nurture.tick(10); broadcast(); }, 10 * 60 * 1000);
   });

@@ -56,13 +56,18 @@ function createCursorTitleReader(file=process.env.WHALE_CURSOR_STATE_DB || path.
     lookup(id) {
       if(typeof id!=='string'||!id.startsWith('cursor:')||!UUID.test(id.slice(7)))return {kind:'unavailable'};
       try {
-        // 只查询当前聊天的侧栏标题，不提取聊天正文、提示词或工具内容。
+        // 只读侧栏标题和子代理标记；审查派生任务不能作为独立聊天计数。
         if(!query) {
           const {DatabaseSync}=require('node:sqlite');
           db ||= new DatabaseSync(file,{readOnly:true});
-          query=db.prepare("SELECT json_extract(value,'$.name') AS title FROM composerHeaders WHERE composerId = ?");
+          const columns=new Set(db.prepare('PRAGMA table_info(composerHeaders)').all().map(row=>row.name));
+          // 兼容没有 isSubagent 列的旧存储，仍可通过明确的父聊天标识排除子代理。
+          query=db.prepare(`SELECT json_extract(value,'$.name') AS title, ${columns.has('isSubagent')?'isSubagent':'0'} AS isSubagent,
+            json_extract(value,'$.subagentInfo.parentComposerId') AS parentComposerId FROM composerHeaders WHERE composerId = ?`);
         }
         const row=query.get(id.slice(7));
+        // 先判身份再判标题：尚未命名的子代理也要排除，普通聊天不能仅凭“审查”字样被过滤。
+        if(row?.isSubagent===1 || (typeof row?.parentComposerId==='string'&&row.parentComposerId.trim()))return {kind:'other'};
         return row&&typeof row.title==='string'&&row.title.trim()?{kind:'chat',title:row.title.trim()}:{kind:'unavailable'};
       }catch {return {kind:'unavailable'};}
     },
