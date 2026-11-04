@@ -30,7 +30,9 @@ function createWindows({ snapshot, performAction, collapseReminders, rankingSnap
   const petMenu=createPetMenu({getPet:()=>petStorage.activeWindow(),snapshot:()=>({...snapshot(),petStored:petStorage.isStored()}),performAction,showPanel,restartApp,protect,hidePet});
   const petRanking=createPetRanking({getPet:()=>pet,snapshot:rankingSnapshot,refresh:rankingRefresh,select:rankingSelect,protect});
   function createPanel() {
-    panel = new BrowserWindow({ width:1060, height:770, minWidth:860, minHeight:680, title:'', backgroundColor:'#f5f7f4', webPreferences:preferences() });
+    panel = new BrowserWindow({ width:1060, height:770, minWidth:860, minHeight:680, title:'', backgroundColor:'#f5f7f4',
+      // macOS 未激活窗口的第一次点击也要交给页面，不能只用于切换前台应用。
+      acceptFirstMouse:true,webPreferences:preferences() });
     panel.on('page-title-updated', event => { event.preventDefault(); panel.setTitle(''); });
     protect(panel);
     panel.loadFile(path.join(__dirname, '../ui/index.html'));
@@ -38,7 +40,9 @@ function createWindows({ snapshot, performAction, collapseReminders, rankingSnap
   }
   function showPanel() {
     if (!panel || panel.isDestroyed()) createPanel();
-    else { panel.show(); panel.focus(); }
+    // 双击非激活桌宠属于明确的打开操作；先抢回 macOS 前台，避免小屋首击只完成应用激活。
+    if(process.platform==='darwin')app.focus({steal:true});
+    panel.show();panel.focus();
   }
   function showReminders() {
     showPanel();
