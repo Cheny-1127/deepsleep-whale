@@ -3,13 +3,32 @@ export function createPetHitTest() {
   if(!document.body.classList.contains('floating'))return;
   const targets='#pet-art, #pet-store-button, #pet-subscriptions-badge, .speech, .pet-controls';
   const pressed=new Set();
-  let point=null,interactive=null,version=0,queued=false;
+  let point=null,interactive=null,version=0,queued=false,forcedCursor=false,cursorVersion=0;
+  // 根节点手掌只用于补偿跨应用移入；收到真实移动后立即交还给命中元素自身的 cursor。
+  function releaseForcedCursor() {
+    cursorVersion++;
+    if(forcedCursor){document.documentElement.style.cursor='';forcedCursor=false;}
+  }
   function apply() {
     // 使用浏览器的实际命中结果，自动避开 hidden、quiet 和不可点击的透明容器。
-    const hit=Boolean(pressed.size||(point&&document.elementFromPoint(point.x,point.y)?.closest(targets)));
-    if(hit!==interactive){interactive=hit;window.whale.petInteractive(hit);}
+    const element=point&&document.elementFromPoint(point.x,point.y);
+    const hit=Boolean(pressed.size||element?.closest(targets));
+    if(hit!==interactive){
+      interactive=hit;
+      if(!hit)releaseForcedCursor();
+      window.whale.petInteractive(hit);
+      if(hit&&element) {
+        const stamp=++cursorVersion,cursor=getComputedStyle(element).cursor;
+        // 穿透解除后未必补发 mousemove；下一帧主动刷新一次系统指针。
+        requestAnimationFrame(()=>{
+          if(stamp!==cursorVersion||!interactive||!point||!document.elementFromPoint(point.x,point.y)?.closest(targets))return;
+          document.documentElement.style.cursor=cursor;forcedCursor=true;
+        });
+      }
+    }
   }
   function move(event) {
+    releaseForcedCursor();
     version++;point={x:event.clientX,y:event.clientY};apply();
   }
   async function refresh() {
@@ -44,4 +63,6 @@ export function createPetHitTest() {
   const sizes=new ResizeObserver(queueRefresh);
   for(const element of document.querySelectorAll(targets+', .speech-stack'))sizes.observe(element);
   apply();void refresh();
+  // 从其他应用移入时，系统偶尔不会转发首次移动；穿透期间低频复查，避免第一击落到后方窗口。
+  setInterval(()=>{if(interactive===false)void refresh();},100);
 }

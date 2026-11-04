@@ -3,17 +3,17 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const tick=()=>new Promise(setImmediate);
 function fixture({floating=true}={}) {
   const handlers=new Map(),windowHandlers=new Map(),frames=[],changes=[],reads=[];
-  let cursor={x:1,y:1},pointerChanged,mutation,resize;
+  let cursor={x:1,y:1},pointerChanged,mutation,resize,poll;
   const root={closest:()=>null};
   function target(name,rect,visible=true) {
-    const node={name,rect,visible,closest:selector=>selector.split(',').some(s=>s.trim()===name)?node:null};return node;
+    const node={name,rect,visible,cursor:name==='#pet-art'?'grab':'pointer',closest:selector=>selector.split(',').some(s=>s.trim()===name)?node:null};return node;
   }
   const art=target('#pet-art',{x:30,y:100,w:160,h:176}),speech=target('.speech',{x:50,y:40,w:120,h:30},false),
     controls=target('.pet-controls',{x:40,y:275,w:140,h:25},false);
   const badge=target('#pet-subscriptions-badge',{x:185,y:90,w:24,h:24},false);
   const store=target('#pet-store-button',{x:190,y:170,w:28,h:28},false);
   const targets=[store,badge,controls,speech,art];
-  const document={body:{classList:{contains:()=>floating}},
+  const document={body:{classList:{contains:()=>floating}},documentElement:{style:{cursor:''}},
     querySelectorAll:()=>targets,elementFromPoint:(x,y)=>targets.find(n=>n.visible&&x>=n.rect.x&&x<n.rect.x+n.rect.w&&y>=n.rect.y&&y<n.rect.y+n.rect.h)||root,
     addEventListener:(name,handler)=>handlers.set(name,handler)};
   const window={addEventListener:(name,handler)=>windowHandlers.set(name,handler),whale:{
@@ -22,10 +22,12 @@ function fixture({floating=true}={}) {
   const source=fs.readFileSync(path.join(__dirname,'../src/ui/pet-hit-test.mjs'),'utf8').replace('export function','function');
   vm.runInNewContext(source+'\ncreatePetHitTest();',{document,window,
     MutationObserver:class{constructor(fn){mutation=fn;}observe(){}},ResizeObserver:class{constructor(fn){resize=fn;}observe(){}},
-    requestAnimationFrame:fn=>frames.push(fn)});
+    requestAnimationFrame:fn=>frames.push(fn),setInterval:fn=>{poll=fn;return 1;},getComputedStyle:node=>({cursor:node.cursor||'auto'})});
   function emit(name,x=1,y=1,node=root) {handlers.get(name)?.({clientX:x,clientY:y,pointerId:1,target:node});}
-  return {changes,reads,art,speech,controls,badge,store,emit,windowHandlers,get current(){return changes.at(-1);},
+  return {changes,reads,art,speech,controls,badge,store,emit,windowHandlers,get current(){return changes.at(-1);},get forcedCursor(){return document.documentElement.style.cursor;},
     move:(x,y)=>emit('mousemove',x,y),setCursor:value=>cursor=value,
+    async poll(){poll?.();await tick();},
+    async paint(){for(const fn of frames.splice(0))fn();await tick();},
     async layout(){mutation();for(const fn of frames.splice(0))fn();await tick();},
     async nativeMove(){pointerChanged();for(const fn of frames.splice(0))fn();await tick();},
     async resize(){resize();for(const fn of frames.splice(0))fn();await tick();}};
@@ -70,6 +72,11 @@ test('native moves recalculate local cursor position and stale async positions c
   f.setCursor({x:5,y:5});await f.nativeMove();assert.equal(f.current,false);
   let resolve;f.setCursor(()=>new Promise(done=>resolve=done));const task=f.nativeMove();
   f.move(100,150);resolve({x:5,y:5});await task;assert.equal(f.current,true);
+});
+test('native pointer polling restores a missed cross-app entry before the first click',async()=>{
+  const f=fixture();await tick();assert.equal(f.current,false);
+  f.setCursor({x:100,y:150});await f.poll();assert.equal(f.current,true);await f.paint();
+  assert.equal(f.forcedCursor,'grab');f.move(101,151);assert.equal(f.forcedCursor,'');
 });
 test('repeated movement in one region avoids redundant IPC and the studio never enables this feature',async()=>{
   const f=fixture();await tick();f.move(100,150);const count=f.changes.length;
