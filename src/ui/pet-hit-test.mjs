@@ -63,6 +63,6 @@ export function createPetHitTest() {
   const sizes=new ResizeObserver(queueRefresh);
   for(const element of document.querySelectorAll(targets+', .speech-stack'))sizes.observe(element);
   apply();void refresh();
-  // 从其他应用移入时，系统偶尔不会转发首次移动；穿透期间低频复查，避免第一击落到后方窗口。
-  setInterval(()=>{if(interactive===false)void refresh();},100);
+  // 从其他应用快速移入并双击时，首次移动可能不转发；穿透期间逐帧复查，避免第一击落到后方窗口。
+  setInterval(()=>{if(interactive===false)void refresh();},16);
 }

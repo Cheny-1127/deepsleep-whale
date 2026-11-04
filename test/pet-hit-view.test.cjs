@@ -3,7 +3,7 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const tick=()=>new Promise(setImmediate);
 function fixture({floating=true}={}) {
   const handlers=new Map(),windowHandlers=new Map(),frames=[],changes=[],reads=[];
-  let cursor={x:1,y:1},pointerChanged,mutation,resize,poll;
+  let cursor={x:1,y:1},pointerChanged,mutation,resize,poll,pollDelay;
   const root={closest:()=>null};
   function target(name,rect,visible=true) {
     const node={name,rect,visible,cursor:name==='#pet-art'?'grab':'pointer',closest:selector=>selector.split(',').some(s=>s.trim()===name)?node:null};return node;
@@ -22,11 +22,12 @@ function fixture({floating=true}={}) {
   const source=fs.readFileSync(path.join(__dirname,'../src/ui/pet-hit-test.mjs'),'utf8').replace('export function','function');
   vm.runInNewContext(source+'\ncreatePetHitTest();',{document,window,
     MutationObserver:class{constructor(fn){mutation=fn;}observe(){}},ResizeObserver:class{constructor(fn){resize=fn;}observe(){}},
-    requestAnimationFrame:fn=>frames.push(fn),setInterval:fn=>{poll=fn;return 1;},getComputedStyle:node=>({cursor:node.cursor||'auto'})});
+    requestAnimationFrame:fn=>frames.push(fn),setInterval:(fn,delay)=>{poll=fn;pollDelay=delay;return 1;},getComputedStyle:node=>({cursor:node.cursor||'auto'})});
   function emit(name,x=1,y=1,node=root) {handlers.get(name)?.({clientX:x,clientY:y,pointerId:1,target:node});}
   return {changes,reads,art,speech,controls,badge,store,emit,windowHandlers,get current(){return changes.at(-1);},get forcedCursor(){return document.documentElement.style.cursor;},
     move:(x,y)=>emit('mousemove',x,y),setCursor:value=>cursor=value,
     async poll(){poll?.();await tick();},
+    async advance(ms){if(poll&&ms>=pollDelay){poll();await tick();}},
     async paint(){for(const fn of frames.splice(0))fn();await tick();},
     async layout(){mutation();for(const fn of frames.splice(0))fn();await tick();},
     async nativeMove(){pointerChanged();for(const fn of frames.splice(0))fn();await tick();},
@@ -77,6 +78,11 @@ test('native pointer polling restores a missed cross-app entry before the first 
   const f=fixture();await tick();assert.equal(f.current,false);
   f.setCursor({x:100,y:150});await f.poll();assert.equal(f.current,true);await f.paint();
   assert.equal(f.forcedCursor,'grab');f.move(101,151);assert.equal(f.forcedCursor,'');
+});
+test('a missed cross-app entry becomes interactive within one display frame',async()=>{
+  const f=fixture();await tick();assert.equal(f.current,false);
+  f.setCursor({x:100,y:150});await f.advance(16);
+  assert.equal(f.current,true);
 });
 test('repeated movement in one region avoids redundant IPC and the studio never enables this feature',async()=>{
   const f=fixture();await tick();f.move(100,150);const count=f.changes.length;
