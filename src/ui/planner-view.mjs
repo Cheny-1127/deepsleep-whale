@@ -74,12 +74,24 @@ export function createPlannerView({floating=false}={}) {
       petKey=key;bubble.replaceChildren();
       const rows=el('div','planner-pet-rows');
       for(const item of active) {
-        const row=el('div','planner-pet-row');row.append(el('strong','',item.title));
+        const row=el('div','planner-pet-row');
+        let clickTimer;
+        function handleClick(event) {
+          clearTimeout(clickTimer);
+          if(event.detail>1)return;
+          const run=()=>{if(row.isConnected&&item.state==='waiting')void act(item.processMinutes?'start':'complete',{id:item.id,token:item.token});};
+          // 等待连击窗口后再处理，双击只打开页面，不提交本轮处理动作。
+          if(event.detail===0)run();else clickTimer=setTimeout(run,400);
+        }
+        const title=button(item.title,handleClick,'planner-pet-title');
+        row.dataset.state=item.state;
+        row.addEventListener('dblclick',()=>{clearTimeout(clickTimer);void window.whale.action('planner');});
+        row.append(title);
         if(item.state==='processing'){const clock=el('span','planner-clock');clock.dataset.ends=String(item.processingEndsAt);row.append(clock);}
-        else row.append(button(item.processMinutes?'开始处理':'完成',()=>act(item.processMinutes?'start':'complete',{id:item.id,token:item.token}),'soft'));
+        else row.append(button(item.processMinutes?'开始处理':'完成',handleClick,'soft'));
         rows.append(row);
       }
-      bubble.append(rows,button('打开日程备忘',()=>window.whale.action('planner'),'planner-pet-open'));
+      bubble.append(rows);
       const error=el('p','planner-pet-error');error.id='planner-error';error.setAttribute('role','alert');error.hidden=true;bubble.append(error);
     }
     for(const clock of bubble.querySelectorAll('[data-ends]'))clock.textContent='处理中 · '+remaining(Number(clock.dataset.ends));

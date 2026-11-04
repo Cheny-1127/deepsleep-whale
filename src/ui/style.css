@@ -67,16 +67,16 @@ button,input{-webkit-app-region:no-drag}.studio{display:flex;background:var(--ui
 #completion-rows{max-height:112px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#bdcde5 transparent;padding:1px 2px}
 .completion-row{display:block;width:100%;height:27px;padding:5px 9px;border:0;border-radius:8px;text-align:left;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;background:transparent;color:#506b93;font-size:11px;line-height:17px;transition:background .15s,color .15s}
 .completion-row:hover,.completion-row:focus-visible{background:var(--row-hover,#c6d9fa);color:var(--row-ink,#24487d);outline:none}
-.completion-row:active{background:#cbdcf6;transform:none}.completion-row:disabled{opacity:.6;cursor:progress}
+.completion-row:active{background:var(--row-hover,#cbdcf6);color:var(--row-ink,#24487d);transform:none}.completion-row:disabled{opacity:.6;cursor:progress}
 #completion-error{font-size:10px;color:#a7583a;margin:5px 3px 0}
 
-/* 六种柔和底色按行循环，只在悬停或键盘聚焦时显现。 */
-#completion-rows>div:nth-child(6n+1){--row-hover:#c6d9fa;--row-ink:#24487d}
-#completion-rows>div:nth-child(6n+2){--row-hover:#d8cfee;--row-ink:#514176}
-#completion-rows>div:nth-child(6n+3){--row-hover:#c5e5d6;--row-ink:#315e4b}
-#completion-rows>div:nth-child(6n+4){--row-hover:#f2d6b3;--row-ink:#79582c}
-#completion-rows>div:nth-child(6n+5){--row-hover:#edccda;--row-ink:#7d455d}
-#completion-rows>div:nth-child(6n){--row-hover:#c3e3e9;--row-ink:#32626b}
+/* 任务和日程提醒共用紫、绿、橙、粉、青、蓝的顺序，只在悬停或键盘聚焦时显现。 */
+#completion-rows>div:nth-child(6n+1),.planner-pet-row:nth-child(6n+1){--row-hover:#d8cfee;--row-ink:#514176}
+#completion-rows>div:nth-child(6n+2),.planner-pet-row:nth-child(6n+2){--row-hover:#c5e5d6;--row-ink:#315e4b}
+#completion-rows>div:nth-child(6n+3),.planner-pet-row:nth-child(6n+3){--row-hover:#f2d6b3;--row-ink:#79582c}
+#completion-rows>div:nth-child(6n+4),.planner-pet-row:nth-child(6n+4){--row-hover:#edccda;--row-ink:#7d455d}
+#completion-rows>div:nth-child(6n+5),.planner-pet-row:nth-child(6n+5){--row-hover:#c3e3e9;--row-ink:#32626b}
+#completion-rows>div:nth-child(6n),.planner-pet-row:nth-child(6n){--row-hover:#c6d9fa;--row-ink:#24487d}
 .busy-expanded .completion-row{color:#947044}
 
 .floating.single-completion .speech-stack{height:156px}
