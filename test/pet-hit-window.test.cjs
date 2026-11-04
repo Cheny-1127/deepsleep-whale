@@ -3,6 +3,7 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const {EventEmitter}=require('node:events');
 function fixture(startOptions,{loadTab=()=>Promise.resolve()}={}) {
   const app=new EventEmitter(),ipcMain=new EventEmitter(),handlers=new Map(),windows=[];
+  app.focusOptions=[];app.focus=options=>app.focusOptions.push(options);
   const displays=[{id:1,workArea:{x:0,y:0,width:1000,height:800}}];
   const screen=new EventEmitter();
   screen.getPrimaryDisplay=()=>displays[0];screen.getAllDisplays=()=>displays;
@@ -31,7 +32,7 @@ function fixture(startOptions,{loadTab=()=>Promise.resolve()}={}) {
     nativeImage:{createFromPath:()=>({resize:()=>({})})},screen:guardedScreen};
   const module={exports:{}};
   const source=fs.readFileSync(path.join(__dirname,'../src/app/windows.cjs'),'utf8');
-  vm.runInNewContext(source,{module,__dirname:path.join(__dirname,'../src/app'),require:name=>name==='electron'?electron:name==='./pet-menu.cjs'?
+  vm.runInNewContext(source,{module,__dirname:path.join(__dirname,'../src/app'),process:{platform:'darwin'},require:name=>name==='electron'?electron:name==='./pet-menu.cjs'?
     {createPetMenu:()=>({close(){},open(){},isOpen:()=>false,refresh(){}})}:name==='./pet-ranking.cjs'?{createPetRanking:()=>({close(){},toggle(){},isOpen:()=>false})}:name==='./pet-storage.cjs'?(()=>{
       const storageModule={exports:{}};
       vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../src/app/pet-storage.cjs'),'utf8'),{
@@ -78,7 +79,10 @@ test('startup can omit the panel completely while explicit opening still creates
   const f=fixture({showPanelOnStartup:false});
   assert.equal(f.windows.length,1);assert.equal(f.panel,undefined);assert.equal(f.api.isPetVisible(),true);
   f.api.showPanel();
-  assert.equal(f.windows.length,2);assert.equal(f.api.isPanel(f.windows[1].webContents),true);
+  const panel=f.windows[1];
+  assert.equal(f.windows.length,2);assert.equal(f.api.isPanel(panel.webContents),true);
+  assert.equal(panel.options.acceptFirstMouse,true);assert.equal(f.app.focusOptions.length,1);assert.equal(f.app.focusOptions[0].steal,true);
+  assert.equal(panel.isVisible(),true);assert.equal(panel.focused,true);
 });
 test('account picker skips opening when at most one account is available',async()=>{
   const f=fixture({showPanelOnStartup:false});
