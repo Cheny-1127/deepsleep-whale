@@ -123,8 +123,8 @@ function safeSocket(file) {
 function isDesktopCheckpoint(value) {
   return object(value)&&typeof value.messageId==='string'&&value.messageId.length>0&&value.messageId.length<=160&&value.submitted===true&&typeof value.turnId==='string'&&value.turnId.length<=160;
 }
-function startDesktopAgent({settings,text:prompt,session,onSession=()=>{},onCheckpoint=()=>{},checkpoint,recovering=false,onApproval,onUserInput,timeoutMs=600000,rpcTimeoutMs=15000}) {
-  let socket,clientId='',owner='',bytes=Buffer.alloc(0),done=false,submitted=recovering,cancelled=false,turnId=recovering&&isDesktopCheckpoint(checkpoint)?checkpoint.turnId:'',starting=false,stopping=false,confirmedTurn=false,lastCheckpoint='';
+function startDesktopAgent({settings,text:prompt,session,onSession=()=>{},onCheckpoint=()=>{},checkpoint,recovering=false,onApproval,onUserInput,onWaiting=()=>{},timeoutMs=600000,rpcTimeoutMs=15000}) {
+  let socket,clientId='',owner='',bytes=Buffer.alloc(0),done=false,submitted=recovering,cancelled=false,turnId=recovering&&isDesktopCheckpoint(checkpoint)?checkpoint.turnId:'',starting=false,waitingNotified=false,stopping=false,confirmedTurn=false,lastCheckpoint='';
   const messageId=recovering?checkpoint?.messageId:randomUUID(),projection=new DesktopProjection(),pending=new Map(),reviewed=new Set(),userInputs=new Map();
   let resolveResult,rejectResult;
   const promise=new Promise((resolve,reject)=>{resolveResult=resolve;rejectResult=reject;});
@@ -258,7 +258,7 @@ function startDesktopAgent({settings,text:prompt,session,onSession=()=>{},onChec
     }
     reviewApprovals(own);
     if(submitted||starting)return;
-    if(data.threadRuntimeStatus?.type==='active')return;
+    if(data.threadRuntimeStatus?.type==='active'){if(!waitingNotified){waitingNotified=true;onWaiting();}return;}
     if(data.threadRuntimeStatus?.type!=='idle')throw new AgentError('DESKTOP_PROTOCOL','desktop');
     // 发出请求即视为可能已送达；断线或响应丢失时不重投，防止同一任务执行两次。
     starting=true;submitted=true;saveCheckpoint();
@@ -319,4 +319,4 @@ function startDesktopAgent({settings,text:prompt,session,onSession=()=>{},onChec
   void connect().catch(error=>finish(error instanceof AgentError?error:new AgentError('DESKTOP_UNAVAILABLE','desktop')));
   return {promise,cancel,detach:()=>finish(new AgentError('DELIVERY_UNKNOWN','desktop'))};
 }
-module.exports={startDesktopAgent,desktopSocket,DesktopProjection,isDesktopCheckpoint};
+module.exports={startDesktopAgent,desktopSocket,safeSocket,DesktopProjection,isDesktopCheckpoint};

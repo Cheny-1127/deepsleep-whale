@@ -18,7 +18,7 @@ function harness(t,initial,options={}) {
     async updates(_account,_cursor,signal){if(updateError)throw updateError;if(batches.length)return batches.shift();return new Promise(resolve=>{const done=()=>{const i=pending.indexOf(done);if(i>=0)pending.splice(i,1);resolve(batches.shift()||{});};pending.push(done);signal.addEventListener('abort',done,{once:true});});},
     async send(_account,sender,text,context,id){if(sendError)throw sendError;sent.push({sender,text,context,id});},
     async typing(account,sender,enabled,context){typing.push({account:account.id,sender,enabled,context});return true;}};
-  const gateway=createWechatGateway({store,api,makeQr:async()=> 'data:image/png;base64,test',pollDelay:1,loginDelay:1,...options,runAgent:options=>{
+  const gateway=createWechatGateway({store,api,makeQr:async()=> 'data:image/png;base64,test',pollDelay:1,loginDelay:1,readStatus:async()=>'unknown',...options,runAgent:options=>{
     const run={options};runs.push(run);run.promise=new Promise((resolve,reject)=>{run.resolve=text=>resolve({text});run.reject=reject;});run.cancel=()=>{run.cancelled=true;run.reject(Error('cancelled'));};return run;
   }});t.after(()=>gateway.close());
   const message=(id,text,sender='owner')=>({message_id:id,message_type:1,from_user_id:sender,to_user_id:'bot',context_token:'ctx-'+id,item_list:[{type:1,text_item:{text}}]});
@@ -695,4 +695,34 @@ test('reconnecting discards old approvals and only accepts a newly validated app
   assert.notEqual(stale,current);h.push(h.message('stale','/allow '+stale));await until(()=>h.saved.seen.includes('stale'));
   assert.equal(h.saved.jobs[0].state,'approval');h.push(h.message('current','/allow '+current));assert.equal(await second,true);
   h.runs[0].resolve('完成');await until(()=>!h.gateway.snapshot().active);
+});
+
+test('chat list, selection and status refresh live desktop status independently of catalog metadata',async t=>{
+  const thread={id:'desktop',cwd:process.cwd(),name:'桌面对话',status:'idle'},calls=[];
+  let status='active';
+  const h=harness(t,fresh(),{listThreads:async()=>({threads:[thread],nextCursor:null}),readThread:async()=>thread,readStatus:async(client,id)=>{calls.push(id);if(status==='error')throw Error('offline');return status;}});
+  await h.login();h.push(h.message('list','/chats'));await until(()=>h.sent.length===1);
+  assert.match(h.sent[0].text,/\| 状态 \|/);assert.match(h.sent[0].text,/运行中/);
+  status='approval';h.push(h.message('select','1'));await until(()=>h.sent.length===2);
+  assert.match(h.sent[1].text,/当前状态：等待审批/);assert.match(h.sent[1].text,/发送后会先等待/);
+  status='question';h.push(h.message('status','/status'));await until(()=>h.sent.length===3);assert.match(h.sent[2].text,/会话状态：等待回答/);
+  status='error';h.push(h.message('unknown','/status'));await until(()=>h.sent.length===4);assert.match(h.sent[3].text,/会话状态：状态未知/);
+  assert.equal(calls.length,4);assert.equal(h.runs.length,0);
+  h.push(h.message('task','继续'));await until(()=>h.runs.length===1);
+  h.runs[0].options.onWaiting();await until(()=>h.sent.length===5);assert.match(h.sent[4].text,/本条消息正在等待/);
+  h.runs[0].resolve('完成');await until(()=>h.sent.length===6);
+});
+test('buffered next-page rows get fresh runtime status rather than cached catalog status',async t=>{
+  const threads=Array.from({length:4},(_,i)=>({id:'chat'+i,name:'对话'+i,cwd:process.cwd(),status:'idle'})),calls=[];
+  let status='active';
+  const h=harness(t,fresh(),{listThreads:async()=>({threads,nextCursor:null}),readStatus:async(_client,id)=>{calls.push(id);return status;}});
+  await h.login();h.push(h.message('list','/chats 2'));await until(()=>h.sent.length===1);assert.deepEqual(calls,['chat0','chat1']);
+  status='idle';h.push(h.message('next','0'));await until(()=>h.sent.length===2);
+  assert.match(h.sent[1].text,/空闲/);assert.ok(!h.sent[1].text.includes('运行中'));assert.deepEqual(calls,['chat0','chat1','chat2','chat3']);
+});
+test('stopping during live status lookup discards the stale catalog response',async t=>{
+  let finish;const h=harness(t,fresh(),{listThreads:async()=>({threads:[{id:'desktop',name:'对话',cwd:process.cwd()}],nextCursor:null}),readStatus:()=>new Promise(resolve=>{finish=resolve;})});
+  await h.login();h.push(h.message('list','/chats'));await until(()=>finish);
+  h.push(h.message('stop','/stop'));await until(()=>h.sent.length===1);
+  finish('idle');await tick();assert.equal(h.sent.length,1);assert.match(h.sent[0].text,/已请求停止/);assert.equal(h.runs.length,0);
 });

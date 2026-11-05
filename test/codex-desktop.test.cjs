@@ -25,10 +25,11 @@ test('forwards exact text to the desktop owner, inherits settings and returns on
 });
 test('waits for the desktop current turn to finish and never reports its old answer as the new reply',async t=>{
   const {desktop,run}=await setup(t,{busy:true});let settled=false;
-  const task=run();task.promise.finally(()=>{settled=true;}).catch(()=>{});
+  let notices=0;const task=run({onWaiting:()=>{notices++;}});task.promise.finally(()=>{settled=true;}).catch(()=>{});
   await until(()=>desktop.wire.some(m=>m.params?.following));
   assert.equal(desktop.wire.some(m=>m.method==='thread-follower-start-turn'),false);assert.equal(settled,false);
-  desktop.idle();await until(()=>desktop.wire.some(m=>m.method==='thread-follower-start-turn'));
+  await until(()=>notices===1);desktop.snapshot();desktop.snapshot();
+  desktop.idle();await until(()=>desktop.wire.some(m=>m.method==='thread-follower-start-turn'));assert.equal(notices,1);
   assert.equal(settled,false);desktop.complete('本次 test 的回复');assert.equal((await task.promise).text,'本次 test 的回复');
 });
 test('accepts canonical patches, ignores other chats and completes only the correlated turn',async t=>{
