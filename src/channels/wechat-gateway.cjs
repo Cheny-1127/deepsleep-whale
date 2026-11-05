@@ -9,6 +9,7 @@ const {startWechatAgent}=require('../agents/wechat-agent.cjs');
 const {validateClients}=require('../agents/clients.cjs');
 const {listCodexThreads,readCodexThread}=require('../agents/codex-catalog.cjs');
 const {failureDetails,AgentError}=require('../agents/agent-error.cjs');
+const {readDesktopStatus,statusLabel}=require('../agents/codex-desktop-status.cjs');
 const {isDesktopCheckpoint}=require('../agents/codex-desktop.cjs');
 const {normalizeQuestions}=require('../agents/user-input.cjs');
 const {createTitleReader}=require('../clients/chat-metadata.cjs');
@@ -35,9 +36,9 @@ function tableCell(value,limit) {
   return label.replace(/([\\|`*_\[\]<>])/g,'\\$1');
 }
 function chatTable(menu,failed) {
-  const header=`已有对话（第 ${menu.chatPage} 页，每页 ${menu.chatLimit} 条）：\n\n| 编号 | 对话 | 项目 / 客户端 |\n| --- | --- | --- |\n`;
-  const rows=menu.chats.map((entry,i)=>`| ${i+1} | ${tableCell(entry.name,28)} | ${tableCell(path.basename(entry.cwd||'')||'未指定项目',20)} · ${tableCell(entry.clientName,18)} |`);
-  const navigation=menu.chatHasNext?`| 0 | 下一页 | 当前每页 ${menu.chatLimit} 条 |\n`:'';
+  const header=`已有对话（第 ${menu.chatPage} 页，每页 ${menu.chatLimit} 条）：\n\n| 编号 | 对话 | 项目 / 客户端 | 状态 |\n| --- | --- | --- | --- |\n`;
+  const rows=menu.chats.map((entry,i)=>`| ${i+1} | ${tableCell(entry.name,28)} | ${tableCell(path.basename(entry.cwd||'')||'未指定项目',20)} · ${tableCell(entry.clientName,18)} | ${statusLabel(entry.runtimeStatus)} |`);
+  const navigation=menu.chatHasNext?`| 0 | 下一页 | 当前每页 ${menu.chatLimit} 条 | — |\n`:'';
   const footer='\n回复编号选择对话，例如：1。\n选好后直接发消息继续聊。'+(menu.chatHasNext?'\n回复 0 翻页；0 10 表示接下来每页 10 条。':'\n已是最后一页。')+(failed.length?'\n以下实例查询失败（没有执行任务）：'+failed.join('、'):'');
   // 为最后一段的操作行及提示预留空间；只在完整表格行之间分段。
   const limit=1800-Array.from(navigation+footer).length,parts=[];let part=header;
@@ -50,7 +51,7 @@ function replyParts(text) {
   // 编号也占消息长度；预留空间后再分段，原文和编号一同持久化以供断点重投。
   return splitText(value,1768).map((part,index,all)=>`【结果 ${index+1}/${all.length}】\n\n${part}`);
 }
-function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThreads=listCodexThreads,readThread=readCodexThread,discoverClients=discoverRunningClients,onChange=()=>{},loginDelay=1000,pollDelay=500,questionTimeoutMs=300000,execution,validateAccount=()=>{},loginTokens=()=>[],userInfo,normalizeAvatar}) {
+function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThreads=listCodexThreads,readThread=readCodexThread,readStatus=readDesktopStatus,discoverClients=discoverRunningClients,onChange=()=>{},loginDelay=1000,pollDelay=500,questionTimeoutMs=300000,execution,validateAccount=()=>{},loginTokens=()=>[],userInfo,normalizeAvatar}) {
   let state,loadError='',status='disconnected',error='',deliveryError='',failedDeliveryId='',deliveryRetryAt=0,deliveryFailures=0,qr=null,loginController,pollController,closed=false,active=null,flushing=false;
   const approvals=new Map(),inputs=new Map();
   const titleReaders=new Map();
@@ -312,6 +313,7 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
       active=current;changed();
       current.handle=runAgent({settings,text:recovering?undefined:job.text,session:session||undefined,transport,recovering,checkpoint:job.checkpoint,
         ...(recovering?{timeoutMs:Math.max(15000,600000-(Date.now()-job.startedAt))}:{}),
+        onWaiting:()=>{if(active===current&&!closed)reply(job.sender,'所选桌面对话正在执行，本条消息正在等待；待当前任务结束后会自动发送。',job.id);},
         onCheckpoint:value=>{
           if(active!==current||closed)throw new AgentError('CANCELLED','desktop');
           // 消息 ID 与已知轮次只能保持一致，防止重连后把同一会话的其他任务当作原任务。
@@ -351,6 +353,10 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
     if(!cwd||!path.isAbsolute(cwd)||!fs.statSync(cwd,{throwIfNoEntry:false})?.isDirectory())throw new Error('项目不存在。先发送 /projects，再用 /project 编号；也可使用本机项目的绝对路径。');
     return fs.realpathSync(cwd);
   }
+  async function chatStatus(client,id,key) {
+    if(!client||client.backend!=='codex'||!id)return 'unknown';
+    try{return await readStatus(client,id,{signal:queryContext(key).signal});}catch{return 'unknown';}
+  }
   async function chatCatalog(sender,key,{next=false,size,valid}) {
     const binding=state.bindings[key],menu=menuFor(key);
     const clients=enabledClients().filter(client=>client.backend==='codex'&&(!binding?.clientId||client.id===binding.clientId));
@@ -379,6 +385,8 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
       }
     }
     if(!valid())return;
+    const visible=await Promise.all(remaining.slice(0,limit).map(async entry=>({...entry,runtimeStatus:await chatStatus(clients.find(client=>client.id===entry.clientId),entry.id,key)})));
+    if(!valid())return;
     menu.chatScope=scope;menu.chatLimit=limit;menu.chatCursors=cursors;menu.choice='chat';
     menu.chatHasNext=remaining.length>limit||clients.some(client=>cursors[client.id]!==null);
     if(!remaining.length) {
@@ -387,7 +395,7 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
       if(!next){menu.chats=[];menu.chatPage=0;}
       reply(sender,failed.size?'对话查询失败，请回复 0 重试；没有执行任务。':menu.chatHasNext?'本次尚未找到可显示的对话，回复 0 继续查看。':next?'没有下一页了。回复当前表格的编号选择对话，或发送 /chats 重新查看。':'还没有找到可继续的对话。发送 /projects 选择项目后新建。');return;
     }
-    menu.chats=remaining.slice(0,limit);menu.chatRemaining=remaining.slice(limit);menu.chatPage=next?menu.chatPage+1:1;
+    menu.chats=visible;menu.chatRemaining=remaining.slice(limit);menu.chatPage=next?menu.chatPage+1:1;
     reply(sender,chatTable(menu,[...failed]));
   }
   async function catalog(sender,key,{next=false,valid}) {
@@ -493,8 +501,10 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
     else if(['project','chat'].includes(menu.choice)&&['下一页','next'].includes(text.trim())){command=menu.choice==='project'?'/projects':'/chats';token='next';}
     if(command==='/help'){delete menu.choice;reply(sender,HELP);return;}
     if(command==='/status') {
+      const status=binding?.threadId?await chatStatus(selectedClient(binding),binding.threadId,key):null;
+      if(!valid()||state.bindings[key]!==binding)return;
       const job=[...state.jobs].reverse().find(j=>j.sender===sender);
-      reply(sender,`${selectedClient(binding)?.name||'没有启用的客户端'} · ${binding?.cwd||'尚未选择项目'}\n对话：${binding?.threadId||'下一条任务将新建'}\n最近任务：${job?job.state:'暂无'}${job?.failure?'\n'+job.failure.message:''}\n待投递：${state.outbox.length}`);return;
+      reply(sender,`${selectedClient(binding)?.name||'没有启用的客户端'} · ${binding?.cwd||'尚未选择项目'}\n对话：${binding?.threadId||'下一条任务将新建'}\n会话状态：${status===null?'尚未建立对话':statusLabel(status)}\n最近任务：${job?job.state:'暂无'}${job?.failure?'\n'+job.failure.message:''}\n待投递：${state.outbox.length}`);return;
     }
     if(command==='/retry'){deliveryRetryAt=0;void flush();return;}
     if(command==='/stop') {
@@ -526,9 +536,11 @@ function createWechatGateway({store,api,makeQr,runAgent=startWechatAgent,listThr
         let thread;
         try{thread=await readThread(client,entry.id,{signal:queryContext(key).signal});}catch{if(valid())reply(sender,'对话查询失败，请重新发送 /chats；没有启动任务。');return;}
         if(!valid())return;
+        const status=await chatStatus(client,thread.id,key);
+        if(!valid())return;
         const cwd=projectPath(thread.cwd,{});
         chooseBinding(key,{clientId:client.id,cwd,threadId:thread.id,threadName:thread.name,transport:'desktop',automatic:false});
-        reply(sender,`已选择 ${thread.name} · ${client.name}\n${cwd}\n直接发消息，我会原样转给这个桌面对话，并把本轮回复发回来。桌面正在回复时会先等待。`);return;
+        reply(sender,`已选择 ${thread.name} · ${client.name}\n${cwd}\n当前状态：${statusLabel(status)}\n直接发消息，我会原样转给这个桌面对话，并把本轮回复发回来。${['active','approval','question'].includes(status)?'当前对话尚未结束，发送后会先等待。':'发送时若桌面正在执行，会先等待。'}`);return;
       }
       const cwd=token?projectPath(token,menu):binding?.cwd;
       if(!cwd){await catalog(sender,key,{valid});return;}
