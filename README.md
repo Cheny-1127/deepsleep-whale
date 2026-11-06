@@ -13,7 +13,7 @@ npm ci
 npm start
 ```
 
-安装依赖后也可以在 Finder 中双击 `start.command`。`.command` 是 macOS 可双击执行的 Shell 脚本后缀；文件使用英文命名，便于终端调用和工具引用。
+安装依赖后也可以在 Finder 中双击 `start.command`，脚本会在后台启动应用，之后可关闭终端窗口。启动日志写入 `~/Library/Logs/deepsleep-whale/startup.log`；若应用未出现，可查看该日志。退出应用请使用托盘菜单中的退出操作。`.command` 是 macOS 可双击执行的 Shell 脚本后缀；文件使用英文命名，便于终端调用和工具引用。
 
 启用 API 额度时，将项目根目录的 `.env.example` 复制为 `.env`，填写 `WHALE_QUOTA_BASE_URL`（Sub2API 站点地址）和 `WHALE_QUOTA_API_KEY`（管理 Key），并执行 `chmod 600 .env`。应用按项目目录读取该文件，终端和双击启动均生效，修改后须正常退出并重启。已有进程环境变量优先；未填写管理 Key 时兼容原有 `token` 文件。`.env` 已被 Git 忽略，勿提交真实凭据。完整步骤见 [安装与功能配置指南](docs/setup.md#地址与凭据)。
 
