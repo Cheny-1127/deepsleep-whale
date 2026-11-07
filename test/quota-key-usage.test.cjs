@@ -59,6 +59,16 @@ test('card collapse survives restart, pauses open refresh and preserves user cac
   assert.equal(f.create().snapshot().expanded,true,'旧缓存默认展开');
 });
 
+test('a usage refresh started before a verified group switch cannot restore the old group',async t => {
+  const f = fixture(t);await f.panel.search();const before = await f.panel.select(9);let finish;
+  f.setRequest(async (url,options) => new URL(url).pathname.endsWith('/api-keys') ?
+    {items:before.keys.map(key => ({id:key.id,user_id:9,name:key.name,group_id:key.groupId,group:{name:key.groupName},status:key.status})),total:3} :
+    new Promise(resolve => {finish = () => resolve({stats:Object.fromEntries(JSON.parse(options.body).api_key_ids.map(id => [id,{today_actual_cost:id/10}]))});}));
+  const flight = f.panel.refresh();await new Promise(setImmediate);
+  f.panel.updateKeyGroup({userId:9,keyId:1,groupId:14,groupName:'B'});finish();await flight;
+  assert.equal(f.panel.snapshot().keys[0].groupId,14);assert.equal(f.panel.snapshot().keys[0].groupName,'B');assert.equal(f.panel.snapshot().totalCost,before.totalCost);
+});
+
 test('open, select and restart reuse a user/day cache for thirty minutes; manual refresh bypasses it',async t => {
   const f = fixture(t);await f.panel.search();await f.panel.select(9);const count = f.calls.length;
   await f.panel.open();await f.panel.select(9);await f.panel.search();assert.equal(f.calls.length,count);

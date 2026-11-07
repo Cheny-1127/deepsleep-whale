@@ -23,8 +23,8 @@ const codexBin = path.join(dir, 'codex-fixture');
 fs.writeFileSync(codexBin, '#!' + process.execPath + '\n' + `require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(m.id)process.stdout.write(JSON.stringify({id:m.id,result:m.id===1?{}:m.id===3?{config:{}}:m.id===4?{requirements:null}:{data:[{hooks:${JSON.stringify(hooks)},errors:[]}]}})+'\\n');});`, { mode:0o700 });
 // 只替换测试进程的客户端检测，不要求用户打开或退出真实客户端。
 const bootstrap = path.join(dir, 'bootstrap.cjs');
-fs.writeFileSync(bootstrap, `require(${JSON.stringify(path.join(__dirname,'test-window-policy.cjs'))}).installTestWindowPolicy();const cp=require('node:child_process'),original=cp.execFile;cp.execFile=function(file,args,options,callback){if(file==='/bin/ps'&&args.join(' ')==='-axo comm='){setImmediate(()=>callback(null,'/Applications/Codex.app/Contents/MacOS/Codex'));return;}return original.apply(this,arguments);};require(${JSON.stringify(path.join(root, 'src/main.cjs'))});`);
-let app, panel, pet;
+fs.writeFileSync(bootstrap, `require(${JSON.stringify(path.join(__dirname,'test-window-policy.cjs'))}).installTestWindowPolicy();const cp=require('node:child_process'),original=cp.execFile;cp.execFile=function(file,args,options,callback){if(file==='/bin/ps'&&args.join(' ')==='-axo comm='){setImmediate(()=>callback(null,'/Applications/Codex.app/Contents/MacOS/Codex'));return;}return original.apply(this,arguments);};global.reminderNow=process.env.WHALE_REMINDER_TEST_NOW?Number(process.env.WHALE_REMINDER_TEST_NOW):undefined;const planning=require(${JSON.stringify(path.join(root,'src/app/planner.cjs'))}),createPlanning=planning.createPlanner;planning.createPlanner=options=>(global.reminderPlanner=createPlanning({...options,now:()=>global.reminderNow??Date.now()}));require(${JSON.stringify(path.join(root, 'src/main.cjs'))});`);
+let app, panel, pet, plannerTestNow;
 const errors = [], failedAssets = [];
 const snapshot = () => panel.evaluate(() => window.whale.snapshot());
 async function wait(predicate) {
@@ -35,7 +35,7 @@ async function wait(predicate) {
   }
 }
 async function launch() {
-  app = await electron.launch({ executablePath:require('electron'), args:[bootstrap], env:{ ...process.env, WHALE_TEST_WINDOWS:'hidden', CODEX_HOME:codexHome, WHALE_CODEX_BIN:codexBin, WHALE_DATA_DIR:dir } });
+  app = await electron.launch({ executablePath:require('electron'), args:[bootstrap], env:{ ...process.env, WHALE_TEST_WINDOWS:'hidden', WHALE_REMINDER_TEST_NOW:plannerTestNow===undefined?'':String(plannerTestNow), CODEX_HOME:codexHome, WHALE_CODEX_BIN:codexBin, WHALE_DATA_DIR:dir } });
   app.on('window', page => {
     page.on('pageerror', error => errors.push(error.message));
     page.on('requestfailed', request => failedAssets.push(request.url()));
@@ -93,6 +93,108 @@ async function send(name, index, turn = 'turn-1') {
     await panel.keyboard.press('Escape');
   }
   if(process.env.WHALE_SHORTCUTS_LAYOUT_ONLY==='1'){assert.deepEqual(errors,[]);console.log('PASS: 快捷操作问号提示悬停、移出、聚焦、失焦及 860/1060 布局');return;}
+  // 覆盖用户截图中的定时提醒与聊天同屏，整个过程只保留一个任务气泡。
+  const plannerAction=async(name,value)=>{
+    const result=await panel.evaluate(({name,value})=>window.whale.planner(name,value),{name,value});
+    assert.equal(result.error,undefined);return result.value;
+  };
+  const plannerStart=+new Date('2026-11-08T12:00:00+08:00');
+  async function advancePlanner(minutes) {
+    const now=plannerStart+minutes*60000;plannerTestNow=now;
+    await pet.evaluate(now=>{window.reminderRealNow??=Date.now;Date.now=()=>now;},now);
+    await app.evaluate((_,now)=>{global.reminderNow=now;global.reminderPlanner.tick();},now);
+  }
+  await advancePlanner(0);
+  const ordinary=(await plannerAction('save-task',{title:'普通日程待办',status:'processing',deadline:'none',notes:'不发送给桌宠的备注'})).tasks.at(-1);
+  assert.equal((await snapshot()).execution.count,0,'普通日程待办不混入定时提醒');
+  const reminders=[];
+  for(const [i,title] of ['喝水','闭眼休息','拉伸','远眺'].entries())reminders.push((await plannerAction('save-reminder',{
+    title,category:i===3?'personal':'work',mode:'interval',intervalMinutes:2,processMinutes:i===1?3:0,fixedTimes:[],
+    customWorkTime:{days:[0,1,2,3,4,5,6],periods:[{start:'00:00',end:'24:00'}]}
+  })).reminders.at(-1));
+  await send('UserPromptSubmit',0,'reminder-mixed');await advancePlanner(2);
+  await wait(()=>document.getElementById('planner-reminder-alert').textContent==='提醒：4'&&document.getElementById('busy-alert').classList.contains('selected-category'));
+  assert.equal(await pet.locator('.completion-reminder-row').count(),0,'同时存在聊天时默认优先展示聊天');
+  assert.equal(await pet.locator('#completion-rows .completion-row').textContent(),titles[0]);
+  assert.equal(await pet.locator('#planner-bubble').count(),0,'移除独立日程气泡节点');
+  assert.equal((await snapshot()).activity.pending,0,'日程提醒不伪造聊天权限状态');
+  assert.equal((await snapshot()).execution.count,1);
+  assert.equal((await snapshot()).execution.pendingCount,0,'日程提醒不计入待处理');
+  assert.equal(await pet.locator('#pending-alert').isHidden(),true);
+  await pet.locator('#planner-reminder-alert').click();
+  await wait(()=>!document.getElementById('completion-bubble').hidden&&document.querySelectorAll('.completion-reminder-row').length===4);
+  assert.equal(await pet.locator('.completion-shell').count(),1,'聊天与提醒共用一个任务气泡');
+  assert.equal(await pet.locator('.planner-pet-bubble').count(),0);
+  const pendingButtons=await pet.locator('.completion-reminder-action').allTextContents();assert.deepEqual(pendingButtons,['完成','开始处理','完成','完成']);
+  await pet.locator('#planner-reminder-alert').click();
+  await wait(()=>document.getElementById('completion-bubble').hidden);
+  await pet.locator('#planner-reminder-alert').click();
+  await wait(()=>!document.getElementById('completion-bubble').hidden);
+  await pet.screenshot({path:path.join(root,'out/reminders-category.png'),omitBackground:true});
+  const rest=()=>pet.locator(`.completion-reminder-row[data-reminder-id="${reminders[1].id}"]`);
+  await rest().locator('.completion-reminder-action').evaluate(button=>{button.click();button.click();});
+  await wait(()=>document.getElementById('planner-reminder-alert').textContent==='提醒：4'&&document.querySelector('.completion-reminder-clock')?.textContent==='处理中 · 3:00');
+  assert.equal((await snapshot()).reminderView,'reminders','开始处理后保持提醒分类');
+  assert.equal((await snapshot()).execution.pendingCount,0);
+  assert.equal((await snapshot()).execution.count,1,'开始处理后也不计入执行中');
+  assert.equal((await snapshot()).activity.working,1,'执行中的聊天数量保持独立');
+  assert.equal((await plannerAction('snapshot')).reminders[1].run.state,'processing');
+  await advancePlanner(3);
+  await wait(()=>document.querySelector('.completion-reminder-clock')?.textContent==='处理中 · 2:00');
+  assert.equal(await pet.locator('#completion-rows .completion-row').count(),4,'处理中的提醒和其余提醒留在同一分类');
+  await pet.screenshot({path:path.join(root,'out/reminders-category-processing.png'),omitBackground:true});
+  await pet.locator('#busy-alert').click();
+  await wait(()=>document.querySelectorAll('#completion-rows .completion-row').length===1);
+  assert.equal(await pet.locator('.completion-reminder-row').count(),0,'执行中只显示聊天');
+  await pet.locator('#planner-reminder-alert').click();
+  await wait(()=>document.querySelectorAll('.completion-reminder-row').length===4);
+  const drink=()=>pet.locator(`.completion-reminder-row[data-reminder-id="${reminders[0].id}"]`);
+  await drink().getByRole('button',{name:'完成',exact:true}).click();
+  await wait(async()=>(await window.whale.snapshot()).execution.reminderCount===3);
+  await send('PermissionRequest',1,'reminder-permission');
+  await wait(()=>document.getElementById('pending-alert').textContent==='待处理：1');
+  await pet.locator('#pending-alert').click();
+  await wait(()=>document.querySelectorAll('.pending-row').length===1);
+  assert.equal(await pet.locator('.pending-row').count(),1,'真正的权限请求仍单独保留权限样式');
+  assert.equal(await pet.locator('.completion-reminder-row').count(),0,'待处理不包含定时提醒');
+  await send('UserPromptSubmit',2,'reminder-completed');await send('Stop',2,'reminder-completed');
+  await wait(()=>document.getElementById('unread-label').textContent==='已完成：1');
+  await pet.locator('#planner-reminder-alert').click();
+  await wait(()=>document.querySelectorAll('.completion-reminder-row').length===3);
+  const layout=await pet.evaluate(()=>{
+    const shell=document.getElementById('completion-shell').getBoundingClientRect();
+    const tabs=[...document.querySelectorAll('.completion-counts button')].filter(button=>!button.hidden),buttons=tabs.map(button=>button.getBoundingClientRect());
+    return {order:tabs.map(button=>button.id),count:buttons.length,inside:buttons.every(button=>button.x>=shell.x&&button.right<=shell.right&&button.y>=shell.y&&button.bottom<=shell.bottom),bottom:shell.bottom,rowsBottom:document.getElementById('completion-rows').getBoundingClientRect().bottom,height:innerHeight};
+  });
+  assert.deepEqual(layout.order,['pending-alert','completion-alert','busy-alert','planner-reminder-alert'],'提醒排在最后');
+  assert.equal(layout.count,4,'四个分类可同时展示');assert.equal(layout.inside,true,'分类标题不溢出气泡');
+  assert.ok(layout.rowsBottom<=layout.bottom&&layout.bottom<=layout.height,'换行后列表不被裁切');
+  await pet.screenshot({path:path.join(root,'out/reminders-four-categories.png'),omitBackground:true});
+  await panel.evaluate(id=>window.whale.action('read-notice',id),(await snapshot()).activity.notices[0].id);
+  await send('Interrupt',0,'reminder-mixed');await send('Interrupt',1,'reminder-permission');
+  await panel.evaluate(()=>window.whale.modules({id:'planner',enabled:false}));
+  await wait(()=>document.getElementById('completion-shell').hidden);
+  await panel.evaluate(()=>window.whale.modules({id:'planner',enabled:true}));
+  await wait(()=>document.getElementById('planner-reminder-alert').textContent==='提醒：3');
+  const restToken=(await plannerAction('snapshot')).reminders[1].run.token;
+  await app.close();app=null;await launch();await advancePlanner(3);
+  await wait(()=>document.getElementById('planner-reminder-alert').textContent==='提醒：3');
+  assert.equal((await snapshot()).execution.count,0,'重启后处理中的提醒仍不计入聊天');
+  assert.equal((await snapshot()).execution.reminderItems.filter(item=>item.state==='processing').length,1,'重启从原提醒记录恢复处理状态');
+  assert.equal(await pet.locator('#planner-bubble').count(),0,'重启后也只有统一任务气泡');
+  assert.deepEqual(await app.evaluate(()=>global.testNotices),[],'重启不重发提醒通知');
+  await wait(()=>document.querySelector('.completion-reminder-clock')?.textContent==='处理中 · 2:00');
+  await advancePlanner(5);
+  await wait(async()=>!(await window.whale.snapshot()).execution.reminderItems.some(item=>item.state==='processing'));
+  assert.equal((await plannerAction('snapshot')).reminders[1].run.dueAt,plannerStart+7*60000,'处理结束后才计算下一轮');
+  const stale=await pet.evaluate(value=>window.whale.planner('start',value),{id:reminders[1].id,token:restToken});assert.match(stale.error,/这轮提醒已结束/);
+  for(const item of reminders)await plannerAction('remove-reminder',{id:item.id});
+  await plannerAction('remove-task',{id:ordinary.id});
+  await pet.evaluate(()=>{Date.now=window.reminderRealNow;delete window.reminderRealNow;});
+  plannerTestNow=undefined;await app.evaluate(()=>{global.reminderNow=undefined;global.reminderPlanner.tick();});
+  await wait(()=>document.getElementById('completion-shell').hidden);
+  assert.deepEqual(await app.evaluate(()=>testWindowPolicy.events),[],'检查全程使用隐藏独立测试窗口');
+  await panel.locator('#nav-shortcuts').click();
   // 覆盖一、三、四条边界及四→三→四切换，防止手动展开状态残留。
   await send('UserPromptSubmit', 0, 'busy-preview');
   await wait(() => !document.querySelector('#completion-shell').hidden && !document.querySelector('#completion-bubble').hidden);
@@ -210,5 +312,5 @@ async function send(name, index, turn = 'turn-1') {
   await wait(() => document.querySelector('#completion-shell').hidden);
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'reminders.json'), 'utf8')).notices.length, 0);
   assert.deepEqual(errors, []); assert.deepEqual(failedAssets, []);
-  console.log('PASS: 三类共用可配置阈值、边界直显、合并后展开收起、交替悬停、按序待处理、跳转消费、失败保留及重启恢复');
+  console.log('PASS: 同一任务气泡内独立提醒分类，开始处理保留分类、倒计时、独立计数、四分类布局、折叠、重启及旧轮次拒绝；聊天提醒回归');
 } finally { if (app) await app.close(); } })().catch(error => { console.error(error); process.exitCode = 1; });

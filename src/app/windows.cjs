@@ -144,12 +144,14 @@ function createWindows({ snapshot, performAction, collapseReminders, rankingSnap
     if (!pet || pet.isDestroyed() || petStorage.isStored()) return;
     const bounds = pet.getBounds();
     // 分类及展开规则与提醒视图一致，避免自动展示的列表被收起尺寸的窗口裁切。
-    const view = data.reminderView || (data.busyExpanded ? 'busy' : data.activity.pending ? 'pending' : data.activity.unread ? 'completed' : data.activity.working ? 'busy' : 'completed');
-    const count = view === 'pending' ? data.activity.pending : view === 'busy' ? data.activity.working : data.activity.unread;
-    const expanded = (view === 'pending' ? data.pendingExpanded : view === 'busy' ? data.busyExpanded : data.completionExpanded) || (count > 0 && count <= (data.shortcuts?.reminderCollapseThreshold ?? 3));
-    const plannerActive=Boolean(data.planner?.active.length);
-    const width = data.state === 'fireworks' ? 340 : expanded||plannerActive ? 260 : 220;
-    const height = (expanded ? (count === 1 ? 380 : 440) : 320) + (plannerActive?144:0) + Math.max(0, Math.min(data.trackingRows || 0, 5) - 1) * 33;
+    const busy=data.execution?.count??data.activity.working;
+    const pending=data.execution?.pendingCount??data.activity.pending;
+    const reminders=data.execution?.reminderCount??0;
+    const view = data.reminderView || (data.busyExpanded ? 'busy' : pending ? 'pending' : data.activity.unread ? 'completed' : busy ? 'busy' : reminders ? 'reminders' : 'completed');
+    const count = view === 'pending' ? pending : view === 'reminders' ? reminders : view === 'busy' ? busy : data.activity.unread;
+    const expanded = (view === 'pending' ? data.pendingExpanded : view === 'reminders' ? data.remindersExpanded : view === 'busy' ? data.busyExpanded : data.completionExpanded) || (count > 0 && count <= (data.shortcuts?.reminderCollapseThreshold ?? 3));
+    const width = data.state === 'fireworks' ? 340 : expanded ? 260 : 220;
+    const height = (expanded ? (count === 1 ? 380 : 440) : 320) + Math.max(0, Math.min(data.trackingRows || 0, 5) - 1) * 33;
     if (bounds.width === width && bounds.height === height) return;
     // 提醒向上展开，烟花横向留白；只保持人物中心与脚底，不把用户选择的位置拉回屏幕内。
     const x = Math.round(bounds.x + (bounds.width - width) / 2);

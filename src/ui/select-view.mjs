@@ -42,8 +42,11 @@ export function createSelectView({picker,trigger,options,label,onChange}) {
     const next=event.key==='Home'?0:event.key==='End'?list.length-1:index<0?(event.key==='ArrowUp'?list.length-1:0):(index+(event.key==='ArrowDown'?1:-1)+list.length)%list.length;
     list[next]?.focus();
   });
-  document.addEventListener('pointerdown',event=>{if(picker.open&&!picker.contains(event.target))close();});
+  const outside=event=>{if(picker.open&&!picker.contains(event.target))close();};
+  const viewChanged=()=>{if(picker.closest('[hidden]'))close();};
+  document.addEventListener('pointerdown',outside);
   picker.addEventListener('focusout',event=>{if(event.relatedTarget&&!picker.contains(event.relatedTarget))close();});
-  document.addEventListener('whale-view-changed',()=>{if(picker.closest('[hidden]'))close();});
-  return {render,close};
+  document.addEventListener('whale-view-changed',viewChanged);
+  // 动态列表移除控件时释放 document 监听，避免旧行仍被全局事件持有。
+  return {render,close,destroy(){close();document.removeEventListener('pointerdown',outside);document.removeEventListener('whale-view-changed',viewChanged);}};
 }

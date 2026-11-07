@@ -133,6 +133,27 @@ test('task broadcasts update bookmark attention while keeping the character stor
   assert.equal(tab.messages.filter(message=>message[0]==='pet-storage-state').at(-1)[1].attention,false);
 });
 
+test('定时提醒在任务气泡内独立分类，按自身数量决定窗口尺寸',()=>{
+  const f=fixture({showPanelOnStartup:false});
+  f.data.planner.active=[{id:'rest',state:'waiting'}];
+  f.data.execution={count:0,pendingCount:0,reminderCount:1,items:[],pendingItems:[]};f.api.broadcast(f.data);
+  assert.equal(f.pet.getBounds().height,380,'一条提醒沿用单行尺寸');
+  f.data.execution.reminderCount=4;f.api.broadcast(f.data);assert.equal(f.pet.getBounds().height,320,'提醒超过阈值时收起');
+  f.data.execution.count=1;f.api.broadcast(f.data);assert.equal(f.pet.getBounds().height,380,'默认优先展示聊天，提醒排在最后');
+  f.data.execution.count=0;
+  f.data.remindersExpanded=true;f.api.broadcast(f.data);assert.equal(f.pet.getBounds().height,440,'手动展开提醒分类');
+  f.data.remindersExpanded=false;f.data.execution.reminderCount=1;f.data.planner.active[0].state='processing';f.api.broadcast(f.data);
+  assert.equal(f.pet.getBounds().height,380,'开始处理后仍按提醒分类尺寸展示');
+  f.data.execution.count=4;f.data.execution.pendingCount=4;f.data.reminderView='reminders';f.api.broadcast(f.data);
+  assert.equal(f.pet.getBounds().height,380,'提醒列表尺寸不受聊天各分类数量影响');
+  f.data.reminderView='pending';f.api.broadcast(f.data);assert.equal(f.pet.getBounds().height,320);
+  f.data.pendingExpanded=true;f.api.broadcast(f.data);assert.equal(f.pet.getBounds().height,440);
+  f.data.reminderView='busy';f.api.broadcast(f.data);assert.equal(f.pet.getBounds().height,320);
+  f.data.busyExpanded=true;f.api.broadcast(f.data);assert.equal(f.pet.getBounds().height,440);
+  f.data.execution.count=0;f.data.execution.pendingCount=0;f.data.execution.reminderCount=0;
+  f.data.busyExpanded=false;f.data.pendingExpanded=false;f.data.reminderView=null;f.api.broadcast(f.data);assert.equal(f.pet.getBounds().height,320);
+});
+
 test('bookmark drag snaps to the other edge without moving the stored character',async()=>{
   const f=fixture({showPanelOnStartup:false}),before={...f.pet.getBounds()};await f.api.storePet();
   const tab=f.windows[1],event={sender:tab.webContents,senderFrame:tab.webContents.mainFrame};

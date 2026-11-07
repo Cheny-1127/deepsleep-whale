@@ -62,6 +62,8 @@ button,input{-webkit-app-region:no-drag}.studio{display:flex;background:var(--ui
 .completion-counts .completion-alert:hover,.completion-counts .completion-alert:focus-visible{background:#d6e3fb;color:#274d8a;outline:none}
 .completion-counts #busy-alert{color:#a47a43}
 .completion-counts #busy-alert:hover,.completion-counts #busy-alert:focus-visible{background:#f5e7ce;color:#88602d;outline:none}
+.completion-counts #planner-reminder-alert{color:#38745f}
+.completion-counts #planner-reminder-alert:hover,.completion-counts #planner-reminder-alert:focus-visible{background:#d5eade;color:#265b48;outline:none}
 .floating.completions-expanded .completion-shell{width:236px}
 #completion-bubble{padding-top:4px}
 #completion-rows{max-height:112px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#bdcde5 transparent;padding:1px 2px}
@@ -71,13 +73,17 @@ button,input{-webkit-app-region:no-drag}.studio{display:flex;background:var(--ui
 #completion-error{font-size:10px;color:#a7583a;margin:5px 3px 0}
 
 /* 任务和日程提醒共用紫、绿、橙、粉、青、蓝的顺序，只在悬停或键盘聚焦时显现。 */
-#completion-rows>div:nth-child(6n+1),.planner-pet-row:nth-child(6n+1){--row-hover:#d8cfee;--row-ink:#514176}
-#completion-rows>div:nth-child(6n+2),.planner-pet-row:nth-child(6n+2){--row-hover:#c5e5d6;--row-ink:#315e4b}
-#completion-rows>div:nth-child(6n+3),.planner-pet-row:nth-child(6n+3){--row-hover:#f2d6b3;--row-ink:#79582c}
-#completion-rows>div:nth-child(6n+4),.planner-pet-row:nth-child(6n+4){--row-hover:#edccda;--row-ink:#7d455d}
-#completion-rows>div:nth-child(6n+5),.planner-pet-row:nth-child(6n+5){--row-hover:#c3e3e9;--row-ink:#32626b}
-#completion-rows>div:nth-child(6n),.planner-pet-row:nth-child(6n){--row-hover:#c6d9fa;--row-ink:#24487d}
+#completion-rows>div:nth-child(6n+1){--row-hover:#d8cfee;--row-ink:#514176}
+#completion-rows>div:nth-child(6n+2){--row-hover:#c5e5d6;--row-ink:#315e4b}
+#completion-rows>div:nth-child(6n+3){--row-hover:#f2d6b3;--row-ink:#79582c}
+#completion-rows>div:nth-child(6n+4){--row-hover:#edccda;--row-ink:#7d455d}
+#completion-rows>div:nth-child(6n+5){--row-hover:#c3e3e9;--row-ink:#32626b}
+#completion-rows>div:nth-child(6n){--row-hover:#c6d9fa;--row-ink:#24487d}
 .busy-expanded .completion-row{color:#947044}
+.completion-reminder-row{display:flex;align-items:center;gap:4px;min-height:27px}
+.completion-reminder-row .completion-row{flex:1;min-width:0;width:0}
+.completion-reminder-action{flex-shrink:0;min-height:24px;padding:3px 7px;font-size:10px;line-height:16px}
+.completion-reminder-clock{flex-shrink:0;font-size:10px;white-space:nowrap;font-variant-numeric:tabular-nums;color:#947044}
 
 .floating.single-completion .speech-stack{height:156px}
 
@@ -117,7 +123,8 @@ button,input{-webkit-app-region:no-drag}.studio{display:flex;background:var(--ui
 .completion-counts button{padding:4px 5px}
 .completion-counts .completion-alert.selected-category{background:#dce7fc}
 .completion-counts #busy-alert.selected-category{background:#f5e7ce}
-.single-category .completion-counts .completion-alert.selected-category,.single-category .completion-counts #busy-alert.selected-category{background:transparent}
+.completion-counts #planner-reminder-alert.selected-category{background:#d5eade}
+.single-category .completion-counts .completion-alert.selected-category,.single-category .completion-counts #busy-alert.selected-category,.single-category .completion-counts #planner-reminder-alert.selected-category{background:transparent}
 
 /* 微信状态广播不含正文；展开会话后按页单独读取问答。 */
 .wechat-intro{line-height:1.8;color:#71816f;margin:0 0 18px}.wechat-grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:16px}.wechat-card{margin-bottom:16px;min-width:0}.wechat-card h2{margin-bottom:14px}.wechat-card label{display:block;font-size:11px;color:var(--ui-text-muted);margin:14px 0}.wechat-card input,.wechat-card select{width:100%;margin-top:7px}.wechat-field-row{display:flex;gap:8px;align-items:baseline}.wechat-field-row input{min-width:0}.wechat-buttons{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}.wechat-card details summary{cursor:pointer}.wechat-hint{font-size:11px;line-height:1.8;color:var(--ui-text-subtle)}.wechat-card p{overflow-wrap:anywhere;line-height:1.8}.wechat-row{display:flex;gap:12px;align-items:center;justify-content:space-between;border-top:1px solid var(--ui-divider);padding:11px 0;font-size:11px;overflow-wrap:anywhere}.wechat-row span{min-width:0}.wechat-row button,.wechat-row strong{flex-shrink:0}.wechat-card .section-heading h2{margin:0}.wechat-card .section-heading{margin-bottom:12px}#wechat-qr-box{text-align:center}#wechat-qr{max-width:100%;height:auto;background:var(--ui-surface)}#wechat-feedback{color:var(--ui-accent);min-height:18px;font-size:12px}#wechat-jobs,#wechat-users{color:#71816f}.wechat-card .tag{white-space:nowrap}@media(max-width:900px){.wechat-grid{grid-template-columns:1fr}}

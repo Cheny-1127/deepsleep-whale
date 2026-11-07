@@ -44,10 +44,10 @@ function workEditor(root,prefix) {
   return {set(value){for(const input of days)input.checked=value.days.includes(Number(input.value));allDay.checked=isAllDay(value);periods.replaceChildren();(allDay.checked?[{start:'10:00',end:'19:00'}]:value.periods).forEach(row);update();},
     get(){return {days:days.filter(input=>input.checked).map(input=>Number(input.value)),periods:allDay.checked?[{start:'00:00',end:'24:00'}]:[...periods.children].map(row=>({start:row.children[0].value,end:row.children[2].value}))};}};
 }
-export function createPlannerView({floating=false}={}) {
-  const container=$('content'),bubble=$('bubble');
-  if(!container&&!bubble)return {render(){}};
-  let data,lastRevision=-1,requestedRevision=-1,loading=false,filter='all',category='all',section='current',historyDate='',historyKey='',historyRequest=0,lastCompleted=null,itemKind='task',itemId=null,mode='interval',deadline='none',taskState='pending',settingsDirty=false,petKey='',listKey='',saving=false;
+export function createPlannerView() {
+  const container=$('content');
+  if(!container)return {render(){}};
+  let data,lastRevision=-1,requestedRevision=-1,loading=false,filter='all',category='all',section='current',historyDate='',historyKey='',historyRequest=0,lastCompleted=null,itemKind='task',itemId=null,mode='interval',deadline='none',taskState='pending',settingsDirty=false,listKey='',saving=false;
   async function request(name,value) {
     const response=await window.whale.planner(name,value);
     if(response.error)throw Error(response.error);
@@ -65,36 +65,6 @@ export function createPlannerView({floating=false}={}) {
     }
     catch(error){report(error);}
     finally {saving=false;}
-  }
-  function renderPet(summary) {
-    if(!bubble)return;
-    const active=summary?.active||[],key=JSON.stringify(active.map(item=>[item.id,item.token,item.state]));
-    bubble.hidden=!active.length;document.body.classList.toggle('planner-active',active.length>0);
-    if(key!==petKey) {
-      petKey=key;bubble.replaceChildren();
-      const rows=el('div','planner-pet-rows');
-      for(const item of active) {
-        const row=el('div','planner-pet-row');
-        let clickTimer;
-        function handleClick(event) {
-          clearTimeout(clickTimer);
-          if(event.detail>1)return;
-          const run=()=>{if(row.isConnected&&item.state==='waiting')void act(item.processMinutes?'start':'complete',{id:item.id,token:item.token});};
-          // 等待连击窗口后再处理，双击只打开页面，不提交本轮处理动作。
-          if(event.detail===0)run();else clickTimer=setTimeout(run,400);
-        }
-        const title=button(item.title,handleClick,'planner-pet-title');
-        row.dataset.state=item.state;
-        row.addEventListener('dblclick',()=>{clearTimeout(clickTimer);void window.whale.action('planner');});
-        row.append(title);
-        if(item.state==='processing'){const clock=el('span','planner-clock');clock.dataset.ends=String(item.processingEndsAt);row.append(clock);}
-        else row.append(button(item.processMinutes?'开始处理':'完成',handleClick,'soft'));
-        rows.append(row);
-      }
-      bubble.append(rows);
-      const error=el('p','planner-pet-error');error.id='planner-error';error.setAttribute('role','alert');error.hidden=true;bubble.append(error);
-    }
-    for(const clock of bubble.querySelectorAll('[data-ends]'))clock.textContent='处理中 · '+remaining(Number(clock.dataset.ends));
   }
   if(container) {
     // 这里的 HTML 全为固定结构；用户填写的名称和备注只通过 textContent/value 展示。
@@ -323,7 +293,6 @@ export function createPlannerView({floating=false}={}) {
     if(succeeded&&lastRevision<requestedRevision)void refresh();
   }
   function render(summary) {
-    renderPet(summary);
     if(!container||!summary)return;
     requestedRevision=summary.revision;
     if(!data||lastRevision!==requestedRevision)void refresh();

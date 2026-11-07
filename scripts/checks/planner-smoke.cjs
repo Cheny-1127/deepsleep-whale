@@ -388,7 +388,7 @@ async function checkCompletedTasksLeaveList() {
   await panel.locator('#planner-interval').fill('2');await panel.locator('#planner-process').fill('3');await panel.locator('#planner-item-form [type="submit"]').click();
   await panel.waitForFunction(()=>document.querySelectorAll('.planner-reminder').length===2&&!document.getElementById('planner-item-dialog').open);
   await advance('2026-10-26T10:02:00');
-  await pet.waitForFunction(()=>!document.getElementById('planner-bubble').hidden&&document.querySelectorAll('.planner-pet-row').length===2);
+  await pet.waitForFunction(()=>!document.getElementById('completion-shell').hidden&&document.querySelectorAll('.completion-reminder-row').length===2);
   assert.equal((await app.evaluate(()=>global.plannerNotices)).length,2);
   // 桌宠无法读取工作正文或修改时间设置；广播只带当前提醒摘要。
   assert.match((await pet.evaluate(()=>window.whale.planner('snapshot'))).error,/仅允许/);
@@ -397,10 +397,11 @@ async function checkCompletedTasksLeaveList() {
   await advance('2026-10-26T10:06:00');
   const rest=panel.locator('.planner-reminder').filter({has:panel.getByRole('heading',{name:'闭眼休息',exact:true})});
   await rest.getByRole('button',{name:'开始处理',exact:true}).click();
-  await pet.waitForFunction(()=>document.querySelector('.planner-clock')?.textContent.includes('3:00'));
+  await pet.locator('#planner-reminder-alert').click();
+  await pet.waitForFunction(()=>document.querySelector('.completion-reminder-clock')?.textContent.includes('3:00'));
   const drink=panel.locator('.planner-reminder').filter({has:panel.getByRole('heading',{name:'喝水',exact:true})});
   await drink.getByRole('button',{name:'完成',exact:true}).click();
-  await pet.waitForFunction(()=>document.querySelectorAll('.planner-pet-row').length===1);
+  await pet.waitForFunction(async()=>(await window.whale.snapshot()).execution.reminderCount===1);
   assert.equal((await snapshot()).reminders.find(item=>item.title==='喝水').run.dueAt,+new Date('2026-10-26T10:08:00'));
   await advance('2026-10-26T10:09:00');
   await panel.waitForFunction(()=>![...document.querySelectorAll('#planner-reminder-list .planner-clock')].length);
@@ -492,13 +493,13 @@ async function checkCompletedTasksLeaveList() {
   await panel.locator('#planner-mode-trigger').click();
   await panel.screenshot({path:path.join(out,'planner-editor.png')});
   await panel.keyboard.press('Escape');await panel.locator('#planner-cancel-item').click();
-  await advance('2026-10-26T10:13:00');await pet.waitForFunction(()=>!document.getElementById('planner-bubble').hidden);
+  await advance('2026-10-26T10:13:00');await pet.waitForFunction(()=>!document.getElementById('completion-shell').hidden);
   await pet.screenshot({path:path.join(out,'planner-pet.png'),omitBackground:true});
-  assert.equal(await pet.locator('#planner-bubble').evaluate(el=>Math.round(el.getBoundingClientRect().width)),236);
+  assert.equal(await pet.locator('#planner-bubble').count(),0,'定时提醒仅在统一任务气泡展示');
   await advance('2026-10-26T15:00:00');assert.ok(await app.evaluate(()=>global.plannerChimes)>0);
   // 系统通知、声音及气泡在工作时间外均停止，旧通知主动关闭。
   const noticesBefore=(await app.evaluate(()=>global.plannerNotices)).length,chimesBefore=await app.evaluate(()=>global.plannerChimes);
-  await advance('2026-10-26T19:00:00');await pet.waitForFunction(()=>document.getElementById('planner-bubble').hidden);
+  await advance('2026-10-26T19:00:00');await pet.waitForFunction(()=>document.getElementById('completion-shell').hidden);
   assert.equal((await app.evaluate(()=>global.plannerNotices)).length,noticesBefore);assert.equal(await app.evaluate(()=>global.plannerChimes),chimesBefore);
   await panel.waitForFunction(()=>document.getElementById('planner-reminder-list').textContent.includes('10/27'));
   assert.equal((await app.evaluate(()=>global.plannerClosed)).length,noticesBefore,'下班主动关闭全部到期和处理结束通知');
@@ -543,7 +544,7 @@ async function checkCompletedTasksLeaveList() {
   await panel.locator('[data-category="all"]').click();assert.equal(await panel.locator('.planner-reminder').count(),4);assert.equal(await panel.locator('.planner-task').count(),5);
   assert.equal(await panel.locator('#planner-task-count').textContent(),'5');
   await panel.locator('[data-category="work"]').click();assert.equal(await panel.locator('.planner-reminder').count(),3);assert.equal(await panel.locator('.planner-task').count(),4);
-  await advance('2026-10-27T00:03:00');await pet.waitForFunction(()=>document.getElementById('planner-bubble').textContent.includes('个人伸展'));
+  await advance('2026-10-27T00:03:00');await pet.waitForFunction(()=>document.getElementById('completion-rows').textContent.includes('个人伸展'));
   const personalRun=(await snapshot()).reminders.find(item=>item.title==='个人伸展').run;
   await panel.locator('[data-category="personal"]').click();
   await panel.locator('.planner-reminder').getByRole('button',{name:'编辑',exact:true}).click();

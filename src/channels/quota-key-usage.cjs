@@ -17,6 +17,7 @@ function createKeyUsage({token, tokenFile, dataDir, baseUrl = DEFAULT_BASE_URL, 
   const origin = String(baseUrl).replace(/\/+$/, '');
   const file = dataDir ? path.join(dataDir,'quota-key-usage.json') : null;
   const entries = new Map(), directory = new Map(), flights = new Map(), searches = new Map(), controllers = new Set();
+  const groupChanges = new Map();let groupRevision = 0;
   let selected = null, expanded = true, closed = false, cacheError = '';
   // 缓存绑定站点和凭据指纹，切换管理凭据后不复用上一来源的数据，也不保存凭据原文。
   const source = () => createHash('sha256').update(JSON.stringify([origin,readQuotaToken({token,tokenFile})])).digest('hex');
@@ -103,7 +104,7 @@ function createKeyUsage({token, tokenFile, dataDir, baseUrl = DEFAULT_BASE_URL, 
     // 合并同账号当天的在途查询；失败也记录尝试时间，避免自动轮询连续重试。
     if (flights.has(id)) return flights.get(id);
     if (!force && previous && clock.now()-previous.attemptedAt < FRESH_MS) return Promise.resolve(snapshot());
-    const attemptedAt = clock.now();
+    const attemptedAt = clock.now(), startedGroupRevision = groupRevision;
     const flight = bounded(async signal => {
       try {
         const keys = [], seen = new Set();
@@ -127,7 +128,11 @@ function createKeyUsage({token, tokenFile, dataDir, baseUrl = DEFAULT_BASE_URL, 
         // 所有 Key 一次批量查费，避免每个 Key 单独请求；today_actual_cost 才是今日实际扣费。
         if (keys.length) stats = (await request('dashboard/api-keys-usage',signal,{api_key_ids:keys.map(key => key.id)}))?.stats;
         // 缺失统计不是零消费；整次失败时保留同账号、同一天的上次结果。
-        const projected = keys.map(key => keyFields({...key,todayCost:stats?.[key.id]?.today_actual_cost}));
+        const projected = keys.map(key => {
+          // 换组前已发出的消费查询不能把刚确认的新分组覆盖回去。
+          const changed = groupChanges.get(`${user.id}:${key.id}`);
+          return keyFields({...key,...(changed?.revision > startedGroupRevision ? {groupId:changed.groupId,groupName:changed.groupName} : {}),todayCost:stats?.[key.id]?.today_actual_cost});
+        });
         // 请求跨过午夜时丢弃响应，防止把新一天的扣费写入昨天的缓存。
         if (closed || date !== shanghaiDate(clock.now())) return;
         entries.delete(id);entries.set(id,{userId:user.id,date,keys:projected,checkedAt:clock.now(),attemptedAt,error:''});
@@ -140,7 +145,7 @@ function createKeyUsage({token, tokenFile, dataDir, baseUrl = DEFAULT_BASE_URL, 
         while (entries.size > 10) entries.delete(entries.keys().next().value);
         save();
       }
-    }).finally(() => flights.delete(id)).then(() => snapshot());
+    }).finally(() => {flights.delete(id);if (!flights.size) groupChanges.clear();}).then(() => snapshot());
     flights.set(id,flight);return flight;
   }
   function select(id) {
@@ -155,7 +160,17 @@ function createKeyUsage({token, tokenFile, dataDir, baseUrl = DEFAULT_BASE_URL, 
     if (typeof value !== 'boolean') throw Error('无效的折叠状态');
     expanded = value;save();return snapshot();
   }
-  return {snapshot,search,select,refresh,setExpanded,open:() => expanded ? refresh(false) : Promise.resolve(snapshot()),close};
+  function updateKeyGroup({userId,keyId,groupId,groupName}) {
+    if (closed || !validID(userId) || !validID(keyId) || !validID(groupId) && groupId !== null || typeof groupName !== 'string') return;
+    groupRevision++;
+    if (flights.size) groupChanges.set(`${userId}:${keyId}`,{groupId,groupName:groupName.slice(0,320),revision:groupRevision});
+    for (const item of entries.values()) {
+      if (item.userId !== userId) continue;
+      item.keys = item.keys.map(key => key.id === keyId ? {...key,groupId,groupName:groupName.slice(0,320)} : key);
+    }
+    save();
+  }
+  return {snapshot,search,select,refresh,setExpanded,updateKeyGroup,open:() => expanded ? refresh(false) : Promise.resolve(snapshot()),close};
 }
 
 module.exports = {createKeyUsage};
