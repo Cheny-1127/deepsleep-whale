@@ -19,13 +19,17 @@ function inline(text,bold=true){
   return html;
 }
 
-// 只解析日报生成器约定的标题、段落、加粗和缩进列表；其余输入按文本转义，不能直通 HTML。
+// 仅解析报告使用的 Markdown 结构，其余输入按文本转义，不能直通 HTML。
 export function reportMarkdownHtml(markdown){
-  const output=[],lists=[];let paragraph=[];
+  const output=[],lists=[];let paragraph=[],quote=[];
   const flushParagraph=()=>{if(paragraph.length){output.push('<p>'+inline(paragraph.join(' '))+'</p>');paragraph=[];}};
+  const flushQuote=()=>{if(quote.length){output.push('<blockquote><p>'+inline(quote.join(' '))+'</p></blockquote>');quote=[];}};
   const closeLists=()=>{while(lists.length){output.push('</li></ul>');lists.pop();}};
   for(const line of String(markdown||'').split(/\r?\n/)){
-    if(!line.trim()){flushParagraph();closeLists();continue;}
+    if(!line.trim()){flushParagraph();flushQuote();closeLists();continue;}
+    const quoted=line.match(/^>\s?(.*)$/);
+    if(quoted){flushParagraph();closeLists();quote.push(quoted[1]);continue;}
+    flushQuote();
     const heading=line.match(/^(#{1,6})\s+(.+)$/),item=line.match(/^(\s*)[-*+]\s+(.*)$/);
     if(heading){flushParagraph();closeLists();const level=heading[1].length;output.push('<h'+level+'>'+inline(heading[2])+'</h'+level+'>');}
     else if(item){
@@ -36,5 +40,5 @@ export function reportMarkdownHtml(markdown){
       output.push(inline(item[2]));
     }else{closeLists();paragraph.push(line.trim());}
   }
-  flushParagraph();closeLists();return output.join('');
+  flushParagraph();flushQuote();closeLists();return output.join('');
 }

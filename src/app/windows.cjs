@@ -191,6 +191,7 @@ function createWindows({ snapshot, performAction, collapseReminders, rankingSnap
     showPanel, showReminders, showPlanner, showSubscriptions, chooseTrackingAccount,
     isPetVisible:()=>Boolean(pet&&!pet.isDestroyed()&&(pet.isVisible()||petStorage.isVisible())),
     isPanel:sender=>sender===panel?.webContents,
+    notifyAiSessions(){if(panel&&!panel.isDestroyed())panel.webContents.send('ai-sessions-changed');},
     isPet:sender=>sender===pet?.webContents,
     toggleRanking:id=>{petMenu.close();return petRanking.toggle(id);},
     closeQuotaOverlays:()=>{closeAccountMenu();petRanking.close();},

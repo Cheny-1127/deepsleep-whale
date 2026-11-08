@@ -4,7 +4,7 @@ const hash=value=>createHash('sha256').update(value).digest('hex');
 function archiveReport({root,relative,id,content,previousHash}) {
   if(!path.isAbsolute(root||'')||!fs.existsSync(root)||!fs.statSync(root).isDirectory())throw Error('Obsidian 报告目录不存在，请在配置中选择已有目录');
   if(typeof relative!=='string'||path.isAbsolute(relative)||relative.split(/[\\/]/).some(p=>!p||p==='.'||p==='..')||/[\0\r\n]/.test(relative)||!relative.endsWith('.md'))throw Error('归档路径必须位于报告目录内');
-  if(!/^(daily|weekly):20\d{2}-\d{2}-\d{2}$/.test(id)||typeof content!=='string'||content.length>200000||content.includes('<!-- deepsleep:'))throw Error('报告内容或标识无效');
+  if(!/^(?:daily:20\d{2}-\d{2}-\d{2}|weekly:20\d{2}-\d{2}-\d{2}(?:\.\.20\d{2}-\d{2}-\d{2})?)$/.test(id)||typeof content!=='string'||content.length>200000||content.includes('<!-- deepsleep:'))throw Error('报告内容或标识无效');
   const base=fs.realpathSync(root),parts=relative.split(/[\\/]/);let directory=base;
   // 只允许配置根目录本身指向用户选定的位置；子目录和文件中的链接都拒绝跟随。
   for(const part of parts.slice(0,-1)){

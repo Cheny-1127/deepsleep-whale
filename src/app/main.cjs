@@ -38,6 +38,10 @@ const {createModuleRuntime}=require('./module-runtime.cjs');
 const {createPlanner}=require('./planner.cjs');
 const {createWorkReports}=require('./work-reports.cjs');
 const {createGitlabStore}=require('../reports/gitlab-store.cjs');
+const {createAiStore}=require('../ai/store.cjs');
+const {createAiService}=require('../ai/service.cjs');
+const {createAiSessionStore}=require('../ai/session-store.cjs');
+const {createAiSessions}=require('../ai/sessions.cjs');
 const {createPetQuotaSettings}=require('./pet-quota-settings.cjs');
 const {createPetQuota}=require('../channels/pet-quota.cjs');
 const {createMessageSubscriptions}=require('../channels/message-subscriptions.cjs');
@@ -53,7 +57,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   const archeryConnection=createArcheryConnection({dataDir});
   const archeryConfirmation=createArcheryConfirmation({getWindow:sender=>BrowserWindow.fromWebContents(sender)});
   let bridge,wechat,mail,archery,quota,groupUsage,keyUsage,keyGroups,petQuota,subscriptions;
-  let planner,plannerTimer,reports;
+  let planner,plannerTimer,reports,ai,aiSessions;
   const plannerNotifications=new Map();
   let eventQueue=Promise.resolve();
   const cursorState=process.env.WHALE_CURSOR_STATE_DB||path.join(os.homedir(),'Library','Application Support','Cursor','User','globalStorage','state.vscdb');
@@ -348,6 +352,28 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
       return {value:await reports.action(name,value)};
     }catch(error){return {error:error.message||'工作报告操作未完成，请重试。'};}
   });
+  // 全局 AI 密钥仅由主进程持有；配置操作只开放给小屋主框架，不暴露任意模型调用。
+  ipcMain.handle('ai-settings',async(event,name,value)=>{
+    if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw Error('仅允许在小屋配置 AI');
+    if(!ai)return {error:'AI 配置正在初始化'};
+    try{
+      if(name==='snapshot')return {value:ai.snapshot()};
+      if(name==='save'){const saved=ai.save(value);windows.notifyAiSessions();return {value:saved};}
+      if(name==='clear'){const saved=ai.clear();windows.notifyAiSessions();return {value:saved};}
+      if(name==='test')return {value:await ai.test(value)};
+      if(name==='cancel-test'){ai.cancelTest();return {value:{ok:true}};}
+      throw Error('不支持的 AI 配置操作');
+    }catch(error){return {error:error.message};}
+  });
+  // 私人对话不进入桌宠快照或广播；仅小屋主框架可以查看及主动发送。
+  ipcMain.handle('ai-sessions',async(event,name,value)=>{
+    if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw Error('仅允许在小屋管理 AI 会话');
+    if(!aiSessions)return {error:'AI 会话正在初始化'};
+    try{
+      if(name==='copy-id'){const session=aiSessions.get(value?.id);clipboard.writeText(session.id);return {value:{ok:true}};}
+      return {value:await aiSessions.action(name,value)};
+    }catch(error){return {error:error.message};}
+  });
   ipcMain.handle('shortcut-settings',(event,value)=>{
     if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋配置快捷操作');
     if(!modules.enabled('shortcuts'))throw Error('快捷操作已关闭，请先开启');
@@ -519,6 +545,9 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   });
   app.on('before-quit', () => { archeryConfirmation.cancel();subscriptions?.close();petQuota?.close();keyGroups?.close();keyUsage?.close();groupUsage?.close();quota?.close();archery?.close();mail?.close();wechat?.close();codexRuntime.close();bridge?.close(); titles.close();cursorTitles.close(); });
   app.whenReady().then(async () => {
+    ai=createAiService({store:createAiStore({dataDir,safeStorage}),fetchImpl:(url,options)=>net.fetch(url,options)});
+    aiSessions=createAiSessions({store:createAiSessionStore({dataDir,safeStorage}),ai,onChange:()=>windows.notifyAiSessions()});
+    app.once('before-quit',()=>{aiSessions.close();ai.close();});
     // 先确认客户端运行状态，再过滤临时会话、同步已读，避免清掉退出时暂存的提醒。
     await refreshClients();
     activity.reconcile(titles.readState());
@@ -538,7 +567,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
       }
       if(preferences.sound)windows.chime();
     }});
-    reports=createWorkReports({dataDir,getTasks:()=>planner.snapshot().tasks,onChange:broadcast,gitlabStore:createGitlabStore({dataDir,safeStorage}),fetchImpl:(url,options)=>net.fetch(url,options),gitlabFetchImpl:globalThis.fetch});
+    reports=createWorkReports({dataDir,getTasks:()=>planner.snapshot().tasks,onChange:broadcast,gitlabStore:createGitlabStore({dataDir,safeStorage}),fetchImpl:(url,options)=>net.fetch(url,options),gitlabFetchImpl:globalThis.fetch,ai});
     reports.setModuleEnabled(modules.enabled('reports'));reports.start();
     const resumeReports=()=>void reports.runScheduled();powerMonitor.on('resume',resumeReports);
     app.once('before-quit',()=>{reports.close();powerMonitor.removeListener('resume',resumeReports);});

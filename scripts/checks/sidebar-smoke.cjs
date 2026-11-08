@@ -29,9 +29,9 @@ async function hold(id) {
   await panel.waitForSelector('.sidebar-drag-ghost');return box;
 }
 (async()=>{
-  await launch();const initial=await state();
+  await launch();const initial=await state();assert.deepEqual(initial.more,['ai-sessions']);
   // 选中与未选中菜单共用图标画布和线宽，图标与文字垂直居中，文字起点一致。
-  const iconMetrics=await panel.locator('.sidebar .nav-item').evaluateAll(buttons=>buttons.map(button=>{
+  const iconMetrics=await panel.locator('#sidebar-visible .nav-item').evaluateAll(buttons=>buttons.map(button=>{
     const icon=button.querySelector('.sidebar-icon'),label=button.querySelector('.sidebar-menu-label');
     const rect=icon.getBoundingClientRect(),text=label.getBoundingClientRect(),row=button.getBoundingClientRect(),style=getComputedStyle(icon);
     return {width:rect.width,height:rect.height,stroke:style.strokeWidth,textOffset:text.left-row.left,centerOffset:Math.abs(rect.top+rect.height/2-text.top-text.height/2)};
@@ -99,8 +99,8 @@ async function hold(id) {
   }
   await hold('archery');const hiddenTarget=await panel.locator('#nav-hooks').boundingBox();
   await panel.mouse.move(hiddenTarget.x+50,hiddenTarget.y+3,{steps:8});
-  await panel.waitForFunction(()=>document.querySelector('#sidebar-more-list').firstElementChild.dataset.menu==='archery');
-  await panel.mouse.up();await settled();assert.deepEqual((await state()).more,['archery','hooks']);
+  await panel.waitForFunction(()=>document.querySelector('#sidebar-more-list').children[1]?.dataset.menu==='archery');
+  await panel.mouse.up();await settled();assert.deepEqual((await state()).more,['ai-sessions','archery','hooks']);
   // 失焦取消未提交的拖动，已保存布局保持不变。
   const beforeBlur=await state();await hold('hooks');await panel.evaluate(()=>window.dispatchEvent(new Event('blur')));await panel.mouse.up();
   assert.deepEqual(await state(),beforeBlur);assert.equal(await panel.locator('.sidebar-drag-ghost').count(),0);
@@ -128,7 +128,7 @@ async function hold(id) {
   // 全部收纳时，更多入口仍然可用。
   await panel.locator('#sidebar-organize').click();
   for(const id of final.visible){await panel.locator(`[data-menu="${id}"] > .sidebar-transfer`).click();await settled();}
-  assert.equal((await state()).visible.length,0);await panel.locator('#sidebar-more-toggle').click();assert.equal(await panel.locator('#sidebar-more-list > .sidebar-row').count(),initial.visible.length);
+  assert.equal((await state()).visible.length,0);await panel.locator('#sidebar-more-toggle').click();assert.equal(await panel.locator('#sidebar-more-list > .sidebar-row').count(),initial.visible.length+initial.more.length);
   await panel.getByRole('button',{name:'移回常用：陪伴小屋',exact:true}).click();await settled();assert.deepEqual((await state()).visible,['home']);
   assert.deepEqual(errors,[]);console.log('Sidebar smoke OK: drag, cancel, collect/restore, keyboard, rollback, restart, layouts and IPC guard');
 })().finally(async()=>{if(app)await app.close();fs.rmSync(dir,{recursive:true,force:true});}).catch(error=>{console.error(error);process.exitCode=1;});

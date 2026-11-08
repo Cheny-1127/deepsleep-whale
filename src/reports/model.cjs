@@ -1,6 +1,7 @@
 'use strict';
 const path=require('node:path');
 const {workSummary,withoutMergeNotices}=require('./work-summary.cjs');
+const {DEFAULT_AI_WEEK_TEMPLATE}=require('./ai-week.cjs');
 const LEGACY_DEFAULT_TEMPLATE='# 工作周报（{{week_start}} ～ {{week_end}}）\n\n## 本周工作\n{{summary}}\n\n## 发布记录\n{{releases}}\n\n## 问题与风险\n{{blockers}}\n\n## 下周计划\n{{next_week}}\n\n## 工作明细\n{{details}}\n';
 const DEFAULT_TEMPLATE='# 工作周报（{{week_start}} ～ {{week_end}}）\n\n## 本周工作\n{{summary}}\n\n## 问题与风险\n{{blockers}}\n\n## 下周计划\n{{next_week}}\n';
 const TOKENS=['week_start','week_end','summary','releases','blockers','next_week','details','count'];
@@ -10,12 +11,17 @@ function validDate(value){return typeof value==='string'&&/^20\d{2}-\d{2}-\d{2}$
 function requireDate(value){if(!validDate(value))throw Error('请选择有效日期（2000–2099）');return value;}
 function addDays(date,days){requireDate(date);const value=new Date(date+'T00:00:00Z');value.setUTCDate(value.getUTCDate()+days);return value.toISOString().slice(0,10);}
 function weekRange(date){requireDate(date);const weekday=new Date(date+'T00:00:00Z').getUTCDay();const start=addDays(date,-((weekday+6)%7));return {start,end:addDays(start,6)};}
+function reportRange(value){
+  if(typeof value==='string')return weekRange(value);
+  const start=requireDate(value?.start),end=requireDate(value?.end);if(end<start)throw Error('周报结束日期不能早于开始日期');return {start,end};
+}
+function reportKey(value){const {start,end}=reportRange(value);return weekRange(start).start===start&&end===addDays(start,6)?start:`${start}..${end}`;}
 function relativeDirectory(value,fallback){const dir=text(value,200)||fallback;if(path.isAbsolute(dir)||dir.split(/[\\/]/).some(part=>!part||part==='.'||part==='..')||/[\0\r\n]/.test(dir))throw Error('日报和周报子目录须为报告目录内的相对路径');return dir;}
 function gitlabUrl(value){
   try{const url=new URL(value);if(url.protocol!=='https:'||url.username||url.password||url.search||url.hash||typeof value!=='string'||value.length>2000)throw Error();return url.href.replace(/\/+$/,'');}
   catch{throw Object.assign(Error('GitLab 地址须为 HTTPS 站点地址，可包含部署子路径，不能包含账号、查询参数或片段'),{reportSafe:true});}
 }
-function defaultSettings(archiveDir=''){return {syncPlanner:true,autoCollect:false,intervalMinutes:15,lookbackDays:14,repositories:[],gitlabProjects:[],gitlabAuthorMode:'email',gitlabAuthors:'',gitlabAuthorNames:'',jenkinsJobs:[],archiveDir,dailyDir:'日报',weeklyDir:'周报',autoArchive:false,autoWeekly:false,weeklyTemplate:DEFAULT_TEMPLATE};}
+function defaultSettings(archiveDir=''){return {syncPlanner:true,autoCollect:false,intervalMinutes:15,lookbackDays:14,repositories:[],gitlabProjects:[],gitlabAuthorMode:'email',gitlabAuthors:'',gitlabAuthorNames:'',jenkinsJobs:[],archiveDir,dailyDir:'日报',weeklyDir:'周报',autoArchive:false,autoWeekly:false,weeklyTemplate:DEFAULT_TEMPLATE,aiWeeklyTemplate:DEFAULT_AI_WEEK_TEMPLATE};}
 function settingsInput(value,previous=defaultSettings()) {
   const next={...previous,...value};
   for(const key of ['syncPlanner','autoCollect','autoArchive','autoWeekly'])if(typeof next[key]!=='boolean')throw Error('无效的自动处理开关');
@@ -24,6 +30,9 @@ function settingsInput(value,previous=defaultSettings()) {
   const archiveDir=text(next.archiveDir,2000);if(archiveDir&&(!path.isAbsolute(archiveDir)||/[\0\r\n]/.test(archiveDir)))throw Error('报告目录须为绝对路径');
   const rawTemplate=text(next.weeklyTemplate,20000),template=rawTemplate===LEGACY_DEFAULT_TEMPLATE.trim()?DEFAULT_TEMPLATE.trim():rawTemplate;if(!template)throw Error('请填写周报模板');
   for(const match of template.matchAll(/\{\{([^{}]+)\}\}/g))if(!TOKENS.includes(match[1]))throw Error('周报模板含不支持的占位符：'+match[1].slice(0,50));
+  const aiWeeklyTemplate=text(next.aiWeeklyTemplate,20000);if(!aiWeeklyTemplate)throw Error('请填写 AI 周报模板');
+  for(const match of aiWeeklyTemplate.matchAll(/\{\{([^{}]+)\}\}/g))if(!['week_start','week_end'].includes(match[1]))throw Error('AI 周报模板只支持开始日期和截止日期占位符');
+  if(!/^## 本周(?:工作)?思考\s*$/m.test(aiWeeklyTemplate)||!/^## 下周(?:工作)?计划\s*$/m.test(aiWeeklyTemplate))throw Error('AI 周报模板须包含“本周工作思考”和“下周工作计划”栏目');
   if(!Array.isArray(next.repositories)||next.repositories.length>20||!Array.isArray(next.jenkinsJobs)||next.jenkinsJobs.length>20)throw Error('Git 仓库和 Jenkins 任务各最多 20 项');
   const unique=new Set();
   const repositories=next.repositories.map(item=>{
@@ -54,7 +63,7 @@ function settingsInput(value,previous=defaultSettings()) {
     return {job,project,environment,target,userIds,deploySuccess:item.deploySuccess===true,...(aliases.length?{repositoryAliases:aliases.join(',')}:{})};
   });
   return {syncPlanner:next.syncPlanner,autoCollect:next.autoCollect,intervalMinutes:next.intervalMinutes,lookbackDays:next.lookbackDays,repositories,gitlabProjects,gitlabAuthorMode,gitlabAuthors,gitlabAuthorNames,jenkinsJobs,
-    archiveDir,dailyDir:relativeDirectory(next.dailyDir,'日报'),weeklyDir:relativeDirectory(next.weeklyDir,'周报'),autoArchive:next.autoArchive,autoWeekly:next.autoWeekly,weeklyTemplate:template};
+    archiveDir,dailyDir:relativeDirectory(next.dailyDir,'日报'),weeklyDir:relativeDirectory(next.weeklyDir,'周报'),autoArchive:next.autoArchive,autoWeekly:next.autoWeekly,weeklyTemplate:template,aiWeeklyTemplate};
 }
 function entryInput(value){
   const title=text(value?.title,200);if(!title)throw Error('请填写工作标题');
@@ -116,7 +125,7 @@ function workLine(item){
 }
 function grouped(items){return items.length?items.map(workLine).join('\n'):'暂无记录。';}
 function weekContent(entries,date,template=DEFAULT_TEMPLATE,workGroups=[]){
-  const {start,end}=weekRange(date),nextEnd=addDays(end,7),records=entries.filter(e=>e.date>=start&&e.date<=end),current=workSummary(records,workGroups,{context:entries,periodEnd:end}).items,daily=workSummary(records,workGroups,{context:entries}).items;
+  const {start,end}=reportRange(date),nextEnd=addDays(end,7),records=entries.filter(e=>e.date>=start&&e.date<=end),current=workSummary(records,workGroups,{context:entries,periodEnd:end}).items,daily=workSummary(records,workGroups,{context:entries}).items;
   const values={week_start:start,week_end:end,count:String(current.filter(e=>e.status==='done').length),
     summary:grouped(current.filter(e=>e.status==='done')),releases:grouped(current.filter(e=>e.releases.length)),
     blockers:grouped(current.filter(e=>e.status==='blocked')),next_week:grouped(workSummary(entries.filter(e=>e.status==='planned'&&e.date>end&&e.date<=nextEnd),workGroups).items),
@@ -128,4 +137,4 @@ function dailyContent(entries,date,workGroups=[]){
   const sections=[['今日工作',done],['问题与风险',items.filter(e=>e.status==='blocked')],['工作计划',items.filter(e=>e.status==='planned')]];
   return `# 工作日报 · ${date}\n\n今日工作 ${done.length} 项\n\n`+(sections.filter(([,items])=>items.length).map(([title,items])=>'## '+title+'\n'+grouped(items)).join('\n\n')||'暂无工作记录。')+'\n';
 }
-module.exports={DEFAULT_TEMPLATE,TOKENS,text,dateKey,validDate,requireDate,addDays,weekRange,defaultSettings,settingsInput,entryInput,workGroupsInput,workMatchTitlesInput,dismissedMatchesInput,gitlabUrl,active,weekContent,dailyContent};
+module.exports={DEFAULT_TEMPLATE,TOKENS,text,dateKey,validDate,requireDate,addDays,weekRange,reportRange,reportKey,defaultSettings,settingsInput,entryInput,workGroupsInput,workMatchTitlesInput,dismissedMatchesInput,gitlabUrl,active,weekContent,dailyContent};

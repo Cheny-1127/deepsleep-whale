@@ -26,3 +26,7 @@ test('empty reports and adjacent sibling works retain their readable structure',
   assert.equal(await render(dailyContent([],'2026-10-28')),'<h1>工作日报 · 2026-10-28</h1><p>今日工作 0 项</p><p>暂无工作记录。</p>');
   assert.equal(await render('- **第一项**\n  - 结果\n- **第二项**\n\n结束说明'),'<ul><li><strong>第一项</strong><ul><li>结果</li></ul></li><li><strong>第二项</strong></li></ul><p>结束说明</p>');
 });
+
+test('weekly suggestion quotes render clearly while escaping embedded HTML',async()=>{
+  assert.equal(await render('## 本周工作思考\n\n> 建议稿，待确认。\n> <img src=x onerror=alert(1)>\n\n- 补齐超时边界。'),'<h2>本周工作思考</h2><blockquote><p>建议稿，待确认。 &lt;img src=x onerror=alert(1)&gt;</p></blockquote><ul><li>补齐超时边界。</li></ul>');
+});

@@ -18,6 +18,8 @@ import { createPetQuotaView } from './pet-quota-view.mjs';
 import { createPlannerView } from './planner-view.mjs';
 import { createModulesView } from './modules-view.mjs';
 import { createWorkReportsView } from './work-reports-view.mjs';
+import { createAiSettingsView } from './ai-settings-view.mjs';
+import { createAiSessionsView } from './ai-sessions-view.mjs';
 
 const $ = id => document.getElementById(id);
 const copy = {
@@ -44,6 +46,8 @@ let subscriptionsUnread=null,subscriptionsEnabled=false,subscriptionsTimer=null;
 const floating=document.body.classList.contains('floating');
 createPetHitTest();
 createSidebarView();
+createAiSettingsView();
+createAiSessionsView();
 const hooksView=createHookSettingsView({render});
 const remindersView=createReminderView({render,action,floating});
 const plannerView=createPlannerView();
