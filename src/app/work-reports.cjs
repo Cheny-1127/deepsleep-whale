@@ -16,9 +16,9 @@ const clone=value=>structuredClone(value),fingerprint=value=>createHash('sha256'
 
 function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvironment=readReportEnvironment,gitCollector=collectGit,jenkinsCollector=collectJenkins,gitlabCollector=collectGitlab,gitlabStore,
   onChange=()=>{},clock={setTimeout,clearTimeout},fetchImpl=fetch,gitlabFetchImpl=fetchImpl,ai}={}) {
-  const file=path.join(dataDir,'work-reports.json');let initial={},error='',writeError='',closed=false,enabled=true,started=false,timer,flight=null,collectingDate=null,controller,generation=0;
+  const file=path.join(dataDir,'work-reports.json');let initial={},error='',writeError='',closed=false,enabled=true,started=false,timer,dailyTimer,dailyFlight=null,flight=null,collectingDate=null,controller,generation=0;
   try{initial=readEnvironment();}catch{error='工作报告环境配置无法读取，请检查项目 .env';}
-  let state={version:1,revision:0,settings:defaultSettings(initial.archiveDir||''),entries:[],workGroups:[],workMatchTitles:[],dismissedMatches:[],weeks:{},sources:[],archives:{},dirtyDates:[]};
+  let state={version:1,revision:0,settings:defaultSettings(initial.archiveDir||''),entries:[],workGroups:[],workMatchTitles:[],dismissedMatches:[],weeks:{},sources:[],collectedDays:{},archives:{},dirtyDates:[]};
   let corrupt=false;
   let gitlabConnecting=false;const gitlabRequests=new Set(),preparations=new Map();
   let aiController=null;
@@ -40,7 +40,13 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
       if(week.aiDraft&&(typeof week.aiDraft.content!=='string'||week.aiDraft.content.length>200000||typeof week.aiDraft.baseHash!=='string'||typeof week.aiDraft.templateHash!=='string'))throw Error();
       Object.assign(week,range);
     }
+    const legacyCollection=saved.collectedDays===undefined;if(legacyCollection)saved.collectedDays={};
+    if(!saved.collectedDays||typeof saved.collectedDays!=='object'||Array.isArray(saved.collectedDays))throw Error();
+    for(const [date,scope] of Object.entries(saved.collectedDays)){requireDate(date);if(typeof scope!=='string'||!/^[a-f0-9]{64}$/.test(scope))throw Error();}
     saved.dirtyDates.forEach(requireDate);state={...state,...saved};
+    // 旧版仅保留最近一次采集结果，有完整成功范围时沿用，不能凭已有工作条数判断已采集。
+    const sourceKeys=[...state.settings.repositories.map(s=>'git:'+s.path),...state.settings.gitlabProjects.map(s=>'gitlab:'+s.host+':'+s.projectId),...state.settings.jenkinsJobs.map(s=>'jenkins:'+s.job)];
+    if(legacyCollection&&sourceKeys.length&&state.sources.length===sourceKeys.length&&sourceKeys.every(key=>state.sources.some(s=>s.key===key&&!s.error)))rememberCollectedDays(state,Math.max(...state.sources.map(s=>s.since)),Math.min(...state.sources.map(s=>s.until)));
   }catch(failure){if(failure.code!=='ENOENT'){corrupt=true;error='工作报告数据无法读取，已保留原文件并停止写入，请恢复备份后重启。';}}
   function save(next){
     if(corrupt)throw Error(error);if(closed)throw Error('工作报告已退出');
@@ -53,6 +59,13 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
     state=next;writeError='';onChange();
   }
   function dirty(next,...dates){next.dirtyDates=[...new Set([...next.dirtyDates,...dates.filter(Boolean)])];}
+  function collectionScope(settings=state.settings){return fingerprint(JSON.stringify([settings.repositories,settings.gitlabProjects,settings.gitlabAuthorMode,settings.gitlabAuthors,settings.gitlabAuthorNames,settings.jenkinsJobs,settings.syncPlanner]));}
+  function collected(date){return state.collectedDays[date]===collectionScope();}
+  function rememberCollectedDays(next,since,until){
+    if(!Number.isFinite(since)||!Number.isFinite(until)||until<since||until-since>90*86400000)return;
+    const scope=collectionScope(next.settings),first=Date.parse(dateKey(since)+'T00:00:00+08:00');
+    for(let start=first;start+86400000-1<=until;start+=86400000)if(start>=since)next.collectedDays[dateKey(start)]=scope;
+  }
   function dayWork(date,next=state){return workSummary(next.entries.filter(entry=>entry.date===date),next.workGroups,{context:next.entries});}
   function rememberSeparateWorks(next,date,members,id){
     const restored=dayWork(date,next).items.filter(item=>item.memberKeys.some(key=>members.includes(key)));
@@ -71,7 +84,7 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
     requireDate(date);
     const entries=state.entries.filter(e=>e.date===date),work=dayWork(date),dismissed=state.dismissedMatches.filter(item=>item.date===date);
     const matches=workMatches(work.items,entries,dismissed),titles=new Map(state.workMatchTitles.filter(item=>item.date===date).map(item=>[item.id,item.title]));
-    return {...summary(),date,gitlab:gitlabStatus(),settings:clone(state.settings),entries:clone(entries.filter(e=>!e.removed).sort((a,b)=>eventTime(a)-eventTime(b)||a.sourceKey.localeCompare(b.sourceKey))),work,workMatches:{...matches,items:matches.items.map(item=>titles.has(item.id)?{...item,title:titles.get(item.id)}:item),dismissedCount:dismissed.length},
+    return {...summary(),date,collected:collected(date),gitlab:gitlabStatus(),settings:clone(state.settings),entries:clone(entries.filter(e=>!e.removed).sort((a,b)=>eventTime(a)-eventTime(b)||a.sourceKey.localeCompare(b.sourceKey))),work,workMatches:{...matches,items:matches.items.map(item=>titles.has(item.id)?{...item,title:titles.get(item.id)}:item),dismissedCount:dismissed.length},
       sources:clone(state.sources),needsMrRefresh:entries.some(needsMrRefresh),weeks:Object.keys(state.weeks).sort().reverse().slice(0,104),total:state.entries.filter(e=>!e.removed).length,
       archiveReady:Boolean(state.settings.archiveDir&&fs.existsSync(state.settings.archiveDir)),templateTokens:['week_start','week_end','summary','releases','blockers','next_week','details','count']};
   }
@@ -98,7 +111,7 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
     }
   }
   function syncPlanner(date){
-    if(closed||!enabled||!state.settings.syncPlanner||corrupt)return;
+    if(closed||!enabled||!state.settings.syncPlanner||corrupt)return false;
     try{
       const next=clone(state),tasks=getTasks();
       for(const task of tasks){
@@ -113,10 +126,17 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
         else if(old&&old.sourceActive!==false){old.sourceActive=false;old.updatedAt=now();dirty(next,old.date);}
       }
       // 删除日程并不抹掉已经发生的工作事实；明确撤销完成或改为个人分类才停用来源。
-      if(JSON.stringify(next.entries)!==JSON.stringify(state.entries))save(next);
-    }catch(failure){writeError=failure.message;onChange();}
+      if(JSON.stringify(next.entries)!==JSON.stringify(state.entries))save(next);return true;
+    }catch(failure){writeError=failure.message;onChange();return false;}
   }
   function schedule(){clock.clearTimeout(timer);if(started&&!closed&&enabled){timer=clock.setTimeout(()=>void runScheduled(),state.settings.intervalMinutes*60000);timer?.unref?.();}}
+  function scheduleDaily(){
+    clock.clearTimeout(dailyTimer);if(!started||closed||!enabled)return;
+    const current=now(),today=dateKey(current),noon=Date.parse(today+'T12:00:00+08:00');
+    const due=current>=noon&&!collected(addDays(today,-1));
+    const delay=current<noon?noon-current:due?Math.min(state.settings.intervalMinutes,15)*60000:Date.parse(addDays(today,1)+'T12:00:00+08:00')-current;
+    dailyTimer=clock.setTimeout(()=>void runDailyCollection(),delay);dailyTimer?.unref?.();
+  }
   function collect(date){
     // 同日期请求可复用采集；切换日期不能借用另一日期请求的结果。
     if(flight)return !date||date===collectingDate?flight:Promise.reject(Error('正在采集其他时间范围，请等待完成后再更新当天'));if(closed||!enabled)return Promise.reject(Error('工作报告已关闭，请先开启'));if(corrupt)return Promise.reject(Error(error));
@@ -128,7 +148,7 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
     const until=date?Math.min(currentTime,Date.parse(date+'T23:59:59.999+08:00')):currentTime,since=date?Date.parse(date+'T00:00:00+08:00'):until-settings.lookbackDays*86400000;
     collectingDate=date||null;
     flight=Promise.resolve().then(async()=>{
-      syncPlanner(date);const results=[];let environment;
+      const plannerReady=!settings.syncPlanner||syncPlanner(date);const results=[];let environment;
       try{environment=readEnvironment();error='';}catch{environment={};error='工作报告环境配置无法读取，请检查项目 .env';}
       for(const [kind,sources,collector] of [['git',settings.repositories,gitCollector],['gitlab',settings.gitlabProjects,gitlabCollector],['jenkins',settings.jenkinsJobs,jenkinsCollector]])for(const source of sources){
         if(signal.aborted||closed||epoch!==generation)return;
@@ -152,7 +172,7 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
           ingest(next,entries);if(kind==='gitlab')retireGitlabMerges(next,source,options,entries);save(next);results.push({key,project:source.project,date:date||'',since,until,checkedAt:now(),count:entries.length,error:'',warning:entries.some(e=>e.source==='jenkins'&&e.sourceMeta.rangeVerified===false)?'部分发布缺少前次版本，仅展示目标版本关联 MR，完整范围待核对':''});
         }catch(failure){if(signal.aborted||closed||epoch!==generation)return;results.push({key,project:source.project,date:date||'',since,until,checkedAt:now(),count:0,error:failure.reportSafe?failure.message:'采集失败，请检查来源配置、权限或回溯范围后重试。'});}
       }
-      if(!signal.aborted&&!closed&&epoch===generation){const next=clone(state);next.sources=results;save(next);}
+      if(!signal.aborted&&!closed&&epoch===generation){const next=clone(state);next.sources=results;if(plannerReady&&!error&&results.every(result=>!result.error))rememberCollectedDays(next,since,until);save(next);}
     }).finally(()=>{flight=null;collectingDate=null;controller=null;onChange();}).then(()=>snapshot(date?{date}:{}));onChange();return flight;
   }
   function prepareDay(date){
@@ -253,12 +273,26 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
     const next=clone(state);next.archives[archiveKey]={hash:result.hash,at:now()};if(!weekly)next.dirtyDates=next.dirtyDates.filter(day=>day!==key);save(next);return {path:result.path};
   }
   let scheduled=null;
+  function runDailyCollection(){
+    if(dailyFlight)return dailyFlight;if(closed||!enabled)return Promise.resolve();
+    const epoch=generation;
+    dailyFlight=Promise.resolve().then(async()=>{
+      // 等待正在进行的手动或周期采集后再判断，避免重复或与另一日期冲突。
+      if(flight)await flight;
+      if(closed||!enabled||epoch!==generation)return;
+      const current=now(),today=dateKey(current),yesterday=addDays(today,-1);
+      if(current>=Date.parse(today+'T12:00:00+08:00')&&!collected(yesterday))await collect(yesterday);
+    }).catch(failure=>{if(closed||!enabled||epoch!==generation)return;error=/保存失败/.test(failure.message)?failure.message:'日报自动补采集未完成，请检查工作报告配置后重试。';onChange();})
+      .finally(()=>{dailyFlight=null;scheduleDaily();});return dailyFlight;
+  }
   function runScheduled(){
     if(scheduled)return scheduled;if(closed||!enabled)return Promise.resolve();
     const epoch=generation;
     scheduled=Promise.resolve().then(async()=>{
       if(closed||!enabled||epoch!==generation)return;
       if(state.settings.autoCollect)await collect();else syncPlanner();
+      if(closed||!enabled||epoch!==generation)return;
+      await runDailyCollection();
       if(closed||!enabled||epoch!==generation)return;
       const lastWeek=weekRange(addDays(dateKey(now()),-7)).start;
       // 撤销最后一条工作后也要更新已有自动周报，避免旧成果残留；人工草稿仍受保护。
@@ -268,7 +302,7 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
         if(state.settings.autoWeekly&&state.weeks[lastWeek])archive('weekly',lastWeek);
       }
     }).catch(failure=>{if(closed||!enabled||epoch!==generation)return;error=failure.reportSafe||/目录|归档|覆盖|手动修改|保存失败/.test(failure.message)?failure.message:'自动整理未完成，请检查工作报告配置后重试。';onChange();})
-      .finally(()=>{scheduled=null;schedule();});return scheduled;
+      .finally(()=>{scheduled=null;schedule();scheduleDaily();});return scheduled;
   }
   async function action(name,value={}){
     if(name==='snapshot')return snapshot(value);if(name==='get-week')return reportFor(requestedPeriod(value));
@@ -369,8 +403,8 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
       const next=clone(state),entry=next.entries.find(e=>e.id===value.id);if(!entry)throw Error('工作记录不存在');entry.removed=true;dirty(next,entry.date);save(next);return snapshot({date:entry.date});
     }
     if(name==='settings'){
-      if(flight||scheduled||gitlabConnecting||preparations.size)throw Error('正在采集、连接或归档，请稍后保存配置');
-      const next=clone(state);next.settings=settingsInput(value,state.settings);save(next);error='';syncPlanner();schedule();return snapshot();
+      if(flight||scheduled||dailyFlight||gitlabConnecting||preparations.size)throw Error('正在采集、连接或归档，请稍后保存配置');
+      const next=clone(state);next.settings=settingsInput(value,state.settings);save(next);error='';syncPlanner();schedule();scheduleDaily();return snapshot();
     }
     if(name==='collect')return collect(requireDate(value.date??dateKey(now())));
     if(name==='prepare-day')return prepareDay(requireDate(value.date));
@@ -390,6 +424,6 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
     if(name==='archive-day'||name==='archive-week')return archive(name==='archive-week'?'weekly':'daily',name==='archive-week'?requestedPeriod(value):requireDate(value.date),value.variant);
     throw Error('不支持的工作报告操作');
   }
-  return {action,snapshot,summary,syncPlanner,runScheduled,start(){started=true;void runScheduled();},setModuleEnabled(value){enabled=value;generation++;if(!value){clock.clearTimeout(timer);controller?.abort();aiController?.abort();for(const request of gitlabRequests)request.abort();}else if(started)void runScheduled();},close(){closed=true;generation++;clock.clearTimeout(timer);controller?.abort();aiController?.abort();for(const request of gitlabRequests)request.abort();}};
+  return {action,snapshot,summary,syncPlanner,runScheduled,start(){started=true;void runScheduled();},setModuleEnabled(value){enabled=value;generation++;if(!value){clock.clearTimeout(timer);clock.clearTimeout(dailyTimer);controller?.abort();aiController?.abort();for(const request of gitlabRequests)request.abort();}else if(started)void runScheduled();},close(){closed=true;generation++;clock.clearTimeout(timer);clock.clearTimeout(dailyTimer);controller?.abort();aiController?.abort();for(const request of gitlabRequests)request.abort();}};
 }
 module.exports={createWorkReports};

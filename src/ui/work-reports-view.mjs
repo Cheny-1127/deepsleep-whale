@@ -37,7 +37,7 @@ export function createWorkReportsView(){
           <section id="report-gitlab-settings" class="report-settings-section"></section>
           <details id="report-jenkins-source" class="report-settings-section report-settings-extra"><summary>Jenkins 来源 <span class="report-note">生产发布与 MR</span></summary><div class="report-toolbar"><p class="report-note">按发布阶段完成时间记录指定账号的生产发布，读取实际版本涉及的 MR 与提交。项目名需对应已选 GitLab 仓库；请添加实际使用的 EKS 任务，旧服务器任务不会自动涵盖 EKS。</p><button type="button" id="report-add-job" class="outline">＋ 添加任务</button></div><div id="report-jenkins-jobs"></div></details>
         </section>
-        <section id="report-settings-panel-automation" role="tabpanel" aria-labelledby="report-settings-tab-automation" hidden><h3>记录与自动整理</h3><div class="report-grid">${check('syncPlanner','归入日程备忘中已完成的工作待办')}${check('autoCollect','自动采集已配置的数据来源')}${field('intervalMinutes','自动整理间隔（分钟）','number','min="5" max="1440" required')}${field('lookbackDays','自动采集回溯天数','number','min="1" max="90" required')}</div><p class="report-note">数据工单和聊天记录不会自动采集，数据修复等工作可手工新增或完成工作待办。个人待办和周期性提醒不进入报告。手动采集只更新所选日期；自动采集按回溯范围补查，休眠或退出时暂停。</p></section>
+        <section id="report-settings-panel-automation" role="tabpanel" aria-labelledby="report-settings-tab-automation" hidden><h3>记录与自动整理</h3><div class="report-grid">${check('syncPlanner','归入日程备忘中已完成的工作待办')}${check('autoCollect','按间隔持续采集已配置的数据来源')}${field('intervalMinutes','自动整理间隔（分钟）','number','min="5" max="1440" required')}${field('lookbackDays','自动采集回溯天数','number','min="1" max="90" required')}</div><p class="report-note">工作报告开启时，每天北京时间 12:00 后自动补采昨天尚未完整采集的日报，成功后不重复采集；此规则不受周期采集开关影响。应用退出或休眠期间暂停，重新启动或唤醒后检查。</p><p class="report-note">数据工单和聊天记录不会自动采集，数据修复等工作可手工新增或完成工作待办。个人待办和周期性提醒不进入报告。手动采集只更新所选日期；自动采集按回溯范围补查，休眠或退出时暂停。</p></section>
         <section id="report-settings-panel-archive" role="tabpanel" aria-labelledby="report-settings-tab-archive" hidden><h3>Obsidian 归档</h3><label class="report-field">报告目录（笔记库内已有目录）<span class="report-inline-input"><input name="archiveDir" placeholder="/workspace/note/Dd work report"><button type="button" id="report-pick-archive" class="outline">选择</button></span></label><div class="report-grid">${field('dailyDir','日报子目录','text','required')}${field('weeklyDir','周报子目录','text','required')}${check('autoArchive','自动归档有变化的日报')}${check('autoWeekly','自动生成上一完整周的周报')}</div><p class="report-note">同时开启两项自动设置时，也会归档上一周周报。手工编辑的草稿不会自动重新生成；笔记中的报告内容被修改时会停止覆盖并提示。</p></section>
         <section id="report-settings-panel-template" role="tabpanel" aria-labelledby="report-settings-tab-template" hidden><h3>基础周报模板</h3><label class="report-field">汇总每日工作的 Markdown 格式<textarea name="weeklyTemplate" rows="12" maxlength="20000" required></textarea></label><p class="report-note">占位符：{{week_start}} 开始日期 · {{week_end}} 截止日期 · {{summary}} 项目汇总 · {{releases}} 发布记录 · {{blockers}} 问题与风险 · {{next_week}} 下周计划 · {{details}} 工作明细 · {{count}} 工作事项数。</p><h3>AI 周报模板</h3><label class="report-field">AI 整理后的栏目与格式<textarea name="aiWeeklyTemplate" rows="16" maxlength="20000" required></textarea></label><p class="report-note">支持 {{week_start}} 开始日期和 {{week_end}} 截止日期。请保留“本周工作思考”和“下周工作计划”二级标题；AI 会按模板整理，并将思考和计划标为待确认。仅点击“AI 整理周报”时调用已配置的模型。AI 版归档到周报目录的 AI 子目录。</p></section>
       </div>
@@ -194,7 +194,7 @@ export function createWorkReportsView(){
   }
   function renderEntries(){
     // 轮询结果未变化时保留正在阅读的 DOM；来源更新时按日期和事项身份恢复展开状态。
-    const signature=JSON.stringify([data.date,data.entries,data.work,data.workMatches,data.sources,data.settings.lookbackDays]);
+    const signature=JSON.stringify([data.date,data.collected,data.entries,data.work,data.workMatches,data.sources,data.settings.lookbackDays]);
     if(signature===renderedEntries)return;renderedEntries=signature;
     const expanded=new Set([...page.querySelectorAll('details[data-report-detail][open]')].map(node=>node.dataset.reportDetail));
     renderMatches(expanded);
@@ -205,7 +205,7 @@ export function createWorkReportsView(){
     const failed=data.sources.filter(s=>s.error).length,warnings=data.sources.filter(s=>s.warning).length;
     $('source-status').hidden=!data.sources.length;$('source-summary').textContent=`采集状态 · ${data.sources.length} 个来源${failed?' · '+failed+' 个失败':''}${warnings?' · '+warnings+' 个提醒':''}`;
     const collectedDay=data.sources[0]?.date;
-    $('collect').textContent=data.entries.some(entry=>['git','gitlab','jenkins'].includes(entry.source))||data.sources.some(source=>source.date===data.date&&!source.error)?'更新当天':'采集当天';
+    $('collect').textContent=data.collected||data.entries.some(entry=>['git','gitlab','jenkins'].includes(entry.source))||data.sources.some(source=>source.date===data.date&&!source.error)?'更新当天':'采集当天';
     $('source-range').textContent=collectedDay?`以下为 ${collectedDay} 的采集结果，仅更新该日数据；读取条数不代表工作事项数。`:`以下为最近一次回溯采集的结果（${data.settings.lookbackDays} 天），不代表所选日期的工作数量。`;
     $('sources').replaceChildren();
     for(const source of data.sources){const row=el('div','report-source-result');row.append(el('span','',source.key.startsWith('jenkins:')?'Jenkins':'GitLab'),el('span','',source.project),el('span','',source.error||source.warning||'读取 '+source.count+' 条'));$('sources').append(row);}

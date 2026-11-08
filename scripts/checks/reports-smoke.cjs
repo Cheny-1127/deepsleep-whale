@@ -14,6 +14,7 @@ const aiWeekOnly=process.env.WHALE_REPORT_AI_WEEK_ONLY==='1';
 const previewScrollOnly=process.env.WHALE_REPORT_PREVIEW_SCROLL_ONLY==='1';
 const weeklyHistoryOnly=process.env.WHALE_REPORT_WEEK_HISTORY_ONLY==='1';
 const continuousWeekOnly=process.env.WHALE_REPORT_CONTINUOUS_WEEK_ONLY==='1';
+const dailyCatchupOnly=process.env.WHALE_REPORT_DAILY_CATCHUP_ONLY==='1';
 const {MODULE_IDS}=require('../../src/app/module-settings.cjs');
 fs.writeFileSync(path.join(dir,'modules.json'),JSON.stringify(Object.fromEntries(MODULE_IDS.map(id=>[id,['planner','reports'].includes(id)]))));
 fs.writeFileSync(path.join(dir,'settings.json'),JSON.stringify({sources:{codex:false,cursor:false},notifications:false,sound:false}));
@@ -184,6 +185,20 @@ async function entries(){return (await panel.evaluate(()=>window.whale.reports('
 async function policy(){const state=await app.evaluate(({BrowserWindow})=>({mode:global.testWindowPolicy.mode,events:global.testWindowPolicy.events,windows:BrowserWindow.getAllWindows().map(win=>({visible:win.isVisible(),focused:win.isFocused(),top:win.isAlwaysOnTop()}))}));assert.ok(state.windows.every(w=>!w.focused&&!w.top));assert.ok(state.events.every(e=>e.type!=='focus'));if(state.mode==='hidden'){assert.ok(state.windows.every(w=>!w.visible));assert.deepEqual(state.events,[]);}}
 (async()=>{try{
   await launch();
+  if(dailyCatchupOnly){
+    const snapshot=await panel.evaluate(()=>window.whale.reports('snapshot',{date:'2026-10-25'}));assert.equal(snapshot.value.collected,true,'启动时自动补采昨天');assert.equal(snapshot.value.entries.length,0);
+    await panel.locator('#report-date').fill('2026-10-24');await panel.locator('#report-date').dispatchEvent('change');await panel.waitForFunction(()=>document.getElementById('report-collect').textContent==='采集当天');
+    await panel.evaluate(()=>window.whale.reports('collect',{date:'2026-10-24'}));await panel.waitForFunction(()=>document.getElementById('report-collect').textContent==='更新当天');
+    await panel.locator('#report-date').fill('2026-10-23');await panel.locator('#report-date').dispatchEvent('change');await panel.waitForFunction(()=>document.getElementById('report-collect').textContent==='采集当天');
+    await panel.locator('#report-date').fill('2026-10-24');await panel.locator('#report-date').dispatchEvent('change');await panel.waitForFunction(()=>document.getElementById('report-collect').textContent==='更新当天');
+    await panel.locator('#report-open-settings').click();await panel.locator('#report-settings-tab-automation').click();assert.match(await panel.locator('#report-settings-panel-automation').innerText(),/北京时间 12:00/);assert.equal(await panel.locator('#report-settings-form [name="autoCollect"]').isChecked(),false);
+    for(const width of [1060,860]){
+      await app.evaluate(({BrowserWindow},width)=>BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/index.html')).setSize(width,680),width);
+      const layout=await panel.locator('#report-settings-dialog').evaluate(dialog=>{const button=dialog.querySelector('[type="submit"]').getBoundingClientRect(),rect=dialog.getBoundingClientRect();return {inside:button.bottom<=innerHeight&&button.bottom<=rect.bottom,overflow:dialog.scrollWidth>dialog.clientWidth};});assert.equal(layout.inside,true);assert.equal(layout.overflow,false);
+      await panel.screenshot({path:path.join(out,`work-reports-daily-catchup-${width}.png`)});
+    }
+    await policy();assert.deepEqual(errors,[]);console.log('PASS: daily catchup on isolated startup, empty-day collection state and revisit, automation explanation, hidden 1060/860px settings layout');return;
+  }
   if(aiWeekOnly){
     await panel.locator('#report-weekly-tab').click();await panel.waitForFunction(()=>document.getElementById('report-week-status').textContent.includes('2026-10-26'));
     await panel.locator('#report-generate-ai').click();await panel.waitForFunction(()=>document.getElementById('report-error').textContent.includes('请先生成'));
