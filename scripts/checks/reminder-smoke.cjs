@@ -125,22 +125,23 @@ async function send(name, index, turn = 'turn-1') {
   await wait(()=>!document.getElementById('completion-bubble').hidden&&document.querySelectorAll('.completion-reminder-row').length===4);
   assert.equal(await pet.locator('.completion-shell').count(),1,'聊天与提醒共用一个任务气泡');
   assert.equal(await pet.locator('.planner-pet-bubble').count(),0);
-  const pendingButtons=await pet.locator('.completion-reminder-action').allTextContents();assert.deepEqual(pendingButtons,['完成','开始处理','完成','完成']);
+  assert.equal(await pet.locator('.completion-reminder-action').count(),0,'提醒气泡不提供完成或开始处理按钮');
+  assert.equal(await pet.locator('.completion-reminder-title .completion-reminder-time').textContent(),'3 分钟','时长用沙漏标出，不写处理');
   await pet.locator('#planner-reminder-alert').click();
   await wait(()=>document.getElementById('completion-bubble').hidden);
   await pet.locator('#planner-reminder-alert').click();
   await wait(()=>!document.getElementById('completion-bubble').hidden);
   await pet.screenshot({path:path.join(root,'out/reminders-category.png'),omitBackground:true});
   const rest=()=>pet.locator(`.completion-reminder-row[data-reminder-id="${reminders[1].id}"]`);
-  await rest().locator('.completion-reminder-action').evaluate(button=>{button.click();button.click();});
-  await wait(()=>document.getElementById('planner-reminder-alert').textContent==='提醒：4'&&document.querySelector('.completion-reminder-clock')?.textContent==='处理中 · 3:00');
+  await rest().locator('.completion-reminder-title').evaluate(button=>{button.click();button.click();});
+  await wait(()=>document.getElementById('planner-reminder-alert').textContent==='提醒：4'&&document.querySelector('.completion-reminder-time')?.textContent==='3:00');
   assert.equal((await snapshot()).reminderView,'reminders','开始处理后保持提醒分类');
   assert.equal((await snapshot()).execution.pendingCount,0);
   assert.equal((await snapshot()).execution.count,1,'开始处理后也不计入执行中');
   assert.equal((await snapshot()).activity.working,1,'执行中的聊天数量保持独立');
   assert.equal((await plannerAction('snapshot')).reminders[1].run.state,'processing');
   await advancePlanner(3);
-  await wait(()=>document.querySelector('.completion-reminder-clock')?.textContent==='处理中 · 2:00');
+  await wait(()=>document.querySelector('.completion-reminder-time')?.textContent==='2:00');
   assert.equal(await pet.locator('#completion-rows .completion-row').count(),4,'处理中的提醒和其余提醒留在同一分类');
   await pet.screenshot({path:path.join(root,'out/reminders-category-processing.png'),omitBackground:true});
   await pet.locator('#busy-alert').click();
@@ -149,7 +150,7 @@ async function send(name, index, turn = 'turn-1') {
   await pet.locator('#planner-reminder-alert').click();
   await wait(()=>document.querySelectorAll('.completion-reminder-row').length===4);
   const drink=()=>pet.locator(`.completion-reminder-row[data-reminder-id="${reminders[0].id}"]`);
-  await drink().getByRole('button',{name:'完成',exact:true}).click();
+  await drink().locator('.completion-reminder-title').click();
   await wait(async()=>(await window.whale.snapshot()).execution.reminderCount===3);
   await send('PermissionRequest',1,'reminder-permission');
   await wait(()=>document.getElementById('pending-alert').textContent==='待处理：1');
@@ -158,7 +159,8 @@ async function send(name, index, turn = 'turn-1') {
   assert.equal(await pet.locator('.pending-row').count(),1,'真正的权限请求仍单独保留权限样式');
   assert.equal(await pet.locator('.completion-reminder-row').count(),0,'待处理不包含定时提醒');
   await send('UserPromptSubmit',2,'reminder-completed');await send('Stop',2,'reminder-completed');
-  await wait(()=>document.getElementById('unread-label').textContent==='已完成：1');
+  await wait(()=>document.getElementById('unread-label').textContent==='已完成：1'&&document.getElementById('completion-alert').classList.contains('selected-category'));
+  assert.equal(await pet.locator('.completion-row').textContent(),titles[2],'新完成的聊天把面板切到已完成');
   await pet.locator('#planner-reminder-alert').click();
   await wait(()=>document.querySelectorAll('.completion-reminder-row').length===3);
   const layout=await pet.evaluate(()=>{
@@ -166,7 +168,7 @@ async function send(name, index, turn = 'turn-1') {
     const tabs=[...document.querySelectorAll('.completion-counts button')].filter(button=>!button.hidden),buttons=tabs.map(button=>button.getBoundingClientRect());
     return {order:tabs.map(button=>button.id),count:buttons.length,inside:buttons.every(button=>button.x>=shell.x&&button.right<=shell.right&&button.y>=shell.y&&button.bottom<=shell.bottom),bottom:shell.bottom,rowsBottom:document.getElementById('completion-rows').getBoundingClientRect().bottom,height:innerHeight};
   });
-  assert.deepEqual(layout.order,['pending-alert','completion-alert','busy-alert','planner-reminder-alert'],'提醒排在最后');
+  assert.deepEqual(layout.order,['pending-alert','completion-alert','planner-reminder-alert','busy-alert'],'提醒排在执行中之前');
   assert.equal(layout.count,4,'四个分类可同时展示');assert.equal(layout.inside,true,'分类标题不溢出气泡');
   assert.ok(layout.rowsBottom<=layout.bottom&&layout.bottom<=layout.height,'换行后列表不被裁切');
   await pet.screenshot({path:path.join(root,'out/reminders-four-categories.png'),omitBackground:true});
@@ -183,7 +185,7 @@ async function send(name, index, turn = 'turn-1') {
   assert.equal((await snapshot()).execution.reminderItems.filter(item=>item.state==='processing').length,1,'重启从原提醒记录恢复处理状态');
   assert.equal(await pet.locator('#planner-bubble').count(),0,'重启后也只有统一任务气泡');
   assert.deepEqual(await app.evaluate(()=>global.testNotices),[],'重启不重发提醒通知');
-  await wait(()=>document.querySelector('.completion-reminder-clock')?.textContent==='处理中 · 2:00');
+  await wait(()=>document.querySelector('.completion-reminder-time')?.textContent==='2:00');
   await advancePlanner(5);
   await wait(async()=>!(await window.whale.snapshot()).execution.reminderItems.some(item=>item.state==='processing'));
   assert.equal((await plannerAction('snapshot')).reminders[1].run.dueAt,plannerStart+7*60000,'处理结束后才计算下一轮');

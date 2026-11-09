@@ -1,6 +1,18 @@
 // 只负责提醒展示和用户操作；已读、持久化和跳转结果均由主进程决定。
 const $ = id => document.getElementById(id);
 
+function hourglass() {
+  const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+  svg.setAttribute('viewBox','0 0 16 16');svg.setAttribute('width','12');svg.setAttribute('height','12');svg.setAttribute('aria-hidden','true');
+  svg.innerHTML='<path d="M4 2.5h8M4 13.5h8M5 2.5c.2 2.4 1.4 3.5 3 5.5-1.6 2-2.8 3.1-3 5.5M11 2.5c-.2 2.4-1.4 3.5-3 5.5 1.6 2 2.8 3.1 3 5.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>';
+  return svg;
+}
+function reminderClock(text,ends) {
+  const clock=document.createElement('span');clock.className='completion-reminder-clock';clock.append(hourglass());
+  const label=document.createElement('span');label.className='completion-reminder-time';label.textContent=text;
+  if(ends!=null)label.dataset.ends=String(ends);
+  clock.append(label);return clock;
+}
 export function createReminderView({render,action,floating}) {
   let lastData;
   let reminderKey='';
@@ -41,7 +53,8 @@ export function createReminderView({render,action,floating}) {
       const button=document.createElement('button');button.className='completion-row';
       if(item.kind==='reminder') {
         wrapper.className='completion-reminder-row';wrapper.dataset.reminderId=item.id;wrapper.dataset.state=item.state;
-        button.classList.add('completion-reminder-title');button.dataset.noticeId=`reminder:${item.id}:${item.token}`;button.textContent=item.title;button.title=item.title;
+        button.classList.add('completion-reminder-title');button.dataset.noticeId=`reminder:${item.id}:${item.token}`;button.title=item.title;
+        const name=document.createElement('span');name.className='completion-reminder-name';name.textContent=item.title;button.append(name);
         const disabled=runningReminders.has(`${item.id}:${item.token}`);button.disabled=disabled;
         let clickTimer;
         function handleClick(event) {
@@ -49,13 +62,10 @@ export function createReminderView({render,action,floating}) {
           const run=()=>{if(wrapper.isConnected&&item.state==='waiting')void processReminder(item);};
           if(event.detail===0)run();else clickTimer=setTimeout(run,400);
         }
-        button.addEventListener('click',handleClick);wrapper.addEventListener('dblclick',()=>{clearTimeout(clickTimer);void action('planner');});wrapper.append(button);
-        if(item.state==='processing') {
-          const clock=document.createElement('span');clock.className='completion-reminder-clock';clock.dataset.ends=String(item.processingEndsAt);wrapper.append(clock);
-        } else {
-          const start=document.createElement('button');start.type='button';start.className='soft completion-reminder-action';start.textContent=item.processMinutes?'开始处理':'完成';
-          start.dataset.noticeId=button.dataset.noticeId+':action';start.disabled=disabled;start.addEventListener('click',handleClick);wrapper.append(start);
-        }
+        button.addEventListener('click',handleClick);wrapper.addEventListener('dblclick',()=>{clearTimeout(clickTimer);void action('planner');});
+        if(item.state==='processing') button.append(reminderClock('',item.processingEndsAt));
+        else if(item.processMinutes) button.append(reminderClock(`${item.processMinutes} 分钟`));
+        wrapper.append(button);
         return wrapper;
       }
       const isTask=Boolean(item.state);
@@ -115,7 +125,7 @@ export function createReminderView({render,action,floating}) {
       renderCompletionRows(rows,isBusy);
       for(const clock of $('completion-rows').querySelectorAll('[data-ends]')) {
         const seconds=Math.max(0,Math.ceil((Number(clock.dataset.ends)-Date.now())/1000));
-        clock.textContent=`处理中 · ${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`;
+        clock.textContent=`${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`;
       }
       return;
     }

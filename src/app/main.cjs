@@ -631,7 +631,13 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
         if(clientRunning[source]===false) {broadcast();return;}
         behavior.task(activity.snapshot());
         // completed 仅代表一轮回复结束，不代表任务整体成功或测试通过。
-        if (accepted.state === 'completed') nurture.workCompleted();
+        if (accepted.state === 'completed') {
+          nurture.workCompleted();
+          // 新完成记录把面板带到已完成；已在该分类时保留手动展开，超过阈值的新切换仍先折叠。
+          const staying=reminderView==='completed';
+          reminderView='completed';busyExpanded=false;pendingExpanded=false;remindersExpanded=false;
+          if(!staying)completionExpanded=false;
+        }
         if (accepted.state==='completed' || accepted.hook_event_name==='PermissionRequest') {
           const tasks=activity.snapshot();
           const remaining=tasks.working+tasks.pending;

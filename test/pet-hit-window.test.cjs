@@ -139,7 +139,7 @@ test('定时提醒在任务气泡内独立分类，按自身数量决定窗口�
   f.data.execution={count:0,pendingCount:0,reminderCount:1,items:[],pendingItems:[]};f.api.broadcast(f.data);
   assert.equal(f.pet.getBounds().height,380,'一条提醒沿用单行尺寸');
   f.data.execution.reminderCount=4;f.api.broadcast(f.data);assert.equal(f.pet.getBounds().height,320,'提醒超过阈值时收起');
-  f.data.execution.count=1;f.api.broadcast(f.data);assert.equal(f.pet.getBounds().height,380,'默认优先展示聊天，提醒排在最后');
+  f.data.execution.count=1;f.api.broadcast(f.data);assert.equal(f.pet.getBounds().height,380,'同时有聊天时仍默认展示执行中');
   f.data.execution.count=0;
   f.data.remindersExpanded=true;f.api.broadcast(f.data);assert.equal(f.pet.getBounds().height,440,'手动展开提醒分类');
   f.data.remindersExpanded=false;f.data.execution.reminderCount=1;f.data.planner.active[0].state='processing';f.api.broadcast(f.data);

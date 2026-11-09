@@ -80,10 +80,11 @@ button,input{-webkit-app-region:no-drag}.studio{display:flex;background:var(--ui
 #completion-rows>div:nth-child(6n+5){--row-hover:#c3e3e9;--row-ink:#32626b}
 #completion-rows>div:nth-child(6n){--row-hover:#c6d9fa;--row-ink:#24487d}
 .busy-expanded .completion-row{color:#947044}
-.completion-reminder-row{display:flex;align-items:center;gap:4px;min-height:27px}
-.completion-reminder-row .completion-row{flex:1;min-width:0;width:0}
-.completion-reminder-action{flex-shrink:0;min-height:24px;padding:3px 7px;font-size:10px;line-height:16px}
-.completion-reminder-clock{flex-shrink:0;font-size:10px;white-space:nowrap;font-variant-numeric:tabular-nums;color:#947044}
+.completion-reminder-row{min-height:27px}
+.completion-reminder-row .completion-row{display:flex;align-items:center;gap:6px;width:100%;height:auto;min-height:27px}
+.completion-reminder-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.completion-reminder-clock{display:inline-flex;align-items:center;gap:3px;flex-shrink:0;margin-left:auto;white-space:nowrap;font-variant-numeric:tabular-nums}
+.completion-reminder-clock svg{display:block;flex-shrink:0}
 
 .floating.single-completion .speech-stack{height:156px}
 
