@@ -325,3 +325,10 @@ test('历史与任务同时落盘，失败不新增；旧文件补入已完成�
   const corrupt=JSON.stringify(invalid);fs.writeFileSync(file,corrupt);f.restart();
   assert.match(f.p.snapshot().error,/停止写入/);assert.equal(fs.readFileSync(file,'utf8'),corrupt);
 });
+test('到期提醒先列出没有处理时长的，再列出有处理时长的',t=>{
+  const f=fixture(t);
+  f.add({title:'闭眼休息',processMinutes:3});
+  f.add({title:'喝水',processMinutes:0});
+  f.time('2026-10-26T10:02:00');
+  assert.deepEqual(f.p.summary().active.map(item=>item.title),['喝水','闭眼休息']);
+});

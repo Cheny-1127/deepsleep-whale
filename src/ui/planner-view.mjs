@@ -231,7 +231,7 @@ export function createPlannerView() {
     const reminders=$('reminder-list');reminders.replaceChildren();
     const matchesCategory=item=>category==='all'||item.category===category;
     const priority=item=>!item.enabled?3:item.run?.state==='waiting'?0:item.run?.state==='processing'?1:2;
-    const categoryReminders=data.reminders.filter(matchesCategory).sort((a,b)=>priority(a)-priority(b)||(a.run?.dueAt??Infinity)-(b.run?.dueAt??Infinity)),categoryTasks=data.tasks.filter(matchesCategory);
+    const categoryReminders=data.reminders.filter(matchesCategory).sort((a,b)=>(a.processMinutes>0)-(b.processMinutes>0)||priority(a)-priority(b)||(a.run?.dueAt??Infinity)-(b.run?.dueAt??Infinity)),categoryTasks=data.tasks.filter(matchesCategory);
     $('reminder-count').textContent=categoryReminders.length;
     const waiting=categoryReminders.filter(item=>item.enabled&&['waiting','processing'].includes(item.run?.state)).length;
     $('overview-summary').textContent=`${waiting} 项提醒待处理 · ${categoryTasks.filter(item=>item.completedAt===null).length} 项待办未完成`;

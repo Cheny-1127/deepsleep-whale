@@ -231,7 +231,7 @@ function createPlanner({dataDir,now=()=>Date.now(),onChange=()=>{},onDue=()=>{},
   // 广播给桌宠的摘要不含待办、备注或完整设置；小屋通过受限 IPC 单独读取快照。
   function summary() {
     const time=now();
-    return {revision,now:time,today:dateKey(time),notifications:state.notifications,error:error||writeError,active:error?[]:state.reminders.filter(item=>item.enabled&&item.run&&time>=item.run.windowStart&&time<item.run.windowEnd&&['waiting','processing'].includes(item.run.state)).map(({id,title,processMinutes,run})=>({id,title,processMinutes,...clone(run)}))};
+    return {revision,now:time,today:dateKey(time),notifications:state.notifications,error:error||writeError,active:error?[]:state.reminders.filter(item=>item.enabled&&item.run&&time>=item.run.windowStart&&time<item.run.windowEnd&&['waiting','processing'].includes(item.run.state)).map(({id,title,processMinutes,run})=>({id,title,processMinutes,...clone(run)})).sort((a,b)=>(a.processMinutes>0)-(b.processMinutes>0))};
   }
   function snapshot(){const {completedTasks,...current}=state;return {...clone(current),historyCount:completionHistory(state).length,...summary(),today:dateKey(now())};}
   function action(name,value) {
