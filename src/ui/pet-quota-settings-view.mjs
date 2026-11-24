@@ -55,6 +55,7 @@ export function createPetQuotaSettingsView() {
     cards.set(id,card);
     get('copy').setAttribute('aria-label',id === 'primary' ? '复制流量跟踪配置' : `复制流量跟踪配置-${number}`);
     get('copy').title=id === 'primary' ? '复制流量跟踪配置' : `复制流量跟踪配置-${number}`;
+    get('clock').addEventListener('change', () => void update('update', {clockSlot:get('clock').checked ? id : null}, undefined, card));
     get('copy').addEventListener('click',()=>void update('copy-config',id));
     if (id !== 'primary') {
       const title=`流量跟踪配置-${number}`;get('title').textContent=title;
@@ -86,6 +87,8 @@ export function createPetQuotaSettingsView() {
     for(const card of cards.values()) {
       // 主配置不占副本名额；所有复制入口共用同一上限，删除后由快照统一恢复。
       const config=configFor(card), copyLimitReached=configs.length>=3;
+      card.get('clock').checked = data.settings.clockSlot === card.id;
+      card.get('clock').disabled = saving;
       card.get('copy').disabled=saving||copyLimitReached;
       card.get('copy').title=copyLimitReached ? '最多只能创建 3 条副配置，请先删除已有副配置' : card.id==='primary' ? '复制流量跟踪配置' : `复制流量跟踪配置-${config.number ?? card.id}`;
       if(card.id!=='primary') {
@@ -115,11 +118,11 @@ export function createPetQuotaSettingsView() {
   }
   async function invoke(name,value) {const result=await window.whale.petQuota(name,value);if(result.error)throw Error(result.error);return result.value;}
   function error(message,card=cards.get('primary')) {card.get('error').textContent=message;card.get('error').hidden=false;}
-  async function update(name,value,commitCard) {
+  async function update(name,value,commitCard,errorCard=commitCard) {
     if(saving||!latest)return;
     revision++;saving=true;for(const card of cards.values())card.get('error').hidden=true;render(latest);
     try {const data=await invoke(name,value);if(commitCard)commitCard.baseline=null;render(data);}
-    catch(reason){error(reason.message||'流量跟踪配置保存失败，请重试。',commitCard);}
+    catch(reason){error(reason.message||'流量跟踪配置保存失败，请重试。',errorCard);}
     finally {saving=false;render(latest);}
   }
   async function apply(card) {

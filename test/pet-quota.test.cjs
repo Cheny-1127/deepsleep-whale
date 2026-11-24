@@ -15,7 +15,7 @@ test('tracking, independent collapsed sections and thresholds survive restart an
   f.settings.update({accountId:5, yellowBelow:40, redBelow:15, accountsExpanded:false});
   f.settings.update({configExpanded:false});
   const restored = createPetQuotaSettings({dataDir:f.dir});
-  assert.deepEqual(restored.snapshot(), {accountId:5, yellowBelow:40, redBelow:15, accountsExpanded:false, configExpanded:false, trackingConfigs:[], nextConfigId:2});
+  assert.deepEqual(restored.snapshot(), {accountId:5, yellowBelow:40, redBelow:15, accountsExpanded:false, configExpanded:false, trackingConfigs:[], nextConfigId:2, clockSlot:null});
   restored.update({accountsExpanded:true});assert.equal(restored.snapshot().configExpanded, false);
   fs.mkdirSync(path.join(f.dir, 'pet-quota-settings.json.tmp'));
   assert.throws(() => restored.update({accountId:6}), /保存失败/);

@@ -53,11 +53,47 @@ export function createPetQuotaView({say = () => {}} = {}) {
     if (data.remaining == null) bar.meter.removeAttribute('aria-valuenow');
     else bar.meter.setAttribute('aria-valuenow', String(data.remaining));
   }
+  let clockBar = null, clockTimer;
+  function tickClock() {
+    const now = new Date();
+    const beijing = new Date(now.getTime() + 8 * 3600000).toISOString();
+    clockBar.clockDate.textContent = beijing.slice(5, 10);
+    clockBar.clockTime.textContent = beijing.slice(11, 19);
+    const label = clockBar.name || document.getElementById('state-label');
+    clockBar.clock.title = '北京时间 GMT+8 · ' + label.textContent + '\n' + clockBar.controls.title;
+  }
+  function setClockBar(bar) {
+    if (bar === clockBar) return;
+    if (clockBar) {
+      clearInterval(clockTimer);
+      clockBar.clock.hidden = true;
+      (clockBar.name || document.getElementById('state-label')).hidden = false;
+      clockBar.controls.classList.remove('with-clock');
+    }
+    clockBar = bar;
+    if (!bar) return;
+    const label = bar.name || document.getElementById('state-label');
+    if (!bar.clock) {
+      bar.clock = document.createElement('time');
+      bar.clock.className = 'pet-clock';
+      bar.clockDate = document.createElement('span');
+      bar.clockTime = document.createElement('strong');
+      bar.clock.append(bar.clockDate, ' ', bar.clockTime);
+      label.after(bar.clock);
+    }
+    bar.controls.classList.add('with-clock');
+    label.hidden = true;
+    bar.clock.hidden = false;
+    tickClock();
+    clockTimer = setInterval(tickClock, 1000);
+  }
   function render(data) {
     renderBar(bars.get('primary'), data.tracking);
     const extras=data.extraTrackings || [];
     for(const [id,bar] of bars)if(id!=='primary'&&!extras.some(item=>item.id===id)){bar.controls.remove();bars.delete(id);}
     for(const item of extras)renderBar(bars.get(item.id)||makeBar(item.id,item.number ?? item.id),item.tracking);
+    const selected = bars.get(data.settings?.clockSlot);
+    setClockBar(selected?.tracking ? selected : null);
     renderRefresh();
   }
   async function sync() {

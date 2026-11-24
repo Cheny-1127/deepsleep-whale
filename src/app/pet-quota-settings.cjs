@@ -1,6 +1,6 @@
 'use strict';
 const fs = require('node:fs'), path = require('node:path');
-const defaults = {accountId:null, yellowBelow:30, redBelow:10, accountsExpanded:true, configExpanded:true, trackingConfigs:[], nextConfigId:2};
+const defaults = {accountId:null, yellowBelow:30, redBelow:10, accountsExpanded:true, configExpanded:true, trackingConfigs:[], nextConfigId:2, clockSlot:null};
 function validateTracking(value) {
   if (value.accountId !== null && (!Number.isSafeInteger(value.accountId) || value.accountId <= 0)) throw Error('请选择有效账号');
   if (![value.yellowBelow, value.redBelow].every(n => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 100) ||
@@ -27,6 +27,7 @@ function validate(value) {
     next.nextConfigId = Math.max(next.nextConfigId, config.id + 1);
     return {...config};
   });
+  if (next.clockSlot !== null && next.clockSlot !== 'primary' && !ids.has(next.clockSlot)) throw Error('请选择有效的北京时间展示行');
   return next;
 }
 function createPetQuotaSettings({dataDir}) {

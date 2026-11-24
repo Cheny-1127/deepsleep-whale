@@ -33,7 +33,7 @@ function createPetQuota({settings, quota, groups, clock = {now:() => Date.now(),
   }
   function updateSettings(patch) {
     if (!patch || typeof patch !== 'object' || Array.isArray(patch) || !Object.keys(patch).length ||
-      Object.keys(patch).some(key => !['accountId','yellowBelow','redBelow','accountsExpanded','configExpanded'].includes(key))) throw Error('无效的流量跟踪配置');
+      Object.keys(patch).some(key => !['accountId','yellowBelow','redBelow','accountsExpanded','configExpanded','clockSlot'].includes(key))) throw Error('无效的流量跟踪配置');
     if (Object.hasOwn(patch,'accountId') && patch.accountId !== settings.snapshot().accountId) validateAccount(patch.accountId);
     const conflicts = Object.hasOwn(patch,'accountId') && patch.accountId !== null ? settings.snapshot().trackingConfigs.filter(config =>
       config.accountId === patch.accountId || temporaryAccounts.get(config.id) === patch.accountId).map(config => config.id) : [];
@@ -111,7 +111,9 @@ function createPetQuota({settings, quota, groups, clock = {now:() => Date.now(),
   function deleteConfig(id) {
     if (id === 'primary') throw Error('主配置不可删除');
     configFor(id);
-    settings.update({trackingConfigs:settings.snapshot().trackingConfigs.filter(config => config.id !== id)});
+    const state = settings.snapshot();
+    settings.update({trackingConfigs:state.trackingConfigs.filter(config => config.id !== id),
+      clockSlot:state.clockSlot === id ? null : state.clockSlot});
     resetTemporaryTracking(id);return snapshot();
   }
   async function sync() {

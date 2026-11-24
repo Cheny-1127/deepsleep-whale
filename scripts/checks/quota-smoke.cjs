@@ -57,6 +57,57 @@ let app;
   }
   let {panel,pet,errors}=await launch();
   assert.deepEqual(await panel.locator('.quota-credits').allTextContents(),['62,500','0']);
+  if (process.env.WHALE_QUOTA_CLOCK_ONLY === '1') {
+    const primary = panel.locator('#quota-pet-clock');
+    const secondary = panel.locator('#quota-config-2-clock');
+    const primaryBar = pet.locator('#pet-quota-controls');
+    const clock = pet.locator('.pet-clock:visible');
+    const originalHeight = await primaryBar.evaluate(el => el.offsetHeight);
+    assert.equal(await primary.isChecked(), false);
+    await primary.check();
+    await primaryBar.locator('.pet-clock').waitFor();
+    assert.equal(await pet.locator("#pet-quota-percent").isVisible(), false);
+    const first = await clock.textContent();
+    assert.match(first, /^\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    await pet.waitForFunction(first => document.querySelector('.pet-clock').textContent !== first, first);
+    const offset = await clock.evaluate(el => {
+      const now = Date.now(), year = new Date(now + 8 * 3600000).getUTCFullYear();
+      return now - Date.parse(year + '-' + el.textContent.replace(' ', 'T') + '+08:00');
+    });
+    assert.ok(Math.abs(offset) < 3000, '时间与 GMT+8 一致');
+    assert.equal(await primaryBar.evaluate(el => el.offsetHeight), originalHeight);
+    await panel.locator('#quota-pet-copy').click();
+    for (const checkbox of [primary, secondary]) {
+      const layout = await checkbox.evaluate(input => {
+        const label = input.closest('label');
+        const range = document.createRange();
+        range.selectNodeContents(label.lastChild);
+        return {width:input.offsetWidth, lines:range.getClientRects().length,
+          gap:range.getBoundingClientRect().left - input.getBoundingClientRect().right};
+      });
+      assert.equal(layout.width, 14);
+      assert.equal(layout.lines, 1);
+      assert.ok(layout.gap >= 0 && layout.gap <= 8);
+    }
+    await secondary.check();
+    const secondBar = pet.locator('#pet-quota-config-2');
+    await secondBar.locator('.pet-clock').waitFor();
+    assert.equal(await primary.isChecked(), false);
+    assert.equal(await clock.count(), 1);
+    assert.equal(await pet.locator('#state-label').isVisible(), true);
+    assert.equal(await pet.locator('#pet-quota-percent').isVisible(), true);
+    assert.equal(await secondBar.evaluate(el => el.scrollWidth <= el.clientWidth), true);
+    await app.close(); app = null;
+    ({panel, pet, errors} = await launch());
+    assert.equal(await panel.locator('#quota-config-2-clock').isChecked(), true);
+    await pet.locator('#pet-quota-config-2 .pet-clock').waitFor();
+    await panel.locator('#quota-config-2-clock').uncheck();
+    await pet.locator('#pet-quota-config-2 .pet-clock').waitFor({state:'hidden'});
+    assert.equal(await pet.locator('#pet-quota-config-2 [data-field="name"]').isVisible(), true);
+    assert.deepEqual(errors, []);
+    console.log('Beijing clock OK: format, ticking, fixed height, move, restart and disable');
+    return;
+  }
   if(process.env.WHALE_QUOTA_DELETE_ONLY==='1') {
     const snapshot=async()=>(await panel.evaluate(()=>window.whale.petQuota('snapshot'))).value;
     await panel.evaluate(()=>window.whale.petQuota('update',{accountId:5}));
