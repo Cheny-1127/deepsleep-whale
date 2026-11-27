@@ -43,7 +43,7 @@ export function createHookSettingsView({render}) {
         const capabilities=document.createElement('p');capabilities.className='source-capabilities';capabilities.textContent=adapter.capabilities;
         const config=document.createElement('details');config.className='hook-config-preview';
         const configTitle=document.createElement('summary');configTitle.textContent='查看接入配置';
-        const target=document.createElement('p');target.textContent=adapter.id==='cursor'?`配置文件：${adapter.target}。开启总开关时自动补齐全部 5 项配置，保留其他内容；逐项开关仅控制桌宠是否接收。`:`合并到 ${adapter.target}，保留已有配置。`;
+        const target=document.createElement('p');target.textContent=adapter.id!=='codex'?`配置文件：${adapter.target}。开启总开关时自动补齐全部 ${adapter.mappings.length} 项配置，保留其他内容；逐项开关仅控制桌宠是否接收。`:`合并到 ${adapter.target}，保留已有配置。`;
         const preview=document.createElement('textarea');preview.readOnly=true;preview.value=adapter.config;preview.setAttribute('aria-label',`${adapter.name} Hooks 配置预览`);preview.spellcheck=false;
         const copy=document.createElement('button');copy.className='outline';copy.textContent='复制配置';
         copy.addEventListener('click',async()=>{try {await window.whale.action('copy-hook-config',adapter.id);$('hooks-feedback').textContent=`已复制 ${adapter.name} 配置`;}catch {$('hooks-feedback').textContent='复制失败，可在预览中手动复制。';}});
@@ -66,7 +66,7 @@ export function createHookSettingsView({render}) {
             const toggle=document.createElement('label');toggle.className='source-switch event-switch';
             const name=document.createElement('span');name.className='event-description';
             const chinese=document.createElement('strong');
-            chinese.textContent=({UserPromptSubmit:'提交提示词',PreToolUse:'工具调用前',PermissionRequest:'请求操作权限',PostToolUse:'工具调用后',Stop:'本轮回复结束',Interrupt:'中断回复',SessionEnd:'会话结束',beforeSubmitPrompt:'提交提示词前',postToolUse:'工具调用成功',postToolUseFailure:'工具调用失败',stop:'本轮回复结束',sessionEnd:'会话结束'})[match.event]||match.label;
+            chinese.textContent=({UserPromptSubmit:'提交提示词',PreToolUse:'工具调用前',PermissionRequest:'请求操作权限',PostToolUse:'工具调用后',PostToolUseFailure:'工具调用失败',StopFailure:'接口报错结束',Stop:'本轮回复结束',Interrupt:'中断回复',SessionEnd:'会话结束',beforeSubmitPrompt:'提交提示词前',postToolUse:'工具调用成功',postToolUseFailure:'工具调用失败',stop:'本轮回复结束',sessionEnd:'会话结束'})[match.event]||match.label;
             const raw=document.createElement('code');raw.textContent=match.event;name.append(chinese,raw);
             const input=document.createElement('input');input.type='checkbox';input.dataset.source=adapter.id;input.dataset.event=match.event;
             input.id=`event-enabled-${adapter.id}-${match.event}`;input.setAttribute('aria-label',`接收 ${adapter.name} ${match.event}`);
@@ -101,7 +101,7 @@ export function createHookSettingsView({render}) {
       $(`source-caption-${adapter.id}`).textContent=enabled?'接收事件':'已暂停';
       const check=data.hookAvailability?.[adapter.id];
       const count=Object.values(check?.events||{}).filter(event=>event.available).length;
-      $(`source-availability-${adapter.id}`).textContent=check?.state==='checking'?'正在检测客户端配置…':`${adapter.id==='cursor'?'已配置':'可接收'} ${count} / ${adapter.mappings.length} 项 · ${check?.message||'尚未检测'}`;
+      $(`source-availability-${adapter.id}`).textContent=check?.state==='checking'?'正在检测客户端配置…':`${adapter.id==='codex'?'可接收':'已配置'} ${count} / ${adapter.mappings.length} 项 · ${check?.message||'尚未检测'}`;
       $(`refresh-hooks-${adapter.id}`).disabled=check?.state==='checking'||$(`refresh-hooks-${adapter.id}`).dataset.saving==='true';
       $(`source-enabled-${adapter.id}`).disabled=check?.state==='checking'||$(`source-enabled-${adapter.id}`).dataset.saving==='true';
       const status=data.sourceStatus[adapter.id];

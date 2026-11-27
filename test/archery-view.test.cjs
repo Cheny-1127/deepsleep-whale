@@ -17,7 +17,7 @@ function fixture() {
   let detail=async id=>({id,sql:'SELECT 1; <img src=x onerror=bad()>',review:'审核结果',execution:'尚未执行'});
   let connection={valid:true,configFile:'/fixture/config.toml',defaultFile:'/default/config.toml',permissions:{detail:true,approve:true,execute:false}};
   const calls=[],timers=[],confirmations=[];let onConfirmation,confirmed=false,confirmImpl=async()=>confirmed;
-  const window={whale:{onArcheryConfirmation:callback=>onConfirmation=callback,archery:async(name,value)=>{
+  let onLarge;const window={whale:{onArcheryLargeConfirmation:callback=>onLarge=callback,onArcheryConfirmation:callback=>onConfirmation=callback,archery:async(name,value)=>{
     calls.push({name,value});if(fail)throw new Error('raw transport failure');
     if(name==='connection')return {value:connection};
     if(name==='choose-config')return {value:'/chosen/config.toml'};
@@ -30,7 +30,7 @@ function fixture() {
   const source=fs.readFileSync(path.join(__dirname,'../src/ui/archery-view.mjs'),'utf8').replace(/^import .*;\n/gm,'').replace('export function','function');
   vm.runInNewContext(source+'\ncreateArcheryView();',{window,document:{getElementById:id=>elements.get(id),createElement:tag=>Object.assign(new Element(),{tagName:tag})},Date,updateSidebarStatus:()=>{},confirmAction:async options=>{confirmations.push(options);return confirmImpl(options);},setInterval:fn=>timers.push(fn)});
   const get=id=>elements.get('archery-'+id);
-  return {get,calls,timers,confirmations,confirmation:request=>onConfirmation(request),setConfirmed:value=>confirmed=value,setConfirm:fn=>confirmImpl=fn,set:value=>data={...data,...value,...(value.items?{items:value.items.map(item=>({status:'workflow_manreviewing',...item}))}:{})},setConnection:value=>connection={...connection,...value},setDetail:fn=>detail=fn,fail:()=>fail=true,async sync(){elements.get('nav-archery').click();await tick();}};
+  return {get,calls,timers,confirmations,confirmation:request=>onConfirmation(request),large:request=>onLarge(request),setConfirmed:value=>confirmed=value,setConfirm:fn=>confirmImpl=fn,set:value=>data={...data,...value,...(value.items?{items:value.items.map(item=>({status:'workflow_manreviewing',...item}))}:{})},setConnection:value=>connection={...connection,...value},setDetail:fn=>detail=fn,fail:()=>fail=true,async sync(){elements.get('nav-archery').click();await tick();}};
 }
 test('review actions expose rejection only while reviewing and respect its separate permission and shared guard',async()=>{
   const f=fixture();f.set({items:[{id:566,title:'待审核'},{id:567,title:'已审核',status:'workflow_review_pass'}]});await f.sync();
@@ -254,4 +254,15 @@ test('execution has a distinct confirmation and reuses the same cached SQL witho
   assert.equal(f.confirmations[0].title,'执行工单 #566？');assert.equal(f.confirmations[0].confirmLabel,'执行');assert.match(f.confirmations[0].message,/请求执行这一笔工单的 SQL/);
   assert.equal(f.calls.filter(c=>c.name==='approval-detail').length,0);
   assert.equal(f.calls.length,1);assert.equal(f.calls[0].name,'confirm-approval');assert.equal(f.calls[0].value.token,'execute-one');assert.equal(f.calls[0].value.confirmed,true);
+});
+
+test('large-detail questions from the main process use the in-app dialog stacked over an open review and answer with the token',async()=>{
+  const f=fixture();f.setConfirmed(true);
+  await f.large({token:'large-1',item:{id:779,title:'补代运营及购入剧项目',bytes:70000}});
+  const options=f.confirmations.at(-1);
+  assert.equal(options.owner,f.get('view'));assert.equal(options.title,'完整加载工单 #779 的详情？');assert.equal(options.confirmLabel,'完整加载');
+  assert.match(options.message,/补代运营及购入剧项目\n详情约 69 KB/);assert.equal(options.stacked,true);assert.equal(options.tag,'large-large-1');
+  assert.deepEqual(JSON.parse(JSON.stringify(f.calls.at(-1))),{name:'confirm-large-detail',value:{token:'large-1',confirmed:true}});
+  f.setConfirmed(false);await f.large({token:'large-2',item:{id:780,title:'x',bytes:1}});
+  assert.deepEqual(JSON.parse(JSON.stringify(f.calls.at(-1))),{name:'confirm-large-detail',value:{token:'large-2',confirmed:false}});
 });

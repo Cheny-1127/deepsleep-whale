@@ -3,7 +3,7 @@ const EVENTS = new Set(['UserPromptSubmit', 'PreToolUse', 'PermissionRequest', '
 const STATES = { UserPromptSubmit: 'thinking', PreToolUse: 'working', PermissionRequest: 'approval', PostToolUse:'thinking', Stop: 'completed', Interrupt: 'idle', SessionEnd: 'idle' };
 const { ToolActivity } = require('./tool-activity.cjs');
 const { randomUUID } = require('node:crypto');
-const { sourceOf, CURSOR_EVENTS } = require('../shared/hook-events.cjs');
+const { SOURCES, sourceOf, sourceOfSession, rawEventAllowed } = require('../shared/hook-events.cjs');
 const fallbackTitle = id => `聊天 ${id.slice(-8)}`;
 const cleanTitle = title => typeof title === 'string' ? title.replace(/[\u0000-\u001f\u007f]/g,' ').trim().slice(0,160) : '';
 
@@ -14,15 +14,16 @@ function sanitizeEvent(input) {
   const session = id(input.session_id);
   if (!session) return null;
   const event={ hook_event_name: input.hook_event_name, session_id: session, turn_id: id(input.turn_id) || 'unknown' };
-  if(input.source!==undefined&&!['codex','cursor'].includes(input.source))return null;
-  if(input.source==='cursor') {
-    if(!session.startsWith('cursor:'))return null;
-    event.source='cursor';
+  if(input.source!==undefined&&!SOURCES.includes(input.source))return null;
+  const source=sourceOf(input);
+  if(sourceOfSession(session)!==source)return null;
+  if(source!=='codex') {
+    event.source=source;
     if(input.raw_event!==undefined) {
-      if(!Object.hasOwn(CURSOR_EVENTS,input.raw_event)||(CURSOR_EVENTS[input.raw_event]!==event.hook_event_name&&!(input.raw_event==='stop'&&event.hook_event_name==='Interrupt')))return null;
+      if(!rawEventAllowed(source,input.raw_event,event.hook_event_name))return null;
       event.raw_event=input.raw_event;
     }
-  } else if(session.startsWith('cursor:'))return null;
+  }
   // 仅保留调用标识和名称用于匹配；工具输入和返回正文始终丢弃。
   if(['PreToolUse','PermissionRequest','PostToolUse'].includes(event.hook_event_name)) {
     for(const key of ['tool_use_id','tool_name'])if(id(input[key]))event[key]=input[key];
@@ -31,9 +32,10 @@ function sanitizeEvent(input) {
 }
 
 class Activity {
-  constructor({ saved, resolveTitle = () => null, resolveChat, clock=Date.now, sourceRunning={codex:true,cursor:true} } = {}) {
+  constructor({ saved, resolveTitle = () => null, resolveChat, resolveRead = () => null, clock=Date.now, sourceRunning={codex:true,cursor:true,claude:true} } = {}) {
     this.sessions = new Map(); this.seen = new Set(); this.last = null; this.count = 0; this.tools=new Map();this.closedTurns=new Set();
     this.resolveChat=resolveChat || (id=>({kind:'unavailable',title:resolveTitle(id)}));
+    this.resolveRead=resolveRead;
     this.clock=clock; this.notices=[];this.sourceRunning={...sourceRunning};
     // 只恢复未读和去重记录；上次进程的“工作中”不能当作现在仍在工作。
     if (saved?.version===1) {
@@ -48,6 +50,12 @@ class Activity {
     this.consolidate();
   }
   chat(id) {
+    if(id.startsWith('claude:')) {
+      let title='';try {title=cleanTitle(this.resolveChat(id)?.title);}catch {}
+      // 会话删除或记录暂不可读时沿用已知标题；命令行会话没有标题，显示短 ID。
+      const known=this.sessions.get(id)?.title||this.notices.find(item=>item.session_id===id)?.title;
+      return {kind:'chat',title:title?`Claude · ${title}`:known||`Claude · ${id.slice(-8)}`};
+    }
     if(id.startsWith('cursor:')) {
       let title;try {
         const chat=this.resolveChat(id);
@@ -82,11 +90,19 @@ class Activity {
     for(const id of this.sessions.keys())if(id.startsWith('cursor:')&&this.chat(id).kind==='other') {
       this.pauseSession(id);removed=true;
     }
+    // 进行中的 Claude 会话可能在开始后才生成标题或改名，不必等下一个事件。
+    for(const [id,session] of this.sessions)if(sourceOf(session)==='claude')session.title=this.chat(id).title;
     this.consolidate();
-    if(readState) {
-      // Stop 先于桌面侧栏刷新；保留同步窗口，陈旧或不可用状态不能清除提醒。
-      this.notices=this.notices.filter(item=>sourceOf(item)==='cursor' || this.sourceRunning.codex!==true || now-item.time<3000 || readState.updatedAt<item.time || readState.unreadIds.has(item.session_id));
-    }
+    // Stop 先于桌面侧栏刷新；保留同步窗口，陈旧或不可用状态不能清除提醒。
+    this.notices=this.notices.filter(item=>{
+      const source=sourceOf(item);
+      if(source==='cursor'||this.sourceRunning[source]!==true||now-item.time<3000)return true;
+      const read=this.resolveRead(item);
+      if(read!==null)return !read;
+      // Codex 回执无法判断时，才用旧版侧栏未读列表；它不适用于其他来源。
+      if(source!=='codex')return true;
+      return !readState||readState.updatedAt<item.time||readState.unreadIds.has(item.session_id);
+    });
     // 只有活动列表被清理、未读没有变化时，也必须通知调用方刷新计数和工作动画。
     return removed||before!==JSON.stringify(this.notices);
   }
@@ -100,7 +116,7 @@ class Activity {
   // 持久化包含暂时隐藏的提醒；客户端运行状态只参与展示，不改变完成记录。
   exportState() { return {version:1,notices:this.notices,seen:[...this.seen]}; }
   setSourceRunning(source,running) {
-    if(!['codex','cursor'].includes(source)||typeof running!=='boolean'||this.sourceRunning[source]===running)return false;
+    if(!SOURCES.includes(source)||typeof running!=='boolean'||this.sourceRunning[source]===running)return false;
     this.sourceRunning[source]=running;
     if(!running)this.pauseSource(source);
     return true;
@@ -118,7 +134,7 @@ class Activity {
     if(this.last?.session_id===id)this.last=[...this.sessions.values()].at(-1)||null;
   }
   resetCodexApprovalObservations() {
-    for(const [id,tools] of this.tools)if(!id.startsWith('cursor:'))tools.resetRuntime();
+    for(const [id,tools] of this.tools)if(sourceOfSession(id)==='codex')tools.resetRuntime();
   }
   syncCodexApproval({sessionId,turnId,waiting,active,requests}) {
     const session=this.sessions.get(sessionId),tools=this.tools.get(sessionId);
@@ -146,6 +162,8 @@ class Activity {
     if(event.turn_id!=='unknown' && ['PreToolUse','PermissionRequest','PostToolUse'].includes(event.hook_event_name) && this.closedTurns.has(turnKey))return null;
     // 同一轮 Stop 只处理一次，避免重复通知和累计成长；缺少轮次 ID 时，
     // 仅忽略连续的完成状态，不能把该会话后续所有回复都当作重复事件。
+    // Claude 可能自行续跑（如后台任务返回）；新的开始事件重新打开本轮，否则后续工具和完成会被当作迟到事件丢弃。
+    if(event.source==='claude'&&event.hook_event_name==='UserPromptSubmit') {this.closedTurns.delete(turnKey);this.seen.delete(`${turnKey}:Stop`);}
     const previous = this.sessions.get(event.session_id);
     if (state === 'completed' && (event.turn_id !== 'unknown' ? this.seen.has(key) : previous?.state === 'completed' || (!previous && this.seen.has(key)))) return null;
     let tools=this.tools.get(event.session_id);

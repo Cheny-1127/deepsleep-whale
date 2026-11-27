@@ -1,7 +1,8 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
 const {workSummary}=require('../src/reports/work-summary.cjs');
-const {dailyContent,weekContent}=require('../src/reports/model.cjs');
+const {workMatches}=require('../src/reports/work-matches.cjs');
+const {dateKey,dailyContent,weekContent}=require('../src/reports/model.cjs');
 const repo='https://gitlab.example.test/business/pay',time=(date,hour=18)=>Date.parse(date+'T'+hour+':00:00+08:00');
 const mr={iid:1,title:'新增支付方式',url:repo+'/-/merge_requests/1',state:'merged',sourceBranch:'feat-cy-pay',targetBranch:'main',mergedAt:time('2026-10-27')};
 function entry(id,date,meta={},extra={}){return {id,sourceKey:id,date,title:'开发支付方式',details:'',project:'business/pay',source:'gitlab',status:'done',included:true,sourceActive:true,sourceMeta:{repositoryUrl:repo,committedAt:time(date,10),...meta},...extra};}
@@ -22,6 +23,79 @@ test('weekly summary counts one cross-day feature while retaining each day in de
   assert.match(summary,/count=1/);assert.equal((summary.match(/新增支付方式/g)||[]).length,1);assert.match(summary,/已完成/);
   for(const date of ['2026-10-26','2026-10-27','2026-10-28'])assert.match(details,new RegExp(date));
   assert.match(details,/开发中/);assert.match(details,/待发布/);assert.match(details,/已完成/);
+});
+
+test('test and main merges for the same GitLab feature count as one and retain their dates',()=>{
+  const project='ossv/d-ossv-serve',base='https://gitlab.example.test/'+project+'/-/merge_requests/';
+  const primary={...mr,iid:445,url:base+'445',sourceBranch:'feat-cy-1120-order-media-channel',mergedAt:time('2026-11-21')};
+  const uat={...primary,iid:444,url:base+'444',targetBranch:'uat',mergedAt:time('2026-11-20')};
+  const entries=[
+    entry('code','2026-11-20',{mergeRequests:[uat,primary]},{project}),
+    entry('uat','2026-11-20',{mergeRequests:[uat],event:'merged'},{project}),
+    entry('main','2026-11-21',{mergeRequests:[primary],event:'merged'},{project})
+  ];
+  const daily=(date)=>workSummary(entries.filter(entry=>entry.date===date),[],{context:entries}).items.map(item=>item.badge);
+  assert.deepEqual(daily('2026-11-20'),['测试中']);
+  assert.deepEqual(daily('2026-11-21'),['已发布']);
+  const report=weekContent(entries,'2026-11-22','{{count}}\n{{summary}}\n发布\n{{releases}}').content;
+  assert.match(report,/^1\n/);
+  assert.match(report,/发布\n- \*\*新增支付方式\*\*（已发布）/);
+  const savedWork={id:'saved',date:'2026-11-20',title:'手工整理的订单功能',description:'保留整理说明',members:['mr:'+uat.url]};
+  const updated=workSummary(entries.slice(0,2),[savedWork],{context:entries}).items;
+  assert.equal(updated[0].title,savedWork.title);
+  assert.equal(updated[0].badge,'测试中');
+});
+
+test('main merges in nested ossv projects use the automatic release policy',()=>{
+  const day='2026-11-20';
+  for(const [project,badge] of [['ossv/backserver/d-ossv-invest','已发布'],['other/backserver/d-ossv-invest','待发布']]){
+    const url='https://gitlab.example.test/'+project+'/-/merge_requests/59';
+    const ref={...mr,iid:59,url,sourceBranch:'feat-cy-1120-tt-website-usage',mergedAt:time(day,20)};
+    const code=entry('merge',day,{mergeRequests:[ref],event:'merged'},{project});
+    assert.equal(workSummary([code]).items[0].badge,badge);
+  }
+});
+
+test('environment-suffixed test merges roll into their own repository’s published work',()=>{
+  const project='ossv/d-ossv-serve',base='https://gitlab.example.test/'+project+'/-/merge_requests/';
+  const sourceBranch='feat-cy-1120-order-media-channel';
+  const make=(iid,targetBranch,branch,date)=>({...mr,iid,url:base+iid,targetBranch,sourceBranch:branch,mergedAt:time(date)});
+  const main=make(445,'main',sourceBranch,'2026-11-20');
+  const testMr=make(440,'test',sourceBranch+'-test','2026-11-19');
+  const uat=make(443,'uat',sourceBranch+'-uat','2026-11-20');
+  const directUat=make(444,'uat',sourceBranch,'2026-11-20');
+  const other=make(446,'uat','feat-cy-1120-user-media-channel-uat','2026-11-20');
+  const otherProject={...uat,url:'https://gitlab.example.test/ossv/other/-/merge_requests/443'};
+  const lateUat=make(447,'uat',sourceBranch+'-uat','2026-11-21');
+  const fact=(mr,project)=>entry(String(mr.iid)+project,dateKey(mr.mergedAt),{mergeRequests:[mr],event:'merged'},{project});
+  const prior=fact(testMr,project),subsequent=fact(lateUat,project);
+  const current=[main,uat,directUat,other].map(mr=>fact(mr,project)).concat(fact(otherProject,'ossv/other'));
+  const context=[prior,...current,subsequent];
+  assert.deepEqual(workSummary([prior],[],{context}).items.map(item=>item.badge),['测试中']);
+  const items=workSummary(current,[],{context}).items;
+  const published=items.find(item=>item.mr?.iid===445);
+  assert.equal(items.length,3);
+  assert.equal(published.badge,'已发布');
+  assert.equal(published.entryIds.length,3);
+  assert.ok(published.memberKeys.includes('mr:'+uat.url));
+  assert.deepEqual(items.filter(item=>item.badge==='测试中').map(item=>item.mr.url).sort(),[other.url,otherProject.url].sort());
+  assert.deepEqual(workSummary([subsequent],[],{context}).items.map(item=>item.badge),['测试中']);
+  assert.match(weekContent(context,'2026-11-22','{{count}}\n{{summary}}').content,/^4\n/);
+});
+
+test('previously confirmed groups retain their main branch identities after adding test MR aliases',()=>{
+  const date='2026-11-20',project='ossv/d-ossv-serve',url='https://gitlab.example.test/'+project+'/-/merge_requests/';
+  const order={...mr,iid:1,url:url+'1',sourceBranch:'feat-cy-1120-order-media-channel'};
+  const orderTest={...order,iid:2,url:url+'2',sourceBranch:order.sourceBranch+'-uat',targetBranch:'uat'};
+  const user={...order,iid:3,url:url+'3',sourceBranch:'feat-cy-1120-user-media-channel'};
+  const entries=[order,orderTest,user].map(ref=>entry('code-'+ref.iid,date,{mergeRequests:[ref]},{project}));
+  const groups=[
+    {id:'orders',date,title:'统一订单媒体渠道字段',description:'',members:['mr:'+order.url]},
+    {id:'users',date,title:'用户管理和游客管理支持媒体渠道筛选',description:'',members:['mr:'+user.url]}
+  ];
+  const {items}=workSummary(entries,groups);
+  assert.equal(items.length,2);
+  assert.deepEqual(workMatches(items,entries).items,[]);
 });
 
 test('a release next week never completes the previous week or changes the prior daily report',()=>{

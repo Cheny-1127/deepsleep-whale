@@ -7,13 +7,16 @@ const event=(name,id,source='codex')=>({hook_event_name:name,session_id:source==
 
 test('presence matches only desktop main executables, including the ChatGPT Codex host',()=>{
   const helpers='/Applications/Cursor.app/Contents/Frameworks/Cursor Helper.app/Contents/MacOS/Cursor Helper\n/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex\n/usr/local/bin/codex\n';
-  assert.deepEqual(detectClients(helpers),{codex:false,cursor:false});
-  assert.deepEqual(detectClients(helpers+'/Applications/Cursor.app/Contents/MacOS/Cursor\n/Applications/ChatGPT.app/Contents/MacOS/ChatGPT'),{codex:true,cursor:true});
-  assert.deepEqual(detectClients('/Users/test/My Apps/Codex.app/Contents/MacOS/Codex'),{codex:true,cursor:false});
+  assert.deepEqual(detectClients(helpers),{codex:false,cursor:false,claude:false});
+  assert.deepEqual(detectClients(helpers+'/Applications/Cursor.app/Contents/MacOS/Cursor\n/Applications/ChatGPT.app/Contents/MacOS/ChatGPT'),{codex:true,cursor:true,claude:false});
+  assert.deepEqual(detectClients('/Users/test/My Apps/Codex.app/Contents/MacOS/Codex'),{codex:true,cursor:false,claude:false});
+  for(const file of ['/Applications/Claude.app/Contents/MacOS/Claude','/Users/test/Library/Application Support/Claude/claude-code/2.1.0/claude.app/Contents/MacOS/claude','claude'])
+    assert.deepEqual(detectClients(file),{codex:false,cursor:false,claude:true},'Claude 桌面端和命令行都算运行');
+  assert.equal(detectClients('/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper\n/usr/bin/claude-other').claude,false);
 });
 test('process query failure remains unknown instead of reporting both clients closed',async()=>{
   assert.equal(await readClientPresence({listProcesses:()=>Promise.reject(new Error('permission denied'))}),null);
-  assert.deepEqual(await readClientPresence({listProcesses:()=>''}),{codex:false,cursor:false});
+  assert.deepEqual(await readClientPresence({listProcesses:()=>''}),{codex:false,cursor:false,claude:false});
 });
 test('closing hides only that source while preserving completion IDs, order and dedup across restart',()=>{
   let now=1;const activity=new Activity({clock:()=>now++});

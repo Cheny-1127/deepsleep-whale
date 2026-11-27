@@ -1,6 +1,6 @@
 'use strict';
 const {dateKey,gitlabUrl}=require('./model.cjs');
-const {mrReference,featureBranch,releaseMerge,createLifecycle}=require('./work-lifecycle.cjs');
+const {mrReference,featureBranch,mergeProgress,createLifecycle}=require('./work-lifecycle.cjs');
 const {authorFilter,isMergeCommit}=require('./commit-authorship.cjs');
 const safe=message=>Object.assign(Error(message),{reportSafe:true});
 function positive(value,label){if(!Number.isSafeInteger(value)||value<1)throw safe('无效的 GitLab '+label);return value;}
@@ -81,7 +81,12 @@ async function collectGitlab(source,{since,until,signal,connection,authors,autho
         if(page===3)throw safe('GitLab 提交关联 MR 分页不完整');
       }
       entry.sourceMeta.mergeRequests=[...mrs.values()];entry.sourceMeta.mrChecked=true;entry.sourceMeta.mrLifecycleChecked=true;entry.sourceMeta.repositoryUrl=repositoryUrl;
-      if(mrs.size===1&&featureBranch([...mrs.values()][0].sourceBranch))entry.sourceMeta.featureBranch=[...mrs.values()][0].sourceBranch;
+      delete entry.sourceMeta.featureBranch;
+      const mrBranches=new Set([...mrs.values()].map(mr=>mr.sourceBranch));
+      if(mrBranches.size===1){
+        const [branch]=mrBranches;
+        if(featureBranch(branch))entry.sourceMeta.featureBranch=branch;
+      }
       if(!mrs.size){
         const refs=[];for(let page=1;page<=3;page++){const response=await client.commitBranches(source.projectId,entry.sourceMeta.sha,page);refs.push(...response.items);if(refs.length>200)throw safe('提交分支关联超过 200 项，未保存不完整结果');if(!response.hasMore)break;if(page===3)throw safe('提交分支关联分页不完整');}
         if(refs.some(ref=>ref?.type!=='branch'||typeof ref.name!=='string'))throw safe('GitLab 返回的提交分支格式无效');
@@ -91,9 +96,9 @@ async function collectGitlab(source,{since,until,signal,connection,authors,autho
     for(const entry of result){
       if(entry.sourceMeta.mergeRequests.length)continue;
       const exact=bySha.get(entry.sourceMeta.sha);
-      if(exact?.size){entry.sourceMeta.mergeRequests=[...exact.values()];continue;}
+      if(exact?.size){entry.sourceMeta.mergeRequests=[...exact.values()];delete entry.sourceMeta.featureBranch;continue;}
     }
-    for(const mr of known.values())if(releaseMerge(mr)&&mr.mergedAt>=since&&mr.mergedAt<=until)result.push({source:'gitlab',sourceKey:`gitlab:${gitlabUrl(source.host)}:${source.projectId}:mr:${mr.iid}:merged`,project:source.project,title:mr.title,details:'代码已合并 '+mr.targetBranch+'。',date:dateKey(mr.mergedAt),status:'done',evidence:mr.url,sourceMeta:{projectId:source.projectId,repositoryUrl,mrChecked:true,mrLifecycleChecked:true,mergeRequests:[mr],event:'merged',committedAt:mr.mergedAt}});
+    for(const mr of known.values())if(mergeProgress(mr)&&mr.mergedAt>=since&&mr.mergedAt<=until)result.push({source:'gitlab',sourceKey:`gitlab:${gitlabUrl(source.host)}:${source.projectId}:mr:${mr.iid}:merged`,project:source.project,title:mr.title,details:'代码已合并 '+mr.targetBranch+'。',date:dateKey(mr.mergedAt),status:'done',evidence:mr.url,sourceMeta:{projectId:source.projectId,repositoryUrl,mrChecked:true,mrLifecycleChecked:true,mergeRequests:[mr],event:'merged',committedAt:mr.mergedAt}});
     if(result.length>2000)throw safe('提交与功能进展超过 2000 条，请缩短回溯范围');
     return result;
   }

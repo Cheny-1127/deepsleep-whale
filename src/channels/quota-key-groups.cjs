@@ -4,6 +4,7 @@ const path = require('node:path');
 const {createHash} = require('node:crypto');
 const {DEFAULT_BASE_URL,readQuotaToken} = require('./quota-credentials.cjs');
 const validID = id => Number.isSafeInteger(id) && id > 0;
+const NOTE_LENGTH = 50, NOTE_LIMIT = 500;
 const validGroup = id => id === null || validID(id);
 const message = (text, definite = false) => Object.assign(Error(text),{safe:true,definite});
 
@@ -11,7 +12,7 @@ function createKeyGroups({token,tokenFile,dataDir,baseUrl = DEFAULT_BASE_URL,fet
   clock = {now:() => Date.now(),setTimeout,clearTimeout}} = {}) {
   const origin = String(baseUrl).replace(/\/+$/,'');
   const file = dataDir ? path.join(dataDir,'quota-key-groups.json') : null;
-  const users = new Map(), contexts = new Map(), favorites = new Map(), favoriteChecks = new Map(), controllers = new Set(), writes = new Set(), uncertain = new Set(), notices = new Map();
+  const users = new Map(), contexts = new Map(), favorites = new Map(), favoriteChecks = new Map(), notes = new Map(), controllers = new Set(), writes = new Set(), uncertain = new Set(), notices = new Map();
   let user = null, expanded = true, cacheError = '', closed = false, preferenceSource = null;
   const credential = () => readQuotaToken({token,tokenFile});
   const source = value => createHash('sha256').update(JSON.stringify([origin,value])).digest('hex');
@@ -50,6 +51,10 @@ function createKeyGroups({token,tokenFile,dataDir,baseUrl = DEFAULT_BASE_URL,fet
       if (saved.version === 1 && saved.source === source(credential())) {
         user = saved.user === null ? null : projectUser(saved.user);expanded = saved.expanded !== false;
         if (user) users.set(user.id,user);
+        // 备注是手写内容，先于收藏独立恢复；单条异常只跳过该条。
+        for (const item of Array.isArray(saved.notes) ? saved.notes.slice(0,NOTE_LIMIT) : []) {
+          if (validID(item?.userId) && validID(item.keyId) && typeof item.text === 'string' && item.text && item.text.length <= NOTE_LENGTH) notes.set(pair(item.userId,item.keyId),item.text);
+        }
         if (saved.favorites !== undefined && (!Array.isArray(saved.favorites) || saved.favorites.length > 20)) throw Error('invalid favorites');
         for (const item of saved.favorites || []) {
           const owner = projectUser(item.user), id = pair(owner.id,item.keyId);
@@ -61,10 +66,11 @@ function createKeyGroups({token,tokenFile,dataDir,baseUrl = DEFAULT_BASE_URL,fet
     }
   } catch {cacheError = '本地分组切换偏好无法读取，请重新选择用户。';user = null;favorites.clear();users.clear();contexts.clear();favoriteChecks.clear();uncertain.clear();notices.clear();}
   function save() {
-    if (!file || closed) return;
+    if (!file) return true;
+    if (closed) return false;
     try {
       const signature = source(credential());
-      if (preferenceSource !== null && signature !== preferenceSource) {cacheError = '管理凭据已变化，请重新加载后操作。';return;}
+      if (preferenceSource !== null && signature !== preferenceSource) {cacheError = '管理凭据已变化，请重新加载后操作。';return false;}
       preferenceSource = signature;
       const savedFavorites = [...favorites.values()].map(item => {
         const state = contexts.get(item.user.id), id = pair(item.user.id,item.keyId), key = state?.keys.find(key => key.id === item.keyId);
@@ -73,9 +79,10 @@ function createKeyGroups({token,tokenFile,dataDir,baseUrl = DEFAULT_BASE_URL,fet
           groups:(state?.groups || []).map(group => ({id:group.id,name:group.name})),checkedAt,uncertain:uncertain.has(id) || writes.has(id),
           notice:notice?.kind === 'error' ? {kind:'error',text:notice.text} : null}})};
       });
-      fs.writeFileSync(file+'.tmp',JSON.stringify({version:1,source:signature,user,expanded,favorites:savedFavorites}),{mode:0o600});
-      fs.renameSync(file+'.tmp',file);cacheError = '';
-    } catch {cacheError = '分组切换偏好保存失败，重启后可能无法恢复。';}
+      const savedNotes = [...notes].map(([id,text]) => {const [userId,keyId] = id.split(':').map(Number);return {userId,keyId,text};});
+      fs.writeFileSync(file+'.tmp',JSON.stringify({version:1,source:signature,user,expanded,favorites:savedFavorites,notes:savedNotes}),{mode:0o600});
+      fs.renameSync(file+'.tmp',file);cacheError = '';return true;
+    } catch {cacheError = '分组切换偏好保存失败，重启后可能无法恢复。';return false;}
   }
   function context(userId) {
     if (!contexts.has(userId)) contexts.set(userId,{keys:[],groups:[],checkedAt:null,error:'',loading:null,revision:0});
@@ -86,7 +93,7 @@ function createKeyGroups({token,tokenFile,dataDir,baseUrl = DEFAULT_BASE_URL,fet
     for (const [id,item] of contexts) if (!retained.has(id) && !item.loading && ![...writes].some(value => value.startsWith(`${id}:`))) contexts.delete(id);
   }
   function projectKey(userId,key) {
-    return {...key,busy:writes.has(pair(userId,key.id)),uncertain:uncertain.has(pair(userId,key.id)),notice:notices.get(pair(userId,key.id)) || null};
+    return {...key,busy:writes.has(pair(userId,key.id)),uncertain:uncertain.has(pair(userId,key.id)),notice:notices.get(pair(userId,key.id)) || null,note:notes.get(pair(userId,key.id)) || ''};
   }
   function snapshot() {
     const current = user && contexts.get(user.id);
@@ -94,7 +101,7 @@ function createKeyGroups({token,tokenFile,dataDir,baseUrl = DEFAULT_BASE_URL,fet
       checkedAt:current?.checkedAt ?? null,error:current?.error || '',cacheError,busy:Boolean(current?.loading),
       favorites:[...favorites.values()].map(item => {
         const state = contexts.get(item.user.id), key = state?.keys.find(key => key.id === item.keyId), checkedAt = favoriteChecks.get(pair(item.user.id,item.keyId)) ?? state?.checkedAt ?? null;
-        return {user:{...item.user},keyId:item.keyId,name:key?.name || item.name,key:key ? projectKey(item.user.id,key) : null,
+        return {user:{...item.user},keyId:item.keyId,name:key?.name || item.name,note:notes.get(pair(item.user.id,item.keyId)) || '',key:key ? projectKey(item.user.id,key) : null,
           groups:(state?.groups || []).map(group => ({...group})),checkedAt,error:state?.error || '',busy:Boolean(state?.loading),missing:checkedAt !== null && !key};
       })};
   }
@@ -222,6 +229,21 @@ function createKeyGroups({token,tokenFile,dataDir,baseUrl = DEFAULT_BASE_URL,fet
     } else {favorites.delete(id);favoriteChecks.delete(id);}
     save();prune();return snapshot();
   }
+  // 备注只存本机，与收藏和远端状态无关；写盘失败时还原，避免界面显示未保存的内容。
+  function setNote(value) {
+    if (closed || !value || !validID(value.userId) || !validID(value.keyId) || typeof value.note !== 'string') throw message('请选择有效的用户和 Key。');
+    const id = pair(value.userId,value.keyId), text = value.note.replace(/\s+/g,' ').trim(), previous = notes.get(id) || '';
+    if (text.length > NOTE_LENGTH) throw message(`备注最多 ${NOTE_LENGTH} 字。`);
+    if (!favorites.has(id) && !contexts.get(value.userId)?.keys.some(key => key.id === value.keyId)) throw message('请从已加载的列表中选择 Key。');
+    if (text === previous) return snapshot();
+    if (text && !previous && notes.size >= NOTE_LIMIT) throw message(`最多保存 ${NOTE_LIMIT} 条备注。`);
+    if (text) notes.set(id,text);else notes.delete(id);
+    if (!save()) {
+      if (previous) notes.set(id,previous);else notes.delete(id);
+      throw message('备注保存失败，请重试。');
+    }
+    return snapshot();
+  }
   async function select(id) {
     if (!validID(id) || !users.has(id) && user?.id !== id) throw message('请从用户列表中选择账号。');
     user = {...(users.get(id) || user)};save();prune();
@@ -275,6 +297,6 @@ function createKeyGroups({token,tokenFile,dataDir,baseUrl = DEFAULT_BASE_URL,fet
   }
   function setExpanded(value) {if (typeof value !== 'boolean') throw message('无效的折叠状态。');expanded = value;save();return snapshot();}
   function close() {closed = true;for (const controller of controllers) controller.abort();}
-  return {snapshot,search,select,refresh,refreshFavorites,refreshFavorite,setFavorite,switchGroup,setExpanded,open:() => Promise.resolve(snapshot()),close};
+  return {snapshot,search,select,refresh,refreshFavorites,refreshFavorite,setFavorite,setNote,switchGroup,setExpanded,open:() => Promise.resolve(snapshot()),close};
 }
 module.exports = {createKeyGroups};

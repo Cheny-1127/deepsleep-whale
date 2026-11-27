@@ -22,23 +22,32 @@ const identity=item=>item.groupId?'work:'+item.groupId:item.mr?'mr:'+item.mr.url
 function matchId(...items){return createHash('sha256').update(JSON.stringify([items[0].date,...items.map(identity).sort()])).digest('hex');}
 function taskSignals(item,sources){
   // 相同分支或描述只是待确认线索；即使跨仓库命中，也不在此写入合并关系。
-  const branches=new Set(),descriptions=new Set(),mrUrls=new Set([item.mr?.url,...(item.featureKeys||[]).filter(key=>key.startsWith('mr:')).map(key=>key.slice(3))].filter(Boolean));
-  const addBranch=value=>{if(featureBranch(value))branches.add(value);};
-  addBranch(item.mr?.sourceBranch);
-  for(const id of item.entryIds){
+  const verified=new Set((item.sourceBranches||[item.mr?.sourceBranch]).filter(featureBranch));
+  const fallback=new Set(),descriptions=new Set(),mrUrls=new Set([item.mr?.url,...(item.featureKeys||[]).filter(key=>key.startsWith('mr:')).map(key=>key.slice(3))].filter(Boolean));
+  if(!verified.size)for(const id of item.entryIds){
     const entry=sources.get(id);if(!entry||!['git','gitlab','jenkins'].includes(entry.source))continue;
-    addBranch(entry.sourceMeta?.featureBranch);
-    for(const mr of entry.sourceMeta?.mergeRequests||[])if(!mrUrls.size||mrUrls.has(mr.url))addBranch(mr.sourceBranch||mr.source_branch);
+    const meta=entry.sourceMeta||{},mrs=meta.mergeRequests||[];
+    if(mrs.length){
+      const relevant=mrs.filter(mr=>!mrUrls.size||mrUrls.has(mr.url));
+      const names=new Set(relevant.map(mr=>mr.sourceBranch||mr.source_branch));
+      if(names.size===1)for(const name of names)if(featureBranch(name))verified.add(name);
+    }else if(featureBranch(meta.featureBranch))fallback.add(meta.featureBranch);
   }
   const addDescription=value=>{
     if(!value||value.length>=600||/^代码已合并\s+\S+[。.]?$/.test(value.trim()))return;
     const text=String(value).normalize('NFKC').toLowerCase().trim().replace(/^(?:feat|fix|perf|refactor|chore|docs|test|build|ci|style|revert)(?:\([^\n)]*\))?!?[:：]\s*/i,'').replace(/[_\s-]+/g,' ').replace(/[。.!！]+$/,'');
     if(words(text).size)descriptions.add(text);
   };
-  for(const branch of branches){const match=branch.match(/^(?:feat(?:ure)?|hotfix)-cy-(?:\d{4}-\d{2}-\d{2}|\d{8}|\d{4})-(.+)$/i);if(match)addDescription(match[1]);}
+  const branches=verified.size===1?verified:verified.size?new Set():fallback;
+  const tasks=new Set();
+  for(const branch of branches){
+    const match=branch.match(/^(?:feat(?:ure)?|hotfix)-cy-(?:\d{4}-\d{2}-\d{2}|\d{8}|\d{4})-(.+)$/i);
+    if(match){addDescription(match[1]);if(verified.has(branch))tasks.add(match[1].toLowerCase());}
+  }
   addDescription(item.title);addDescription(item.description);
-  return {branches,descriptions};
+  return {branches,descriptions,tasks};
 }
+const differentTasks=(left,right)=>left.tasks.size>0&&right.tasks.size>0&&![...left.tasks].some(task=>right.tasks.has(task));
 function workMatches(items,entries=[],dismissed=[]){
   // 否认按来源身份分区保存；补全 MR 或加入其他事项后仍能识别原来的两侧。
   const denials=new Map();
@@ -56,7 +65,7 @@ function workMatches(items,entries=[],dismissed=[]){
     if(pairs.size>=20000){limited=true;break;}
     const key=list[i]+':'+list[j];if(pairs.has(key))continue;pairs.add(key);
     const a=profiles[list[i]],b=profiles[list[j]];
-    if(a.item.date!==b.item.date)continue;
+    if(a.item.date!==b.item.date||differentTasks(a,b))continue;
     if(dismissed.length&&separated(a,b))continue;
     const branch=[...a.branches].find(value=>b.branches.has(value)),description=[...a.descriptions].find(value=>b.descriptions.has(value)),strong=branch||description;
     const known=project=>project&&!['未分类','日程工作'].includes(project);
@@ -72,6 +81,7 @@ function workMatches(items,entries=[],dismissed=[]){
   for(const candidate of candidates){
     const [a,b]=candidate.profiles,left=memberships.get(a),right=memberships.get(b);
     if(left!==right){
+      if(left.profiles.some(a=>a.tasks.size&&right.profiles.some(b=>differentTasks(a,b))))continue;
       if(dismissed.length&&left.profiles.some(a=>right.profiles.some(b=>separated(a,b)))){separate.push(candidate);continue;}
       if(left.profiles.length+right.profiles.length>50){limited=true;continue;}
       left.profiles.push(...right.profiles);for(const profile of right.profiles)memberships.set(profile,left);

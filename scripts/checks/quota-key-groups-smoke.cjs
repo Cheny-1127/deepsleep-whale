@@ -103,7 +103,7 @@ let app;
     await groupTrigger().click();await first().getByRole('option',{name,exact:true}).click();
   }
   const savedGroup = async () => (await panel.evaluate(() => window.whale.quotaGroup('key-groups-snapshot'))).value.keys.find(key => key.id === 1).groupId;
-  assert.deepEqual(await panel.locator('#quota-switch-table thead th').allTextContents(),['API Key','所属分组','启用状态','操作'],'所属分组在启用状态前，直接选择并保存');
+  assert.deepEqual(await panel.locator('#quota-switch-table thead th').allTextContents(),['API Key','所属分组','启用状态','备注','操作'],'所属分组在启用状态前，直接选择并保存');
   assert.equal(await first().locator('.quota-switch-status').textContent(),'启用');
   assert.equal(await panel.locator('#quota-switch-list .quota-switch-row[data-key-id="2"] .quota-switch-status').textContent(),'停用');
   assert.equal(await panel.locator('#quota-switch-list img').count(),0);
@@ -199,7 +199,7 @@ let app;
   }
   const readsBeforeTabs = await keyReads();
   await panel.locator('#quota-switch-tab-favorites').click();
-  assert.deepEqual(await panel.locator('#quota-switch-favorites-table thead th').allTextContents(),['API Key','所属分组','启用状态','刷新','操作']);
+  assert.deepEqual(await panel.locator('#quota-switch-favorites-table thead th').allTextContents(),['API Key','所属分组','启用状态','备注','刷新','操作']);
   assert.deepEqual(await favorite(1).locator('.quota-switch-key-detail').allTextContents(),['Key 编号#1','所属账号one@example.com #9']);
   assert.deepEqual(await favorite(101).locator('.quota-switch-key-detail').allTextContents(),['Key 编号#101','所属账号two@example.com #10']);
   for (const id of [1,101]) {
@@ -207,7 +207,7 @@ let app;
     assert.equal(await favorite(id).locator('.quota-switch-key-info').getAttribute('aria-describedby'),await favorite(id).getByRole('tooltip',{includeHidden:true}).getAttribute('id'));
     assert.equal(await favorite(id).getByRole('tooltip',{includeHidden:true}).isVisible(),false,'未悬停时隐藏详情');
     assert.doesNotMatch(await favorite(id).locator('th').innerText(),/#\d|@|启用|停用/,'名称列只展示名称，编号和账号放在悬停提示');
-    assert.equal(await favorite(id).locator(':scope > td').count(),4,'状态、分组、刷新、保存各占一列');
+    assert.equal(await favorite(id).locator(':scope > td').count(),5,'分组、状态、备注、刷新、保存各占一列');
     assert.ok(await favorite(id).evaluate(row => {
       const status = row.querySelector('.quota-switch-status'), refresh = row.querySelector('.quota-switch-row-refresh').closest('td'), save = row.querySelector('.quota-switch-save').closest('td');
       return status !== refresh && refresh !== save && status !== save;
@@ -275,7 +275,7 @@ let app;
       });
       assert.ok(layout.pin.x < layout.name.x,'收藏图标放在每行最前面');
       assert.equal(layout.color,'rgb(212, 155, 37)');assert.equal(layout.fill,'rgb(246, 196, 83)','选中收藏使用金黄色');
-      assert.ok(layout.title.width/layout.row.width > .36 && layout.title.width/layout.row.width < .40,'名称列宽生效，为状态和刷新留出独立空间');
+      assert.ok(layout.title.width/layout.row.width > .24 && layout.title.width/layout.row.width < .28,'名称列宽生效，为状态、备注和刷新留出独立空间');
       assert.ok(layout.name.width >= 100,'名称仍有可读空间');
       assert.ok(layout.name.x+layout.name.width <= layout.group.x && layout.group.x+layout.group.width <= layout.status.x,'名称、分组和状态按顺序排列且不重叠');
       assert.ok(layout.status.x+layout.status.width <= layout.refresh.x && layout.refresh.x+layout.refresh.width <= layout.save.x,'状态、刷新和保存不重叠');

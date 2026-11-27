@@ -112,6 +112,15 @@ test('large detail requires a prior size signal and explicit confirmation; cance
   assert.deepEqual(f.detailCalls.map(c=>c.allowLarge),[false,true]);assert.equal(f.largeConfirmations.length,2);
   assert.equal(f.approvalCalls.length,0);
 });
+
+test('a caller-supplied large-detail question replaces the default and receives the read signal',async t=>{
+  const f=fixture(t);await f.receiver.action('refresh');
+  f.setDetail(async(id,{allowLarge})=>allowLarge?detailResponse(id):{structuredContent:{status:'needs_confirmation',data:{order_id:id,order_type:'work_order',response_bytes:70000}}});
+  await f.receiver.action('detail',566);const asked=[];
+  assert.equal((await f.receiver.action('detail-large',566,async(item,signal)=>{asked.push({item,signal});return false;})).cancelled,true);
+  assert.equal(asked[0].item.id,566);assert.equal(asked[0].item.bytes,70000);assert.ok(asked[0].signal instanceof AbortSignal);
+  assert.equal(f.largeConfirmations.length,0,'不使用默认确认');assert.equal(f.detailCalls.length,1,'取消不读取完整内容');
+});
 test('module toggle cancels an old confirmation and preserves unknown submitted approvals',async t=>{
   const f=fixture(t);await f.receiver.action('refresh');let confirm;f.setConfirm(()=>new Promise(resolve=>confirm=resolve));
   const pending=f.receiver.action('approve',566);await tick();f.receiver.setModuleEnabled(false);f.receiver.setModuleEnabled(true);confirm(true);await pending;

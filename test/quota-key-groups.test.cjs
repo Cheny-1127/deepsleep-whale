@@ -86,6 +86,32 @@ test('favorite groups and options restore from a safe snapshot without requiring
   fs.writeFileSync(f.tokenFile,'another-admin');assert.deepEqual(f.create().snapshot().favorites,[],'更换来源凭据不复用收藏');
 });
 
+test('notes are local, shared by both lists, survive unpinning and restart, and roll back when saving fails',async t => {
+  const f = fixture(t);await f.select();const count = f.calls.length, file = path.join(f.dir,'quota-key-groups.json');
+  let data = f.panel.setNote({userId:9,keyId:1,note:'  给张三\n 测试用 '});
+  assert.equal(data.keys[0].note,'给张三 测试用');assert.equal(data.keys[1].note,'');
+  data = f.panel.setFavorite({userId:9,keyId:1,favorite:true});assert.equal(data.favorites[0].note,'给张三 测试用');
+  data = f.panel.setFavorite({userId:9,keyId:1,favorite:false});assert.equal(data.keys[0].note,'给张三 测试用','取消常用保留备注');
+  assert.equal(f.calls.length,count,'备注不请求管理接口');
+  assert.throws(() => f.panel.setNote({userId:9,keyId:101,note:'越权'}));assert.throws(() => f.panel.setNote({userId:9,keyId:1,note:1}));
+  assert.throws(() => f.panel.setNote({userId:9,keyId:1,note:'字'.repeat(51)}),/50/);
+  f.panel.setFavorite({userId:9,keyId:1,favorite:true});
+  await f.panel.refresh();assert.equal(f.panel.snapshot().keys[0].note,'给张三 测试用','刷新保留备注');
+  await f.change();assert.equal(f.panel.snapshot().keys[0].note,'给张三 测试用','换组保留备注');
+  assert.ok(f.writes().every(call => !call.body.includes('note')));
+  assert.equal(f.create().snapshot().favorites[0].note,'给张三 测试用','重启恢复');
+  fs.mkdirSync(file+'.tmp');
+  assert.throws(() => f.panel.setNote({userId:9,keyId:1,note:'写不进去'}),/保存失败/);
+  assert.equal(f.panel.snapshot().favorites[0].note,'给张三 测试用','写盘失败还原');fs.rmdirSync(file+'.tmp');
+  const saved = JSON.parse(fs.readFileSync(file,'utf8'));
+  saved.notes.push({userId:9,keyId:'x',text:'坏'},null);fs.writeFileSync(file,JSON.stringify(saved));
+  assert.equal(f.create().snapshot().favorites[0].note,'给张三 测试用','异常备注只跳过该条');
+  f.panel.setNote({userId:9,keyId:1,note:' '});
+  assert.deepEqual(JSON.parse(fs.readFileSync(file,'utf8')).notes,[],'清空即删除');
+  delete saved.notes;fs.writeFileSync(file,JSON.stringify(saved));assert.equal(f.create().snapshot().favorites[0].note,'','兼容没有备注的旧偏好');
+  fs.writeFileSync(f.tokenFile,'another-admin');assert.throws(() => f.panel.setNote({userId:9,keyId:1,note:'换凭据'}),/失败/);
+});
+
 test('stale cached groups only prompt refresh after a missing group or lost permission is detected',async t => {
   const f = fixture(t);await f.select();f.panel.setFavorite({userId:9,keyId:1,favorite:true});
   for (const invalidation of ['permission','missing','subscription']) {

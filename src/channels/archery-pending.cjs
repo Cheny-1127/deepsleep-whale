@@ -122,12 +122,12 @@ function createArcheryPending({readConfig=readArcheryConfig,createClient=createA
         const cached=config.canDetail?cache.get(accountKey(),id):null;
         try{
           confirmed=await confirm({...item},{operation,canDetail:config.canDetail,cachedDetail:cached?{...cached,status:item.status||cached.status}:null,
-            loadDetail:async allowLarge=>{
+            loadDetail:async (allowLarge,confirmLarge)=>{
               if(!confirming||previewFlight)throw Error('审核确认已结束或正在读取详情。');
               previewController=new AbortController();
               const signal=previewController.signal;
               // 复用详情校验与缓存，只为当前确认工单开放读取，审批锁始终保留。
-              previewFlight=Promise.resolve().then(()=>detail(id,allowLarge,false,{generation,signal,active:()=>confirming}));
+              previewFlight=Promise.resolve().then(()=>detail(id,allowLarge,false,{generation,signal,active:()=>confirming,confirmLarge}));
               try{return await previewFlight;}finally{previewFlight=null;previewController=null;}
             }});
         }finally{
@@ -170,7 +170,7 @@ function createArcheryPending({readConfig=readArcheryConfig,createClient=createA
     });
     return flight;
   }
-  function detail(id,allowLarge=false,force=false,confirmation=null){
+  function detail(id,allowLarge=false,force=false,confirmation=null,confirmLarge=confirmation?.confirmLarge||confirmLargeDetail){
     if(flight&&!confirmation)throw Error('正在处理 Archery 请求，请稍后查看详情。');
     if(confirmation&&(!confirmation.active()||confirmation.signal.aborted||closed||!moduleEnabled||confirmation.generation!==moduleGeneration))throw Error('审核确认已取消。');
     // 命中本地缓存也必须先校验当前配置、列表编号及详情权限，不能沿用旧账号的访问资格。
@@ -192,7 +192,7 @@ function createArcheryPending({readConfig=readArcheryConfig,createClient=createA
         if(cancelled())throw Error();
         // 大结果由主进程逐次确认，页面不能直接传 allow_large 绕过 MCP 的询问。
         if(allowLarge){
-          const confirmed=await confirmLargeDetail({...item,bytes:large.bytes});
+          const confirmed=await confirmLarge({...item,bytes:large.bytes},signal);
           if(cancelled())throw Error();
           currentConfig();
           if(confirmed!==true)return {id,cancelled:true};
@@ -222,7 +222,7 @@ function createArcheryPending({readConfig=readArcheryConfig,createClient=createA
     if(name==='refresh')return refresh();
     if(name==='set-enabled')return setEnabled(value);
     if(name==='approve'||name==='reject'||name==='execute')return perform(name,value,confirm);
-    if(name==='detail'||name==='detail-large'||name==='detail-refresh')return detail(value,name==='detail-large',name==='detail-refresh');
+    if(name==='detail'||name==='detail-large'||name==='detail-refresh')return detail(value,name==='detail-large',name==='detail-refresh',null,confirm);
     if(name==='page') {
       if(flight)throw new Error('正在刷新，请稍后翻页。');
       if(!Number.isSafeInteger(value)||value<1||!(value===page-1||(value===page+1&&hasMore)))throw new Error('请使用上一页或下一页按钮。');

@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('whale', {
   // Archery 凭据留在主进程；界面只接收主进程校验后的逐笔确认请求。
   archery: (name, value) => ipcRenderer.invoke('archery', name, value),
   onArcheryConfirmation: callback => ipcRenderer.on('archery-confirmation', (_event, data) => callback(data)),
+  onArcheryLargeConfirmation: callback => ipcRenderer.on('archery-large-confirmation', (_event, data) => callback(data)),
   subscriptions: (name, value) => ipcRenderer.invoke('message-subscriptions', name, value),
   quota: (name, value) => ipcRenderer.invoke('quota', name, value),
   quotaGroup: (name, value) => ipcRenderer.invoke('quota-group', name, value),

@@ -2,7 +2,7 @@
 const {randomUUID}=require('node:crypto');
 
 // 主进程发起逐笔确认，令牌绑定原页面；界面只负责展示，不能自行指定工单或把审核确认改成执行。
-function createArcheryConfirmation({getWindow=()=>null,timeoutMs=5*60*1000}={}) {
+function createArcheryConfirmation({getWindow=()=>null,timeoutMs=5*60*1000,confirmLarge=async()=>false}={}) {
   let pending=null;
   function cancel(){pending?.finish(false);}
   function request(sender,item,preview={}) {
@@ -47,11 +47,43 @@ function createArcheryConfirmation({getWindow=()=>null,timeoutMs=5*60*1000}={}) 
     if(typeof value.allowLarge!=='boolean'||current.reading)throw Error('正在读取详情或请求无效，请稍后重试。');
     current.reading=true;
     try{
-      const result=await current.preview.loadDetail(value.allowLarge);
+      // 大详情的二次确认回到同一页面，由主进程逐次发起。
+      const result=await current.preview.loadDetail(value.allowLarge,(item,signal)=>confirmLarge(sender,item,signal));
       if(pending!==current)throw Error('审核确认已取消。');
       return result;
     }finally{current.reading=false;}
   }
   return {request,reply,cancel,detail};
 }
-module.exports={createArcheryConfirmation};
+// 完整加载大详情前的确认：主进程按发起页面下发一次性令牌，页面只能回答这一次询问。
+function createLargeDetailConfirmation({timeoutMs=5*60*1000}={}) {
+  const pending=new Map();
+  function request(sender,item,signal) {
+    if(sender.isDestroyed()||signal?.aborted)return Promise.resolve(false);
+    return new Promise(resolve=>{
+      const token=randomUUID();let timer;
+      const finish=confirmed=>{
+        if(!pending.has(token))return;
+        pending.delete(token);clearTimeout(timer);signal?.removeEventListener('abort',abort);
+        for(const event of ['destroyed','did-start-navigation'])sender.removeListener(event,abort);
+        if(!confirmed&&!sender.isDestroyed())try{sender.send('archery-large-confirmation',{token,cancelled:true});}catch{}
+        resolve(confirmed);
+      };
+      // 读取被取消（审核框关闭、模块停用）或页面离开时同步收起询问；超时只取消，不默认加载。
+      const abort=()=>finish(false);
+      pending.set(token,{sender,finish});
+      signal?.addEventListener('abort',abort,{once:true});
+      for(const event of ['destroyed','did-start-navigation'])sender.once(event,abort);
+      timer=setTimeout(abort,timeoutMs);timer.unref?.();
+      try{sender.send('archery-large-confirmation',{token,item:{id:item.id,title:String(item.title||''),bytes:item.bytes}});}catch{abort();}
+    });
+  }
+  function reply(sender,value) {
+    const current=pending.get(value?.token);
+    if(!current||current.sender!==sender||typeof value.confirmed!=='boolean')return false;
+    current.finish(value.confirmed);return true;
+  }
+  function cancel(){for(const {finish} of [...pending.values()])finish(false);}
+  return {request,reply,cancel};
+}
+module.exports={createArcheryConfirmation,createLargeDetailConfirmation};

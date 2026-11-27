@@ -126,8 +126,9 @@ function workLine(item){
 function grouped(items){return items.length?items.map(workLine).join('\n'):'暂无记录。';}
 function weekContent(entries,date,template=DEFAULT_TEMPLATE,workGroups=[]){
   const {start,end}=reportRange(date),nextEnd=addDays(end,7),records=entries.filter(e=>e.date>=start&&e.date<=end),current=workSummary(records,workGroups,{context:entries,periodEnd:end}).items,daily=workSummary(records,workGroups,{context:entries}).items;
+  const periodStart=Date.parse(start+'T00:00:00+08:00');
   const values={week_start:start,week_end:end,count:String(current.filter(e=>e.status==='done').length),
-    summary:grouped(current.filter(e=>e.status==='done')),releases:grouped(current.filter(e=>e.releases.length)),
+    summary:grouped(current.filter(e=>e.status==='done')),releases:grouped(current.filter(e=>e.releases.length||e.mainPublishedAt>=periodStart)),
     blockers:grouped(current.filter(e=>e.status==='blocked')),next_week:grouped(workSummary(entries.filter(e=>e.status==='planned'&&e.date>end&&e.date<=nextEnd),workGroups).items),
     details:daily.map(item=>`${item.date}\n${workLine(item)}`).join('\n\n')||'暂无记录。'};
   return {start,end,content:template.replace(/\{\{([a-z_]+)\}\}/g,(match,key)=>values[key]??match)};

@@ -9,10 +9,11 @@ const SPECIAL_ACTIONS = require('../shared/special-actions.js');
 const { createTitleReader, createCursorTitleReader } = require('../clients/chat-metadata.cjs');
 const { startBridge, dataDirectory } = require('../hooks/bridge.cjs');
 const nurture = require('../../vendor/nurture.cjs');
-const {SOURCES,sourceOf,eventName}=require('../shared/hook-events.cjs');
+const {SOURCES,SOURCE_NAMES,sourceOf,sourceOfSession,eventName}=require('../shared/hook-events.cjs');
 const {createHookSettings}=require('./hook-settings.cjs');
 const {createWindows}=require('./windows.cjs');
 const {createCursorChatOpener}=require('../clients/cursor-chat.cjs');
+const {createClaudeChatOpener,createClaudeSessions}=require('../clients/claude-chat.cjs');
 const {createCodexChatOpener}=require('../clients/codex-chat.cjs');
 const {readClientPresence}=require('../clients/presence.cjs');
 const {createCodexRuntime}=require('../clients/codex-runtime.cjs');
@@ -25,7 +26,7 @@ const {createMailStore}=require('../channels/mail-store.cjs');
 const {createArcheryPending}=require('../channels/archery-pending.cjs');
 const {createArcheryCache}=require('../channels/archery-cache.cjs');
 const {createArcheryConnection}=require('./archery-connection.cjs');
-const {createArcheryConfirmation}=require('./archery-confirmation.cjs');
+const {createArcheryConfirmation,createLargeDetailConfirmation}=require('./archery-confirmation.cjs');
 const {createQuotaPanel}=require('../channels/quota-accounts.cjs');
 const {createGroupUsage}=require('../channels/quota-group-usage.cjs');
 const {createKeyUsage}=require('../channels/quota-key-usage.cjs');
@@ -55,13 +56,16 @@ app.setPath('userData', dataDir);
 app.setName('鲸鱼娘');
 if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   const archeryConnection=createArcheryConnection({dataDir});
-  const archeryConfirmation=createArcheryConfirmation({getWindow:sender=>BrowserWindow.fromWebContents(sender)});
+  const largeDetailConfirmation=createLargeDetailConfirmation();
+  const archeryConfirmation=createArcheryConfirmation({getWindow:sender=>BrowserWindow.fromWebContents(sender),confirmLarge:largeDetailConfirmation.request});
   let bridge,wechat,mail,archery,quota,groupUsage,keyUsage,keyGroups,petQuota,subscriptions;
   let planner,plannerTimer,reports,ai,aiSessions;
   const plannerNotifications=new Map();
   let eventQueue=Promise.resolve();
   const cursorState=process.env.WHALE_CURSOR_STATE_DB||path.join(os.homedir(),'Library','Application Support','Cursor','User','globalStorage','state.vscdb');
   const cursorChats=createCursorChatOpener({stateFile:cursorState,openExternal:url=>shell.openExternal(url)});
+  const claudeSessions=createClaudeSessions();
+  const claudeChats=createClaudeChatOpener({openExternal:url=>shell.openExternal(url),find:id=>claudeSessions.find(id,true)});
   const codexChats=createCodexChatOpener({openExternal:url=>shell.openExternal(url)});
   let completionExpanded=false,busyExpanded=false,pendingExpanded=false,remindersExpanded=false,reminderView=null;
   let bridgeError = '';
@@ -78,9 +82,9 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   const remindersFile=path.join(dataDir,'reminders.json');
   let savedReminders,reminderError='';
   try { savedReminders=JSON.parse(fs.readFileSync(remindersFile,'utf8')); } catch {}
-  const clientRunning={codex:null,cursor:null};
+  const clientRunning=Object.fromEntries(SOURCES.map(id=>[id,null]));
   let clientCheck;
-  const activity = new Activity({sourceRunning:clientRunning,saved:savedReminders,resolveChat:id=>id.startsWith('cursor:')?cursorTitles.lookup(id):titles.lookup(id)});
+  const activity = new Activity({sourceRunning:clientRunning,saved:savedReminders,resolveChat:id=>({cursor:cursorTitles,claude:claudeSessions,codex:titles})[sourceOfSession(id)].lookup(id),resolveRead:item=>({codex:titles,claude:claudeSessions})[sourceOf(item)]?.readReceipt(item)??null});
   const codexRuntime=createCodexRuntime({
     onState:state=>{
       // 和 Hook 使用同一队列；避免跨进程回调把旧审批状态写到新一轮。
@@ -162,19 +166,24 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     if (execution.pendingCount<=threshold) pendingExpanded=false;
     if (execution.reminderCount<=threshold) remindersExpanded=false;
     codexRuntime.setSessions(canObserveCodexApproval()
-      ?tasks.sessions.filter(s=>!s.session_id.startsWith('cursor:')&&['working','thinking','approval'].includes(s.state)):[]);
+      ?tasks.sessions.filter(s=>sourceOf(s)==='codex'&&['working','thinking','approval'].includes(s.state)):[]);
     if((reminderView==='pending'&&!execution.pendingCount)||(reminderView==='reminders'&&!execution.reminderCount)||(reminderView==='completed'&&!tasks.unread)||(reminderView==='busy'&&!execution.count))reminderView=null;
     windows.broadcast(snapshot());
   }
   async function openChat(sessionId,noticeId) {
     // 跳转前重新确认客户端，避免点击旧提醒时把已经退出的应用重新唤起。
     const known=activity.sessions.has(sessionId)||activity.notices.some(item=>item.session_id===sessionId);
-    const source=typeof sessionId==='string'&&sessionId.startsWith('cursor:')?'cursor':'codex';
+    const source=sourceOfSession(sessionId);
     if(!known)throw new Error('无法定位这个聊天');
     const running=await refreshClients();
     if(!running)throw new Error('暂时无法确认客户端是否运行，请稍后重试；提醒已保留。');
-    if(!running[source])throw new Error(`${source==='cursor'?'Cursor':'Codex'} 已退出，提醒暂时隐藏，重新打开后恢复。`);
-    if(sessionId?.startsWith('cursor:')) {
+    if(!running[source])throw new Error(`${SOURCE_NAMES[source]} 已退出，提醒暂时隐藏，重新打开后恢复。`);
+    if(source==='claude') {
+      // 桌面端会话直接跳转；命令行和 IDE 会话没有可打开的页面，点击完成提醒只标为已读。
+      const opened=await claudeChats.open(sessionId),unread=activity.notices.some(item=>item.id===noticeId&&item.session_id===sessionId);
+      if(!opened&&!unread)throw new Error('这个会话不在 Claude 桌面端，请在原终端或 IDE 中查看。');
+      if(unread) {activity.markRead(noticeId);saveReminders();}
+    } else if(source==='cursor') {
       if(!known||cursorTitles.lookup(sessionId).kind!=='chat')throw new Error('无法定位这个 Cursor 聊天，可能已被删除。');
       await cursorChats.open(sessionId);
       if(activity.acknowledgeCursor(sessionId))saveReminders();
@@ -283,7 +292,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
       for(const item of [quota,groupUsage,keyUsage,keyGroups])item?.setModuleEnabled(enabled);
       if(enabled)petQuota?.setModuleEnabled(true);
     }else if(id==='archery'){
-      if(!enabled)archeryConfirmation.cancel();
+      if(!enabled){archeryConfirmation.cancel();largeDetailConfirmation.cancel();}
       archery?.setModuleEnabled(enabled);
     }
     else if(id==='wechat')wechat?.setModuleEnabled(enabled);
@@ -450,6 +459,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     if(name==='connection')return {value:archeryConnection.snapshot()};
     // 回复只接受原小屋页面的一次性令牌，重复、过期或其他窗口的回复均不生效。
     if(name==='confirm-approval')return {value:archeryConfirmation.reply(event.sender,value)};
+    if(name==='confirm-large-detail')return {value:largeDetailConfirmation.reply(event.sender,value)};
     if(!modules.enabled('archery')&&name!=='snapshot')return {error:'Archery 已关闭，请先开启'};
     try{
       if(name==='approval-detail')return {value:await archeryConfirmation.detail(event.sender,value)};
@@ -471,7 +481,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
         await archery.action('refresh');
         return {value:connection};
       }
-      return {value:await archery.action(name,value,['approve','reject','execute'].includes(name)?(item,preview)=>archeryConfirmation.request(event.sender,item,preview):undefined)};
+      return {value:await archery.action(name,value,['approve','reject','execute'].includes(name)?(item,preview)=>archeryConfirmation.request(event.sender,item,preview):name==='detail-large'?(item,signal)=>largeDetailConfirmation.request(event.sender,item,signal):undefined)};
     }catch(error){return {error:error.message};}
   });
   // 额度页只读网关已保存的快照，token 不进入渲染进程，也不刷新上游额度。
@@ -485,9 +495,9 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
   ipcMain.handle('quota-group',async(event,name,value)=>{
     if(!windows.isPanel(event.sender)||event.senderFrame!==event.sender.mainFrame)throw new Error('仅允许在小屋查看分组用量');
     if(!modules.enabled('quota')&&!['snapshot','keys-snapshot','key-groups-snapshot'].includes(name))return {error:'API 额度已关闭，请先开启'};
-    if(['key-groups-snapshot','key-groups-open','key-groups-search','key-groups-select','key-groups-refresh','key-groups-refresh-favorites','key-groups-refresh-favorite','key-groups-set-favorite','key-groups-set-expanded','key-groups-switch'].includes(name)) {
+    if(['key-groups-snapshot','key-groups-open','key-groups-search','key-groups-select','key-groups-refresh','key-groups-refresh-favorites','key-groups-refresh-favorite','key-groups-set-favorite','key-groups-set-note','key-groups-set-expanded','key-groups-switch'].includes(name)) {
       if(!keyGroups)return {error:'Key 分组正在初始化'};
-      try{return {value:name==='key-groups-set-favorite'?keyGroups.setFavorite(value):name==='key-groups-refresh-favorite'?await keyGroups.refreshFavorite(value):name==='key-groups-refresh-favorites'?await keyGroups.refreshFavorites():name==='key-groups-set-expanded'?keyGroups.setExpanded(value):name==='key-groups-search'?await keyGroups.search(value):name==='key-groups-select'?await keyGroups.select(value):name==='key-groups-refresh'?await keyGroups.refresh():name==='key-groups-open'?await keyGroups.open():name==='key-groups-switch'?await keyGroups.switchGroup(value):keyGroups.snapshot()};}
+      try{return {value:name==='key-groups-set-favorite'?keyGroups.setFavorite(value):name==='key-groups-set-note'?keyGroups.setNote(value):name==='key-groups-refresh-favorite'?await keyGroups.refreshFavorite(value):name==='key-groups-refresh-favorites'?await keyGroups.refreshFavorites():name==='key-groups-set-expanded'?keyGroups.setExpanded(value):name==='key-groups-search'?await keyGroups.search(value):name==='key-groups-select'?await keyGroups.select(value):name==='key-groups-refresh'?await keyGroups.refresh():name==='key-groups-open'?await keyGroups.open():name==='key-groups-switch'?await keyGroups.switchGroup(value):keyGroups.snapshot()};}
       catch(error){return {error:error.safe?error.message:'无法操作 Key 分组，请刷新后重试。'};}
     }
     if(['keys-snapshot','keys-open','keys-search','keys-select','keys-refresh','keys-set-expanded'].includes(name)) {
@@ -543,7 +553,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
     if(panel)data.accounts=quota.snapshot().accounts.map(({id,name})=>({id,name}));
     return {value:data};
   });
-  app.on('before-quit', () => { archeryConfirmation.cancel();subscriptions?.close();petQuota?.close();keyGroups?.close();keyUsage?.close();groupUsage?.close();quota?.close();archery?.close();mail?.close();wechat?.close();codexRuntime.close();bridge?.close(); titles.close();cursorTitles.close(); });
+  app.on('before-quit', () => { archeryConfirmation.cancel();largeDetailConfirmation.cancel();subscriptions?.close();petQuota?.close();keyGroups?.close();keyUsage?.close();groupUsage?.close();quota?.close();archery?.close();mail?.close();wechat?.close();codexRuntime.close();bridge?.close(); titles.close();cursorTitles.close(); });
   app.whenReady().then(async () => {
     ai=createAiService({store:createAiStore({dataDir,safeStorage}),fetchImpl:(url,options)=>net.fetch(url,options)});
     aiSessions=createAiSessions({store:createAiSessionStore({dataDir,safeStorage}),ai,onChange:()=>windows.notifyAiSessions()});
@@ -588,12 +598,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
       }
     }}));
     mail.start();
-    archery=createArcheryPending({readConfig:archeryConnection.read,cache:createArcheryCache({dataDir,safeStorage}),settingsFile:path.join(dataDir,'archery.json'),confirmLargeDetail:async item=>{
-      const result=await dialog.showMessageBox({type:'question',title:'展开完整工单详情',message:`工单 #${item.id} 的详情较大，是否完整加载？`,
-        detail:`${item.title}\n约 ${Math.ceil(item.bytes/1024)} KB，包含工单 SQL 和执行内容。`,
-        buttons:['取消','完整加载'],defaultId:0,cancelId:0,noLink:true});
-      return result.response===1;
-    }});
+    archery=createArcheryPending({readConfig:archeryConnection.read,cache:createArcheryCache({dataDir,safeStorage}),settingsFile:path.join(dataDir,'archery.json')});
     archery.setModuleEnabled(modules.enabled('archery'));
     archery.start();
     // 启动时统一读取地址和凭据，三个区块保持同一来源；修改 .env 后需重启。
@@ -645,7 +650,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); } else {
             ? `「${accepted.title}」本轮已结束 · ${remaining ? `还有 ${remaining} 个聊天在进行` : '当前没有其他活动聊天'}${tasks.pending ? `（${tasks.pending} 个在检查权限）` : ''}`
             : `「${accepted.title}」有操作进入权限检查，可能需要你确认。`;
           if (hooks.settings.notifications && Notification.isSupported()) {
-            const notice = new Notification({ title: `deepsleep · ${source==='cursor'?'Cursor':'Codex'} 提醒`, body: text, silent: !hooks.settings.sound });
+            const notice = new Notification({ title: `deepsleep · ${SOURCE_NAMES[source]} 提醒`, body: text, silent: !hooks.settings.sound });
             const completionId=accepted.state==='completed'?tasks.notices[0]?.id:undefined;
             notice.on('click', () => openChat(accepted.session_id,completionId).catch(error=>{reminderError=error.message;showReminders();broadcast();})); notice.show();
           }

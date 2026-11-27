@@ -1,11 +1,11 @@
 let sequence=0;
 
 // 确认框挂在所属模块内，模块关闭时可统一取消；不使用会唤起系统窗口的 window.confirm。
-export function confirmAction({owner,title,message,confirmLabel='确认',danger=false,content=null,validate=null}) {
-  // 隐藏、停用模块不能发起操作，同一时刻也只允许一个确认框占用焦点。
-  if(owner.closest('[hidden],[inert]')||document.querySelector('.ui-confirm-dialog[open]'))return Promise.resolve(false);
+export function confirmAction({owner,title,message,confirmLabel='确认',danger=false,content=null,validate=null,stacked=false,tag=''}) {
+  // 隐藏、停用模块不能发起操作；同一时刻只允许一个确认框，主进程追加的询问可叠在当前确认框之上。
+  if(owner.closest('[hidden],[inert]')||(!stacked&&document.querySelector('.ui-confirm-dialog[open]')))return Promise.resolve(false);
   const opener=document.activeElement,dialog=document.createElement('dialog'),id='ui-confirm-'+(++sequence);
-  dialog.className='ui-dialog ui-confirm-dialog';dialog.setAttribute('role','alertdialog');
+  dialog.className='ui-dialog ui-confirm-dialog';if(tag)dialog.dataset.tag=tag;dialog.setAttribute('role','alertdialog');
   dialog.setAttribute('aria-labelledby',id+'-title');dialog.setAttribute('aria-describedby',id+'-message');
   const heading=document.createElement('h2'),description=document.createElement('p'),actions=document.createElement('div');
   heading.id=id+'-title';heading.textContent=title;description.id=id+'-message';description.textContent=message;actions.className='ui-confirm-actions';

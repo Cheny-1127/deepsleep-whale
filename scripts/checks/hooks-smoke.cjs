@@ -25,7 +25,7 @@ fs.writeFileSync(codexBinary,'#!'+process.execPath+'\n'+`const fs=require('node:
 let app,panel,pet;
 const errors=[];
 async function launch() {
- app=await electron.launch({executablePath:require('electron'),args:[root],env:{...process.env,CODEX_HOME:codexHome,WHALE_CURSOR_HOME:cursorHome,WHALE_CURSOR_STATE_DB:cursorState,WHALE_CODEX_BIN:codexBinary,WHALE_DATA_DIR:dir}});
+ app=await electron.launch({executablePath:require('electron'),args:[root],env:{...process.env,CODEX_HOME:codexHome,WHALE_CURSOR_HOME:cursorHome,WHALE_CLAUDE_HOME:path.join(dir,'claude'),WHALE_CURSOR_STATE_DB:cursorState,WHALE_CODEX_BIN:codexBinary,WHALE_DATA_DIR:dir}});
  app.on('window',page=>page.on('pageerror',error=>errors.push(error.message)));
  await app.firstWindow();
  for(let i=0;i<100;i++) {

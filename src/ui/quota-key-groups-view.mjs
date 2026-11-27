@@ -5,7 +5,7 @@ const states = {active:'启用',inactive:'停用',expired:'已过期',quota_exha
 
 export function createKeyGroupsView() {
   if (!$('picker')) return;
-  let latest = null, busy = false, sequence = 0, searchSequence = 0, timer, listKey = '', actionError = '', activeOption = -1, composing = false, tab = 'favorites';
+  let latest = null, busy = false, sequence = 0, searchSequence = 0, timer, listKey = '', actionError = '', activeOption = -1, composing = false, tab = 'favorites', editing = null, noteComposing = false, pointerHeld = false, rebuilding = false;
   const drafts = new Map(), pending = new Set(), refreshing = new Set(), initialLoads = new Set(), groupSelects = [];
   const enabled = () => document.getElementById('quota-view').dataset.moduleEnabled !== 'false';
   const pair = (userId,keyId) => `${userId}:${keyId}`;
@@ -21,7 +21,8 @@ export function createKeyGroupsView() {
     latest = data;
     const working = busy || data.busy, favorites = data.favorites || [], active = document.activeElement;
     const focusedRow = $('body').contains(active) && active.closest('.quota-switch-row');
-    const focused = focusedRow ? {row:focusedRow.dataset.rowId,selector:active.closest('.ui-select') ? 'summary' : active.classList.contains('quota-switch-pin') ? '.quota-switch-pin' : active.classList.contains('quota-switch-key-info') ? '.quota-switch-key-info' : active.classList.contains('quota-switch-row-refresh') ? '.quota-switch-row-refresh' : '.quota-switch-save'} : null;
+    const focused = focusedRow ? {row:focusedRow.dataset.rowId,selector:active.closest('.ui-select') ? 'summary' : active.classList.contains('quota-switch-pin') ? '.quota-switch-pin' : active.classList.contains('quota-switch-note') ? '.quota-switch-note' : active.classList.contains('quota-switch-key-info') ? '.quota-switch-key-info' : active.classList.contains('quota-switch-row-refresh') ? '.quota-switch-row-refresh' : '.quota-switch-save'} : null;
+    const selection = focusedRow && active.classList.contains('quota-switch-note-input') ? [active.selectionStart,active.selectionEnd] : null;
     $('toggle').setAttribute('aria-expanded',String(data.expanded));
     $('body').hidden = !data.expanded;$('tools').hidden = !data.expanded || tab !== 'search';
     $('favorites').hidden = tab !== 'favorites';$('search-panel').hidden = tab !== 'search';
@@ -41,15 +42,16 @@ export function createKeyGroupsView() {
     $('empty').textContent = working ? '正在读取 Key 和分组权限…' : !data.user ? '选择 Sub2API 用户，查看其 API Key 和可用分组。' : data.checkedAt === null ? '尚未取得 Key 分组，请点击“立即刷新”。' : '该用户暂无 API Key。';
     $('table').hidden = !data.keys.length;$('note').hidden = !data.keys.length;
     $('favorites-empty').hidden = favorites.length > 0;$('favorites-table').hidden = !favorites.length;
-    const nextKey = JSON.stringify([data.user?.id,data.keys,data.groups,data.error,favorites,working,enabled(),[...pending],[...refreshing],[...drafts]]);
-    if (nextKey === listKey) return;
+    const nextKey = JSON.stringify([data.user?.id,data.keys,data.groups,data.error,favorites,working,enabled(),[...pending],[...refreshing],[...drafts],editing?.rowId]);
+    // 输入法组词期间不重建行，组词结束后再补一次。
+    if (nextKey === listKey || noteComposing) return;
     listKey = nextKey;
     for (const view of groupSelects.splice(0)) view.destroy();
     const favoriteIds = new Set(favorites.map(item => pair(item.user.id,item.keyId)));
     function rowsFor(entries,section) {
       const rows = [];
       for (const entry of entries) {
-        const {user,key,groups} = entry, keyId = key?.id ?? entry.keyId, localId = pair(user.id,keyId), label = key?.name || entry.name || '未命名 Key';
+        const {user,key,groups} = entry, keyId = key?.id ?? entry.keyId, localId = pair(user.id,keyId), label = key?.name || entry.name || '未命名 Key', note = (key ? key.note : entry.note) || '';
         const row = document.createElement('tr'), name = document.createElement('th'), status = document.createElement('td');
         row.className = 'quota-switch-row';row.dataset.keyId = String(keyId);row.dataset.rowId = `${section}-${user.id}-${keyId}`;name.scope = 'row';
         const title = document.createElement('div'), text = document.createElement('span'), pin = document.createElement('button'), pinned = favoriteIds.has(localId);
@@ -63,7 +65,7 @@ export function createKeyGroupsView() {
         info.className = 'quota-switch-key-info';info.tabIndex = 0;info.setAttribute('aria-label',label);
         tooltip.className = 'quota-switch-key-tooltip';tooltip.id = `quota-switch-key-${section}-${user.id}-${keyId}`;tooltip.setAttribute('role','tooltip');
         info.setAttribute('aria-describedby',tooltip.id);tooltipName.textContent = label;tooltip.append(tooltipName);
-        for (const [caption,value] of [['Key 编号',`#${keyId}`],['所属账号',`${user.email} #${user.id}`]]) {
+        for (const [caption,value] of [['Key 编号',`#${keyId}`],['所属账号',`${user.email} #${user.id}`],...(note ? [['备注',note]] : [])]) {
           const line = document.createElement('span'), field = document.createElement('span'), detail = document.createElement('span');
           line.className = 'quota-switch-key-detail';field.textContent = caption;detail.textContent = value;line.append(field,detail);tooltip.append(line);
         }
@@ -79,7 +81,9 @@ export function createKeyGroupsView() {
         const button = document.createElement('button'), changing = key?.busy || pending.has(localId);
         button.type = 'button';button.className = 'outline quota-switch-save';button.dataset.keyId = String(keyId);
         button.textContent = changing ? '保存中…' : '保存';button.setAttribute('aria-label',`保存 ${label} 的分组`);
-        row.append(name,target,status);
+        const noteCell = document.createElement('td');noteCell.className = 'quota-switch-note-cell';
+        noteCell.append(noteControl({rowId:row.dataset.rowId,userId:user.id,keyId,label,note}));
+        row.append(name,target,status,noteCell);
         if (section === 'favorites') {
           const refreshCell = document.createElement('td');refreshCell.className = 'quota-switch-refresh-cell';
           const refresh = document.createElement('button');refresh.type = 'button';refresh.className = 'ui-icon-button quota-switch-row-refresh';
@@ -120,16 +124,70 @@ export function createKeyGroupsView() {
         const noticeValue = key?.notice?.kind === 'error' ? key.notice : section === 'favorites' && entry.error ? {kind:'error',text:entry.error} : null;
         if (noticeValue) {
           const notice = document.createElement('tr'), cell = document.createElement('td'), text = document.createElement('p');
-          notice.className = 'quota-switch-notice';cell.colSpan = section === 'favorites' ? 5 : 4;text.textContent = noticeValue.text;text.dataset.kind = noticeValue.kind;
+          notice.className = 'quota-switch-notice';cell.colSpan = section === 'favorites' ? 6 : 5;text.textContent = noticeValue.text;text.dataset.kind = noticeValue.kind;
           text.setAttribute('role',noticeValue.kind === 'error' ? 'alert' : 'status');cell.append(text);notice.append(cell);rows.push(notice);
         }
       }
       return rows;
     }
+    rebuilding = true;
     $('favorites-list').replaceChildren(...rowsFor(favorites,'favorites'));
     const sortedKeys = [...data.keys].sort((a,b) => Number(favoriteIds.has(pair(data.user.id,b.id))) - Number(favoriteIds.has(pair(data.user.id,a.id))));
     $('list').replaceChildren(...rowsFor(sortedKeys.map(key => ({user:data.user,key,groups:data.groups,busy:data.busy,error:data.error})),'current'));
+    rebuilding = false;
+    if (editing && !$('body').querySelector('.quota-switch-note-input')) editing = null;
     if (focused?.row) $('body').querySelector(`[data-row-id="${focused.row}"] ${focused.selector}:not(:disabled):not([aria-disabled="true"])`)?.focus();
+    if (selection && document.activeElement.classList.contains('quota-switch-note-input')) document.activeElement.setSelectionRange(...selection);
+  }
+  function noteControl({rowId,userId,keyId,label,note}) {
+    if (editing?.rowId !== rowId) {
+      const button = document.createElement('button');button.type = 'button';button.className = 'quota-switch-note';button.disabled = !enabled();
+      button.dataset.empty = String(!note);button.textContent = note || '添加备注';button.title = note ? `${note}（点击修改）` : '添加备注';
+      button.setAttribute('aria-label',note ? `修改 ${label} 的备注：${note}` : `为 ${label} 添加备注`);
+      button.addEventListener('click',() => {
+        const previous = editing;editing = {rowId,userId,keyId,original:note,value:note,done:false};
+        render(latest);const input = $('body').querySelector('.quota-switch-note-input');input?.focus();input?.select();
+        if (previous) void commitNote(previous);
+      });
+      return button;
+    }
+    const edit = editing, input = document.createElement('input');
+    input.type = 'text';input.className = 'quota-switch-note quota-switch-note-input';input.maxLength = 50;input.value = edit.value;input.disabled = !enabled();
+    input.placeholder = '输入备注';input.autocomplete = 'off';input.setAttribute('aria-label',`${label} 的备注`);
+    input.addEventListener('input',() => {edit.value = input.value;});
+    input.addEventListener('compositionstart',() => {noteComposing = true;});
+    input.addEventListener('compositionend',() => {noteComposing = false;edit.value = input.value;render(latest);});
+    input.addEventListener('keydown',event => {
+      if (event.isComposing || noteComposing || !['Enter','Escape'].includes(event.key)) return;
+      event.preventDefault();event.stopPropagation();void commitNote(edit,event.key === 'Enter');
+    });
+    input.addEventListener('blur',() => {
+      if (rebuilding || edit.done) return;
+      // 点击其他控件引起的失焦，等本次点击完成后再保存，避免重建行吞掉这次点击。
+      if (!pointerHeld) {void commitNote(edit);return;}
+      const finish = () => {
+        document.removeEventListener('pointerup',finish,true);document.removeEventListener('pointercancel',finish,true);
+        setTimeout(() => {if (document.activeElement !== input) void commitNote(edit);},0);
+      };
+      document.addEventListener('pointerup',finish,true);document.addEventListener('pointercancel',finish,true);
+    });
+    return input;
+  }
+  async function commitNote(edit,keep = true) {
+    if (edit.done) return;
+    edit.done = true;if (editing === edit) editing = null;
+    const note = edit.value.replace(/\s+/g,' ').trim();
+    if (!keep || note === edit.original || !enabled()) {render(latest);return;}
+    const ticket = sequence;actionError = '';render(latest);
+    try {
+      const data = await invoke('set-note',{userId:edit.userId,keyId:edit.keyId,note});
+      if (ticket === sequence) render(data);
+      else {const current = sequence, snapshot = await invoke('snapshot');if (current === sequence) render(snapshot);}
+    } catch (failure) {
+      actionError = failure.message;
+      // 保存失败保留输入，供用户重试。
+      if (!editing) editing = {...edit,done:false};
+    } finally {render(latest);}
   }
   async function load(name = 'open',value) {
     const ticket = ++sequence;busy = true;actionError = '';
@@ -176,6 +234,8 @@ export function createKeyGroupsView() {
     }
   }
   function setTab(name) {tab = name;closePicker();for (const view of groupSelects) view.close();if (latest) render(latest);fillMissingFavorites();}
+  document.addEventListener('pointerdown',() => {pointerHeld = true;},true);
+  for (const name of ['pointerup','pointercancel']) document.addEventListener(name,() => {pointerHeld = false;},true);
   for (const name of ['favorites','search']) $('tab-' + name).addEventListener('click',() => setTab(name));
   $('tabs').addEventListener('keydown',event => {
     if (!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return;

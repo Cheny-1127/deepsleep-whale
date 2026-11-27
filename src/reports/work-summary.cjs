@@ -46,7 +46,7 @@ function workSummary(entries,workGroups=[],{context=entries,periodEnd}={}){
   function attach(item,entry){if(!item.entryIds.includes(entry.id))item.entryIds.push(entry.id);}
   function mrItem(entry,mr){
     const key=entry.date+'|'+mr.url;
-    if(!groups.has(key))groups.set(key,{key,date:entry.date,title:businessTitle(mr.title,entry.details),project:entry.project,status:'done',kind:'mr',...lifecycle.state(mr,entry.date),mr,featureKeys:['mr:'+mr.url],time:eventTime(entry),description:'',entryIds:[],releases:[],warnings:[]});
+    if(!groups.has(key))groups.set(key,{key,date:entry.date,title:businessTitle(mr.title,entry.details),project:entry.project,status:'done',kind:'mr',...lifecycle.state(mr,entry.date),mr,featureKeys:lifecycle.mrKeys(mr),time:eventTime(entry),description:'',entryIds:[],releases:[],warnings:[]});
     const item=groups.get(key);item.time=Math.min(item.time,eventTime(entry));attach(item,entry);
     if(item.phase==='unverified'&&!item.warnings.length)item.warnings.push('MR 合并信息不完整，请核对来源');
     const description=entry.source==='gitlab'?entry.details:entry.source==='jenkins'?releaseDescription(entry,mr):'';
@@ -84,7 +84,7 @@ function workSummary(entries,workGroups=[],{context=entries,periodEnd}={}){
     else standalone(entry);
   }
   for(const entry of linked){
-    const item=groups.get(entry.date+'|'+entry.relatedMr);
+    const item=groups.get(entry.date+'|'+entry.relatedMr)||[...groups.values()].find(item=>item.date===entry.date&&item.featureKeys?.includes('mr:'+entry.relatedMr));
     if(item){attach(item,entry);(item.legacyLinkIds??=[]).push(entry.id);item.description=[item.description,entry.details||entry.title].filter(Boolean).join('\n');}
     else standalone(entry);
   }
@@ -92,8 +92,11 @@ function workSummary(entries,workGroups=[],{context=entries,periodEnd}={}){
   let items=[...groups.values()];
   for(const item of items){
     // 一条生产发布可能包含多个 MR；共享证据不能将未选中的业务事项带入合并。
-    const owned=item.entryIds.map(id=>sources.get(id)).filter(entry=>!item.mr||['manual','planner'].includes(entry.source)||(entry.sourceMeta?.mergeRequests||[]).length===1||entry.source==='gitlab'&&!(entry.sourceMeta?.mergeRequests||[]).length);
-    item.memberKeys=[...new Set([...(item.mr?['mr:'+item.mr.url]:[]),...owned.map(entry=>'source:'+entry.sourceKey)])];
+    const owned=item.entryIds.map(id=>sources.get(id)).filter(entry=>{
+      const mrs=entry.sourceMeta?.mergeRequests||[];
+      return !item.mr||['manual','planner'].includes(entry.source)||mrs.length===1||entry.source==='gitlab'&&mrs.every(mr=>item.featureKeys.includes('mr:'+mr.url));
+    });
+    item.memberKeys=[...new Set([...(item.mr?item.featureKeys:[]),...owned.map(entry=>'source:'+entry.sourceKey)])];
   }
   // 合并关系独立于来源记录；MR 身份可接住后续采集新增的提交，原始正文不被改写。
   const memberships=new Map(),combined=new Map(),separate=[];
@@ -105,10 +108,12 @@ function workSummary(entries,workGroups=[],{context=entries,periodEnd}={}){
     }
     const group=[...matches.values()][0];
     // 将保存时的修改意图带到界面，区分“还原修改”和“解除合并”。
-    if(!combined.has(group.id))combined.set(group.id,{key:'work:'+group.id,groupId:group.id,editOnly:group.editOnly===true,date:item.date,title:group.title,description:group.description,project:item.project,status:'done',kind:'work',badge:'已完成',time:item.time,entryIds:[],releases:[],warnings:[],memberKeys:[...group.members],featureKeys:[],phases:[]});
+    if(!combined.has(group.id))combined.set(group.id,{key:'work:'+group.id,groupId:group.id,editOnly:group.editOnly===true,date:item.date,title:group.title,description:group.description,project:item.project,status:'done',kind:'work',badge:'已完成',time:item.time,entryIds:[],releases:[],warnings:[],memberKeys:[...group.members],featureKeys:[],sourceBranches:[],phases:[]});
     const target=combined.get(group.id);target.time=Math.min(target.time,item.time);
     target.entryIds=[...new Set([...target.entryIds,...item.entryIds])];
     target.releases=[...new Map([...target.releases,...item.releases].map(release=>[release.id,release])).values()];
+    const sourceBranch=item.mr?.sourceBranch;
+    if(sourceBranch&&!target.sourceBranches.includes(sourceBranch))target.sourceBranches.push(sourceBranch);
     target.warnings.push(...item.warnings);target.featureKeys.push(...(item.featureKeys||[]));if(item.phase)target.phases.push(item);
   }
   for(const item of combined.values()){item.featureKeys=[...new Set(item.featureKeys)];applyPhases(item,item.phases);delete item.phases;}

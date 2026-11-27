@@ -55,6 +55,27 @@ test('missing base or AI configuration fails without requests; legacy settings r
   assert.throws(()=>settingsInput({aiWeeklyTemplate:DEFAULT_AI_WEEK_TEMPLATE+'{{summary}}'}),/占位符/);
   assert.ok(defaultSettings().aiWeeklyTemplate.includes('### 迭代完善'));
 });
+test('AI input treats inferred release badges as unverified while preserving explicit progress and saved drafts',async t=>{
+  const f=fixture(t),reports=f.create();
+  const content='# 本期工作\n\n- **覆盖分发后独立迁移 V3 单集权益**（待发布）\n- **新增端原生剧目管理与失败重试接口**（待发布）\n- **新增首单标记**（已完成）\n- **完善退款校验**（开发中）\n- 人工确认：导出接口已完成开发，尚未发布。\n- 结算规则仍待确认。';
+  await reports.action('save-week',{...period,content});
+  const generated=await reports.action('generate-ai-week',period),input=JSON.parse(f.calls[0].prompt);
+  assert.doesNotMatch(input.baseReport,/（待发布）/);
+  for(const title of ['覆盖分发后独立迁移 V3 单集权益','新增端原生剧目管理与失败重试接口'])assert.ok(input.baseReport.includes('**'+title+'**（发布情况未核实）'));
+  for(const fact of ['新增首单标记**（已完成）','完善退款校验**（开发中）','人工确认：导出接口已完成开发，尚未发布。','结算规则仍待确认。'])assert.ok(input.baseReport.includes(fact));
+  assert.equal(generated.content,content);assert.equal(generated.edited,true);
+  assert.equal((await reports.action('get-week',period)).content,content,'只澄清 AI 输入中的推断标签，不改写基础稿');
+});
+test('removing either draft version deletes the period drafts and waits for in-flight AI requests',async t=>{
+  for(const variant of ['base','ai']){
+    const f=fixture(t),reports=f.create();await base(reports);await reports.action('generate-ai-week',period);
+    const id=(await reports.action('list-weeks')).items.find(item=>item.source==='draft'&&(item.variant==='ai')===(variant==='ai')).id;
+    let resolve;f.setGenerate(()=>new Promise(done=>{resolve=done;}));const pending=reports.action('generate-ai-week',period);
+    await assert.rejects(reports.action('remove-week',{id}),/正在整理/);resolve(output());await pending;
+    await reports.action('remove-week',{id});const empty=await reports.action('get-week',period);
+    assert.equal(empty.content,'');assert.equal(empty.aiDraft,undefined);assert.equal((await reports.action('list-weeks')).items.filter(item=>item.source==='draft').length,0);
+  }
+});
 test('failed or malformed AI replies preserve both saved versions',async t=>{
   const f=fixture(t),reports=f.create();await base(reports);const original=await reports.action('generate-ai-week',period);
   for(const answer of [null,'','# 标题\n## 不匹配的栏目','```markdown\n'+output().replace('## 本周工作思考','### 本周工作思考')+'\n```',output()+'<!-- deepsleep:weekly:test -->']){
@@ -62,6 +83,33 @@ test('failed or malformed AI replies preserve both saved versions',async t=>{
   }
   f.setGenerate(async()=>output());fs.mkdirSync(path.join(f.dir,'work-reports.json.tmp'));await assert.rejects(reports.action('generate-ai-week',period),/保存失败/);assert.deepEqual(await reports.action('get-week',period),original);fs.rmdirSync(path.join(f.dir,'work-reports.json.tmp'));
   f.setGenerate(async()=>{throw Error('模型连接失败');});await assert.rejects(reports.action('generate-ai-week',period),/连接失败/);assert.deepEqual(await reports.action('get-week',period),original);
+});
+test('AI report formatting rejects status labels, bold titles and nested lists without overwriting a saved draft',async t=>{
+  const f=fixture(t),reports=f.create();await base(reports);const saved=await reports.action('generate-ai-week',period);
+  const ledger=()=>fs.readFileSync(path.join(f.dir,'work-reports.json'),'utf8'),before=ledger();
+  for(const item of ['- **支付校验**：补齐超时处理。','- __支付校验__：补齐超时处理。','- 完成支付校验（已完成）。','- 完成支付校验 (已发布)。','- 完成支付校验\n  - 补齐超时处理。','- 完成支付校验\n\t- 补齐超时处理。','1. 完成支付校验，补齐超时处理。']){
+    f.setGenerate(async()=>output().replace('- 完成支付校验，补齐超时处理。',item));
+    await assert.rejects(reports.action('generate-ai-week',period),/周报.*格式|单层列表|状态标签/);
+    assert.deepEqual(await reports.action('get-week',period),saved);assert.equal(ledger(),before);
+  }
+  f.setGenerate(async()=>output()+'\n## 额外栏目\n- 不应追加栏目。');
+  await assert.rejects(reports.action('generate-ai-week',period),/模板/);assert.equal(ledger(),before);
+});
+test('plain weekly prose keeps actual progress, business parentheses and literal HTML',()=>{
+  const value=output().replace('- 完成支付校验，补齐超时处理。','- 新增订单首单标记（V3），支持首单展示、筛选及本币统计。')
+    .replace('- 退款用例仍在完善。','- 完善退款重试接口，已完成开发，仍待发布。\n- 修复解析字段 order_id 为空的情况，保留 <img src=x> 原始说明。');
+  const content=aiWeekContent(value,DEFAULT_AI_WEEK_TEMPLATE);
+  assert.match(content,/首单标记（V3）/);assert.match(content,/已完成开发，仍待发布/);assert.match(content,/order_id/);assert.match(content,/<img src=x>/);
+});
+test('drafts created before the prose rules are marked stale on read without changing saved content',async t=>{
+  const f=fixture(t),reports=f.create();await reports.action('settings',{});await base(reports);const generated=await reports.action('generate-ai-week',period);
+  await reports.action('save-week',{...period,variant:'ai',content:generated.aiDraft.content+'\n本人核对的内容。'});reports.close();
+  const file=path.join(f.dir,'work-reports.json'),saved=JSON.parse(fs.readFileSync(file,'utf8'));
+  saved.weeks['2026-11-02'].aiDraft.templateHash=require('node:crypto').createHash('sha256').update(saved.settings.aiWeeklyTemplate).digest('hex');
+  fs.writeFileSync(file,JSON.stringify(saved));const before=fs.readFileSync(file,'utf8'),restarted=f.create(),old=await restarted.action('get-week',period);
+  assert.equal(old.aiStale,true);assert.equal(old.aiDraft.edited,true);assert.match(old.aiDraft.content,/本人核对/);assert.equal(fs.readFileSync(file,'utf8'),before);
+  await assert.rejects(restarted.action('generate-ai-week',period),/手工编辑/);
+  assert.equal((await restarted.action('generate-ai-week',{...period,force:true})).aiStale,false);
 });
 test('changes to the base or template mark the AI draft stale without discarding it',async t=>{
   const f=fixture(t),reports=f.create();await base(reports);const old=await reports.action('generate-ai-week',period);

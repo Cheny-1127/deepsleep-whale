@@ -1,6 +1,6 @@
 'use strict';
 const path = require('node:path');
-const { CODEX_EVENTS, CURSOR_EVENTS } = require('../shared/hook-events.cjs');
+const { CODEX_EVENTS, CURSOR_EVENTS, CLAUDE_EVENTS } = require('../shared/hook-events.cjs');
 
 // Hook 命令由 shell 解析，单引号转义必须兼容项目路径中的空格和引号。
 const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
@@ -26,4 +26,11 @@ function createCursorConfig(runtime = process.execPath) {
   return { version:1, hooks:Object.fromEntries(Object.keys(CURSOR_EVENTS).map(name => [name, [{ command:`${command} ${name}`, timeout:2 }]])) };
 }
 
-module.exports = { createCodexConfig, createCursorConfig };
+function createClaudeConfig(runtime = process.execPath) {
+  const command = senderCommand('claude', runtime);
+  return { hooks:Object.fromEntries(Object.keys(CLAUDE_EVENTS).map(event => [event, [{
+    ...(['PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure'].includes(event) ? { matcher:'*' } : {}),
+    hooks:[{ type:'command', command, timeout:2 }] }]])) };
+}
+
+module.exports = { createCodexConfig, createCursorConfig, createClaudeConfig };

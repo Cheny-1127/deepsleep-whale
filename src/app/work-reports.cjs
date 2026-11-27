@@ -3,7 +3,7 @@ const fs=require('node:fs'),path=require('node:path'),{randomUUID,createHash}=re
 const {text,dateKey,requireDate,addDays,weekRange,reportRange,reportKey,defaultSettings,settingsInput,entryInput,workGroupsInput,workMatchTitlesInput,dismissedMatchesInput,active,weekContent,dailyContent}=require('../reports/model.cjs');
 const {archiveReport}=require('../reports/archive.cjs');
 const {archivedWeeks}=require('../reports/week-history.cjs');
-const {aiWeekRequest,aiWeekContent}=require('../reports/ai-week.cjs');
+const {aiWeekRequest,aiWeekContent,aiWeekTemplateHash}=require('../reports/ai-week.cjs');
 const {readReportEnvironment}=require('../reports/environment.cjs');
 const {workSummary,eventTime}=require('../reports/work-summary.cjs');
 const {needsMrRefresh}=require('../reports/work-lifecycle.cjs');
@@ -92,7 +92,7 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
     for(const item of items){
       const fields=entryInput(item),old=next.entries.find(e=>e.sourceKey===item.sourceKey);
       // 同一事实只占一条记录；人工修改、排除或删除的结果不被下一次采集恢复。
-      if(old){if(old.removed)continue;const metadata=item.sourceMeta?{...item.sourceMeta,...(!item.sourceMeta.featureBranch&&old.sourceMeta.featureBranch?{featureBranch:old.sourceMeta.featureBranch}:{})}:old.sourceMeta;
+      if(old){if(old.removed)continue;const metadata=item.sourceMeta?{...item.sourceMeta,...(!item.sourceMeta.mrChecked&&!item.sourceMeta.featureBranch&&old.sourceMeta.featureBranch?{featureBranch:old.sourceMeta.featureBranch}:{})}:old.sourceMeta;
         const updated={...old,...(old.edited?{}:fields),included:old.included,sourceActive:item.sourceActive!==false,sourceMeta:metadata};
         if(JSON.stringify(updated)!==JSON.stringify(old)){dirty(next,old.date,updated.date);Object.assign(old,updated,{updatedAt:now()});}}
       else{next.entries.push({...fields,id:randomUUID(),source:item.source,sourceKey:item.sourceKey,sourceMeta:item.sourceMeta||{},sourceActive:item.sourceActive!==false,removed:false,edited:false,createdAt:now(),updatedAt:now()});dirty(next,fields.date);}
@@ -210,6 +210,7 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
       for(const original of legacy){
         const entry=next.entries.find(e=>e.id===original.id&&e.sourceKey===original.sourceKey&&!e.removed&&e.sourceMeta.sha===original.sourceMeta.sha);
         if(!entry||!needsMrRefresh(entry))continue;
+        delete entry.sourceMeta.featureBranch;
         Object.assign(entry.sourceMeta,metadata.get(original.id));dirty(next,entry.date);changed=true;
       }
       if(changed)save(next);return snapshot({date});
@@ -217,7 +218,7 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
       .finally(()=>{preparations.delete(date);onChange();}).then(()=>snapshot({date}));
     preparations.set(date,pending);onChange();return pending;
   }
-  function reportFor(period){const range=reportRange(period),week=state.weeks[reportKey(range)]||{...range,content:'',edited:false};return clone({...week,aiStale:Boolean(week.aiDraft&&(week.aiDraft.baseHash!==fingerprint(week.content)||week.aiDraft.templateHash!==fingerprint(state.settings.aiWeeklyTemplate)))});}
+  function reportFor(period){const range=reportRange(period),week=state.weeks[reportKey(range)]||{...range,content:'',edited:false};return clone({...week,aiStale:Boolean(week.aiDraft&&(week.aiDraft.baseHash!==fingerprint(week.content)||week.aiDraft.templateHash!==aiWeekTemplateHash(state.settings.aiWeeklyTemplate)))});}
   function weekHistory(){
     const archived=archivedWeeks({root:state.settings.archiveDir,weeklyDir:state.settings.weeklyDir});
     const drafts=Object.entries(state.weeks).filter(([,week])=>week.content.trim()).map(([key,week])=>({id:'draft:'+key,source:'draft',start:week.start,end:week.end,title:week.content.match(/^#\s+(.+)$/m)?.[1]?.slice(0,200)||'周报草稿',content:week.content}));
@@ -251,7 +252,7 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
     if(aiController)throw Error('AI 正在整理周报，请等待当前请求完成');
     if(base.aiDraft?.edited&&!force)throw Error('AI 周报已手工编辑，重新整理前请确认覆盖');
     if(corrupt||closed||!enabled)throw Error('工作报告当前不可写，未请求 AI');
-    const template=state.settings.aiWeeklyTemplate,baseHash=fingerprint(base.content),templateHash=fingerprint(template),previous=fingerprint(JSON.stringify(base.aiDraft||null)),epoch=generation;
+    const template=state.settings.aiWeeklyTemplate,baseHash=fingerprint(base.content),templateHash=aiWeekTemplateHash(template),previous=fingerprint(JSON.stringify(base.aiDraft||null)),epoch=generation;
     const days=[...new Set(state.entries.filter(e=>active(e)&&e.date>=range.start&&e.date<=range.end).map(e=>e.date))].sort();
     const input=aiWeekRequest({...range,content:base.content,template,days});
     const requestController=new AbortController();aiController=requestController;
@@ -259,7 +260,7 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
       const content=aiWeekContent(await ai.generate({...input,signal:requestController.signal}),JSON.parse(input.prompt).template);
       if(closed||!enabled||epoch!==generation||requestController.signal.aborted)throw Error('AI 周报整理已取消，已有草稿已保留');
       const current=state.weeks[key];
-      if(!current||fingerprint(current.content)!==baseHash||fingerprint(state.settings.aiWeeklyTemplate)!==templateHash||fingerprint(JSON.stringify(current.aiDraft||null))!==previous)throw Error('基础周报、模板或 AI 草稿已变化，本次结果未覆盖，请重新整理');
+      if(!current||fingerprint(current.content)!==baseHash||aiWeekTemplateHash(state.settings.aiWeeklyTemplate)!==templateHash||fingerprint(JSON.stringify(current.aiDraft||null))!==previous)throw Error('基础周报、模板或 AI 草稿已变化，本次结果未覆盖，请重新整理');
       const next=clone(state);next.weeks[key].aiDraft={content,edited:false,generatedAt:now(),updatedAt:now(),baseHash,templateHash};save(next);return reportFor(range);
     }finally{if(aiController===requestController)aiController=null;}
   }
@@ -412,6 +413,14 @@ function createWorkReports({dataDir,now=()=>Date.now(),getTasks=()=>[],readEnvir
     if(name==='preview-day')return {date:requireDate(value.date),content:dailyContent(state.entries,value.date,state.workGroups)};
     if(name==='generate-week')return generateWeek(requestedPeriod(value),{force:value.force===true});
     if(name==='generate-ai-week')return generateAiWeek(requestedPeriod(value),{force:value.force===true});
+    if(name==='remove-week'){
+      const match=typeof value.id==='string'&&value.id.length<=100?value.id.match(/^(draft|ai-draft):(.+)$/):null;
+      if(!match)throw Error('只能删除应用周报草稿，Obsidian 文件请在笔记库中管理');
+      const [,kind,key]=match,week=Object.hasOwn(state.weeks,key)?state.weeks[key]:null;
+      if(!week||!(kind==='ai-draft'?week.aiDraft?.content:week.content)?.trim())throw Error('这份周报草稿已不存在，请刷新列表后重试');
+      if(aiController)throw Error('AI 正在整理周报，请等待完成后再删除草稿');
+      const range=reportRange(week),next=clone(state);delete next.weeks[key];save(next);return range;
+    }
     if(['save-week','archive-week'].includes(name)&&value.variant!==undefined&&!['base','ai'].includes(value.variant))throw Error('请选择基础周报或 AI 周报');
     if(name==='save-week'){
       const range=requestedPeriod(value);if(typeof value.content!=='string'||!value.content.trim()||value.content.length>200000)throw Error('周报内容需为 1–200000 字');

@@ -32,6 +32,18 @@ export function createArcheryView() {
       try{await invoke('confirm-approval',{token:request.token,confirmed,...(confirmed&&reason?{remark:reason.value.trim()}:{})});}catch{}
     }
   });
+  window.whale.onArcheryLargeConfirmation?.(async request=>{
+    const tag='large-'+request.token;
+    if(request.cancelled){$('view').querySelector(`.ui-confirm-dialog[open][data-tag="${tag}"]`)?.close();return;}
+    let confirmed=false;
+    try{
+      const item=request.item;
+      confirmed=await confirmAction({owner:$('view'),title:`完整加载工单 #${item.id} 的详情？`,
+        message:`${item.title}\n详情约 ${Math.ceil(item.bytes/1024)} KB，包含工单 SQL 和执行内容。`,confirmLabel:'完整加载',stacked:true,tag});
+    }catch{/* 弹窗无法展示时按取消处理。 */}finally{
+      try{await invoke('confirm-large-detail',{token:request.token,confirmed});}catch{}
+    }
+  });
   function createApprovalDetail(request){
     const box=document.createElement('section');box.className='archery-detail archery-approval-detail';
     let value=request.cachedDetail,loading=false;

@@ -4,8 +4,10 @@ const path = require('node:path');
 const os = require('node:os');
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function chatUrl(id) { return typeof id==='string' && UUID.test(id) ? `codex://threads/${id}` : null; }
+// 轮次 ID 是 UUIDv7，同一聊天内可按字典序比较先后；其他格式只能判断相等。
+const TURN=/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 function createTitleReader(home=process.env.CODEX_HOME || path.join(os.homedir(),'.codex')) {
-  let db,query,readCache,readMtime=-1;
+  let db,query,receiptQuery,readCache,readMtime=-1;
   function lookup(id) {
     if (!chatUrl(id)) return {kind:'unavailable'};
     try {
@@ -26,6 +28,23 @@ function createTitleReader(home=process.env.CODEX_HOME || path.join(os.homedir()
   return {
     lookup,
     title(id) { return lookup(id).title || null; },
+    // 新版 Codex 在轮次发布时同时写入未读起点，看过后清空。true 已读、false 未读、null 无法判断。
+    readReceipt(item) {
+      if(!chatUrl(item?.session_id))return null;
+      try {
+        if(!receiptQuery) {
+          const { DatabaseSync }=require('node:sqlite');
+          db ||= new DatabaseSync(path.join(home,'state_5.sqlite'),{readOnly:true});
+          receiptQuery=db.prepare('SELECT first_unread_turn AS firstUnread, last_published_turn AS lastPublished FROM thread_read_receipts WHERE thread_id = ?');
+        }
+        const row=receiptQuery.get(item.session_id),turn=item.turn_id,ordered=TURN.test(turn||'');
+        if(!row)return null;
+        if(row.firstUnread)return Boolean(ordered&&TURN.test(row.firstUnread)&&turn<row.firstUnread);
+        // 本轮尚未发布时，空的未读起点属于之前的轮次，不能当作已读。
+        if(!row.lastPublished||!turn)return null;
+        return turn===row.lastPublished||(ordered&&TURN.test(row.lastPublished)&&turn<row.lastPublished)?true:null;
+      } catch { return null; }
+    },
     readState() {
       try {
         const file=path.join(home,'.codex-global-state.json');

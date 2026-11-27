@@ -80,3 +80,30 @@ test('execution confirmation is tagged by the main process and the review token 
   assert.equal(f.bridge.reply(f.sender,{token:old,confirmed:true}),false);
   assert.equal(f.bridge.reply(f.sender,{token:message.token,confirmed:false}),true);assert.equal(await executing,false);
 });
+
+test('large-detail confirmation is answered once by the originating page and withdrawn when the read is cancelled',async t=>{
+  const {createLargeDetailConfirmation}=require('../src/app/archery-confirmation.cjs');
+  const f=fixture(t),large=createLargeDetailConfirmation();t.after(()=>large.cancel());
+  const item={id:779,title:'补代运营',bytes:70000,sql:'不应下发'};
+  const waiting=large.request(f.sender,item),message=f.messages.at(-1);
+  assert.equal(message.channel,'archery-large-confirmation');assert.deepEqual(message.item,{id:779,title:'补代运营',bytes:70000});
+  assert.equal(large.reply(new EventEmitter(),{token:message.token,confirmed:true}),false,'其他页面不能回答');
+  assert.equal(large.reply(f.sender,{token:message.token,confirmed:'yes'}),false);
+  assert.equal(large.reply(f.sender,{token:message.token,confirmed:true}),true);assert.equal(await waiting,true);
+  assert.equal(large.reply(f.sender,{token:message.token,confirmed:true}),false,'令牌只能用一次');
+  const controller=new AbortController(),aborted=large.request(f.sender,item,controller.signal),second=f.messages.at(-1).token;
+  controller.abort();assert.equal(await aborted,false);
+  assert.deepEqual({token:f.messages.at(-1).token,cancelled:f.messages.at(-1).cancelled},{token:second,cancelled:true},'取消时收起页面上的询问');
+  const left=large.request(f.sender,item);f.sender.emit('did-start-navigation');assert.equal(await left,false);
+  const timed=createLargeDetailConfirmation({timeoutMs:5}).request(f.sender,item);assert.equal(await timed,false,'超时不默认加载');
+});
+
+test('a large read inside an approval asks the same page through the large-detail confirmation',async t=>{
+  const asked=[];let seen;
+  const f=fixture(t,{confirmLarge:async(sender,item,signal)=>{asked.push({sender,item,signal});return true;}});
+  const waiting=f.bridge.request(f.sender,f.item,{canDetail:true,loadDetail:async(allowLarge,confirmLarge)=>{seen=allowLarge;return {confirmed:await confirmLarge({id:566,bytes:9},'signal')};}});
+  const token=f.messages[0].token;
+  assert.deepEqual(await f.bridge.detail(f.sender,{token,allowLarge:true}),{confirmed:true});
+  assert.equal(seen,true);assert.equal(asked[0].sender,f.sender);assert.equal(asked[0].signal,'signal');
+  f.bridge.reply(f.sender,{token,confirmed:false});assert.equal(await waiting,false);
+});

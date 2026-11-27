@@ -2,6 +2,7 @@
 const fs=require('node:fs');
 const path=require('node:path');
 const {spawn}=require('node:child_process');
+const {hasClaudeHook}=require('./claude-settings.cjs');
 const unknown=(adapter,message)=>({state:'unknown',checkedAt:Date.now(),message,events:Object.fromEntries(adapter.mappings.map(item=>[item.event,{available:false,reason:message}]))});
 function matchCodex(adapter,result) {
   const entries=result?.data;
@@ -79,7 +80,19 @@ function readCursor(adapter) {
     return {state:'checked',checkedAt:Date.now(),message:'已读取 Cursor 用户配置',events};
   }catch(error){return error.code==='ENOENT'?{state:'checked',checkedAt:Date.now(),message:'尚未找到 Cursor Hooks 配置',events:Object.fromEntries(adapter.mappings.map(({event})=>[event,{available:false,reason:'尚未接入鲸鱼娘'}]))}:unknown(adapter,'无法读取 Cursor Hooks 配置');}
 }
+function readClaude(adapter) {
+  try {
+    const config=JSON.parse(fs.readFileSync(adapter.target,'utf8'));
+    if(!config||typeof config!=='object'||Array.isArray(config)||(config.hooks!==undefined&&(!config.hooks||typeof config.hooks!=='object'||Array.isArray(config.hooks))))return unknown(adapter,'Claude Code 配置格式无法识别');
+    const expected=JSON.parse(adapter.config).hooks,disabled=config.disableAllHooks===true;
+    const events=Object.fromEntries(adapter.mappings.map(({event})=>{
+      const configured=hasClaudeHook(config.hooks?.[event],expected[event][0].hooks[0].command);
+      return [event,{available:configured&&!disabled,reason:!configured?'尚未接入鲸鱼娘':disabled?'Claude Code 已关闭全部 Hooks':'已配置，等待事件验证'}];
+    }));
+    return {state:'checked',checkedAt:Date.now(),message:disabled?'Claude Code 已关闭全部 Hooks':'已读取 Claude Code 用户配置',events};
+  }catch(error){return error.code==='ENOENT'?{state:'checked',checkedAt:Date.now(),message:'尚未找到 Claude Code 用户配置',events:Object.fromEntries(adapter.mappings.map(({event})=>[event,{available:false,reason:'尚未接入鲸鱼娘'}]))}:unknown(adapter,'无法读取 Claude Code 配置');}
+}
 function findCodex() {
   return [process.env.WHALE_CODEX_BIN,'/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex','/Applications/Codex.app/Contents/Resources/codex',...(process.env.PATH||'').split(path.delimiter).filter(Boolean).map(dir=>path.join(dir,'codex'))].find(file=>{try {return file&&fs.statSync(file).isFile()&&(fs.accessSync(file,fs.constants.X_OK)===undefined);}catch{return false;}});
 }
-module.exports={unknown,matchCodex,readCodex,readCursor,findCodex};
+module.exports={unknown,matchCodex,readCodex,readCursor,readClaude,findCodex};

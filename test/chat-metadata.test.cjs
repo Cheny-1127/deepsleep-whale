@@ -47,6 +47,31 @@ test('reads local persisted unread IDs and safely handles missing or malformed d
  write({version:2,unreadByIdentity:{}});assert.equal(reader.readState(),null);
  fs.writeFileSync(file,'{');assert.equal(reader.readState(),null);
 });
+test('read receipts clear a reminder only when that completed turn was published and then viewed',t=>{
+ const {Activity}=require('../src/domain/activity.cjs');
+ const dir=fs.mkdtempSync('/tmp/whale-receipts-');t.after(()=>fs.rmSync(dir,{recursive:true}));
+ const turns=['01a21100-0000-7000-8000-000000000001','01a21171-0000-7000-8000-000000000002','01a21180-0000-7000-8000-000000000003'];
+ const reader=createTitleReader(dir);t.after(()=>reader.close());const item=turn=>({session_id:id,turn_id:turn});
+ assert.equal(reader.readReceipt(item(turns[1])),null,'没有数据库');
+ const db=new DatabaseSync(path.join(dir,'state_5.sqlite'));t.after(()=>db.close());
+ db.exec('CREATE TABLE threads(id TEXT PRIMARY KEY,title TEXT)');db.prepare('INSERT INTO threads VALUES (?,?)').run(id,'聊天');
+ assert.equal(reader.readReceipt(item(turns[1])),null,'旧版没有回执表');
+ db.exec('CREATE TABLE thread_read_receipts(thread_id TEXT PRIMARY KEY,first_unread_turn TEXT,revision TEXT,last_published_turn TEXT)');
+ assert.equal(reader.readReceipt(item(turns[1])),null,'没有该聊天的回执');
+ const set=(first,last)=>db.prepare('INSERT OR REPLACE INTO thread_read_receipts VALUES (?,?,?,?)').run(id,first,'r',last);
+ let now=1000;const activity=new Activity({clock:()=>now,resolveChat:key=>reader.lookup(key),resolveRead:value=>reader.readReceipt(value)});
+ set(null,turns[0]);activity.accept({hook_event_name:'Stop',session_id:id,turn_id:turns[1]});
+ const frozen={updatedAt:500,unreadIds:new Set()},unread=()=>{activity.reconcile(frozen,now);return activity.snapshot().unread;};
+ now=9000;assert.equal(unread(),1,'本轮尚未发布，上一轮已读不能清除');
+ set(turns[1],turns[1]);assert.equal(unread(),1,'已发布未看');
+ assert.equal((activity.reconcile({updatedAt:99999,unreadIds:new Set()},now),activity.snapshot().unread),1,'回执未读时不受旧列表影响');
+ set(turns[2],turns[2]);assert.equal(reader.readReceipt(item(turns[1])),true,'更晚的轮次才未读，本轮已看过');
+ set(null,turns[2]);assert.equal(reader.readReceipt(item(turns[1])),true);
+ for(const turn of ['unknown',undefined])assert.equal(reader.readReceipt(item(turn)),null,'缺少轮次不猜测');
+ assert.equal(reader.readReceipt({session_id:'claude:'+id,turn_id:turns[1]}),null);
+ set(null,turns[1]);activity.setSourceRunning('codex',false);activity.reconcile(null,now);assert.equal(activity.exportState().notices.length,1,'Codex 退出时不消费提醒');
+ activity.setSourceRunning('codex',true);assert.equal(unread(),0,'看过后消失');
+});
 test('Cursor uses only sidebar name, observes renames and preserves read-only storage',t=>{
  const {createCursorTitleReader}=require('../src/clients/chat-metadata.cjs');
  const {Activity}=require('../src/domain/activity.cjs');

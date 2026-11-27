@@ -69,6 +69,40 @@ test('exact business descriptions are hints across projects, while generic descr
   assert.equal(workMatches([item('one','增加配置入口','代码已合并 main。'),item('two','补齐读取逻辑','代码已合并 main。')]).items.length,0);
 });
 
+test('verified MR task names keep similarly named features separate and override cached branches',()=>{
+  const order='feat-cy-1120-order-media-channel',users='feat-cy-1120-user-media-channel';
+  const admin=item('orders-admin','短剧生产订单支持媒体渠道筛选','',{project:'ossv/d-overseas-admin',mr:{url:'mr:admin',sourceBranch:order}});
+  const api=item('orders-api','统一订单媒体渠道字段','',{project:'ossv/d-ossv-serve'});
+  const user=item('users','短剧用户管理和游客管理支持媒体渠道筛选','',{project:admin.project,mr:{url:'mr:users',sourceBranch:users}});
+  const entries=[
+    {id:admin.key,source:'gitlab',sourceMeta:{featureBranch:users,mergeRequests:[admin.mr]}},
+    {id:api.key,source:'gitlab',sourceMeta:{featureBranch:users,mergeRequests:[{url:'mr:api',sourceBranch:order},{url:'mr:uat',sourceBranch:order}]}},
+    {id:user.key,source:'gitlab',sourceMeta:{mergeRequests:[user.mr]}}
+  ];
+  const matches=workMatches([api,admin,user],entries).items;
+  assert.deepEqual(matches.map(match=>match.keys),[[api.key,admin.key]]);
+  assert.equal(matches[0].reason,'相同功能分支：'+order);
+  entries[1].sourceMeta.mergeRequests.forEach(mr=>{mr.sourceBranch=order.replace('1120','1121');});
+  assert.match(workMatches([api,admin,user],entries).items[0].reason,/相同任务描述：order media channel/);
+  const planner=item('planner','短剧媒体渠道筛选','短剧生产订单及用户管理、游客管理支持媒体渠道筛选。');
+  assert.ok(workMatches([api,admin,user,planner],entries).items.every(match=>!match.keys.includes(user.key)||!match.keys.includes(admin.key)));
+});
+
+test('resolved main MR provides the match label for an item with test branch aliases',()=>{
+  const order='feat-cy-1120-order-media-channel',main={url:'mr:main',sourceBranch:order},uat={url:'mr:uat',sourceBranch:order+'-uat'};
+  const backend=item('backend','统一订单媒体渠道字段','',{project:'business/api',mr:main,featureKeys:['mr:'+main.url,'mr:'+uat.url]});
+  const frontend=item('frontend','增加筛选条件','',{project:'business/ui',mr:{url:'mr:frontend',sourceBranch:order}});
+  const entries=[{id:backend.key,source:'gitlab',sourceMeta:{mergeRequests:[uat]}}];
+  assert.equal(workMatches([backend,frontend],entries).items[0]?.reason,'相同功能分支：'+order);
+});
+
+test('conflicting MR source branches do not contribute a branch match',()=>{
+  const branch='feat-cy-1120-order-media-channel';
+  const entries=[{id:'multi',source:'gitlab',sourceMeta:{featureBranch:branch,mergeRequests:[{sourceBranch:branch},{sourceBranch:'feat-cy-1120-user-media-channel'}]}},
+    {id:'order',source:'gitlab',sourceMeta:{mergeRequests:[{sourceBranch:branch}]}}];
+  assert.deepEqual(workMatches([item('multi','增加配置入口'),item('order','补齐读取逻辑')],entries).items,[]);
+});
+
 test('branch hints respect date, explicit denials and the MR represented by a shared deployment',()=>{
   const branch='feat-cy-1028-client-type',one=item('one','增加配置入口','',{mr:{url:'mr:one',sourceBranch:branch}}),two=item('two','补齐读取逻辑','',{date:'2026-10-27',mr:{url:'mr:two',sourceBranch:branch}});
   assert.equal(workMatches([one,two]).items.length,0);

@@ -45,3 +45,34 @@ test('draft history remains available without an Obsidian directory and when the
   const history=await f.reports.action('list-weeks');assert.equal(history.items.length,1);
   assert.equal((await f.reports.action('read-week',{id:history.items[0].id})).content,'手工草稿');
 });
+test('removing a test draft restores the continuous start, preserves daily work and survives restart',async t=>{
+  const f=fixture(t),period={start:'2026-11-01',end:'2026-11-03'};
+  await f.reports.action('save-week',{start:'2026-10-26',end:'2026-10-31',content:'上一份正式周报'});
+  await f.reports.action('save-week',{...period,content:'测试草稿'});
+  await f.reports.action('save-entry',{date:'2026-11-02',title:'保留实际工作',status:'done'});
+  const entries=f.reports.snapshot({date:'2026-11-02'}).entries;
+  assert.equal((await f.reports.action('get-week',{date:'2026-11-08',continuous:true})).start,'2026-11-04');
+  const id=(await f.reports.action('list-weeks')).items.find(item=>item.start===period.start).id;
+  await f.reports.action('remove-week',{id});
+  assert.equal((await f.reports.action('get-week',{date:'2026-11-08',continuous:true})).start,'2026-11-01');
+  assert.deepEqual(f.reports.snapshot({date:'2026-11-02'}).entries,entries);
+  await assert.rejects(f.reports.action('read-week',{id}),/不存在/);
+  f.reports.close();const restarted=createWorkReports({dataDir:f.dir,readEnvironment:()=>({archiveDir:f.vault}),now:()=>Date.parse('2026-11-08T12:00:00+08:00')});t.after(()=>restarted.close());
+  assert.equal((await restarted.action('get-week',{date:'2026-11-08',continuous:true})).start,'2026-11-01');
+  assert.match((await restarted.action('generate-week',{start:period.start,end:'2026-11-08'})).content,/保留实际工作/);
+});
+test('removal rejects invalid IDs, archived files and disabled writes, and preserves drafts on save failure',async t=>{
+  const f=fixture(t),period={start:'2026-11-01',end:'2026-11-03'};
+  await f.reports.action('save-week',{...period,content:'不可丢失的手工草稿'});
+  const file=f.note('周报/2026-11-01至2026-11-03-周报.md','# 已归档的报告');
+  const history=await f.reports.action('list-weeks'),id=history.items.find(item=>item.source==='draft').id,archived=history.items.find(item=>item.source==='obsidian').id;
+  const ledger=()=>fs.readFileSync(path.join(f.dir,'work-reports.json'),'utf8'),before=ledger();
+  for(const invalid of [undefined,null,'draft:__proto__','draft:../outside','ai-draft:2026-11-01..2026-11-03',archived])await assert.rejects(f.reports.action('remove-week',{id:invalid}),/草稿|有效/);
+  f.reports.setModuleEnabled(false);await assert.rejects(f.reports.action('remove-week',{id}),/已关闭/);f.reports.setModuleEnabled(true);
+  assert.equal(ledger(),before);
+  fs.mkdirSync(path.join(f.dir,'work-reports.json.tmp'));await assert.rejects(f.reports.action('remove-week',{id}),/保存失败/);fs.rmdirSync(path.join(f.dir,'work-reports.json.tmp'));
+  assert.equal(ledger(),before);assert.equal((await f.reports.action('read-week',{id})).content,'不可丢失的手工草稿');
+  await f.reports.action('remove-week',{id});assert.equal(fs.readFileSync(file,'utf8'),'# 已归档的报告');
+  assert.ok((await f.reports.action('list-weeks')).items.some(item=>item.id===archived));
+  await assert.rejects(f.reports.action('remove-week',{id}),/草稿/);
+});

@@ -3,6 +3,7 @@
 .report-toolbar { justify-content: space-between; margin-bottom: 16px; }
 .report-toolbar label, .report-field { display: flex; flex-direction: column; gap: 7px; font-size: var(--ui-font-small); color: var(--ui-text-muted); min-width: 0; }
 .report-toolbar input { max-width: 180px; }
+.report-week-range { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
 .report-recent-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; margin-bottom: 20px; }
 .report-day-button { display: grid; gap: 4px; min-width: 0; padding: 12px 6px; text-align: center; }
 .report-day-date { color: var(--ui-text-muted); font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
@@ -143,7 +144,7 @@ html:has(#report-preview-dialog[open]), html:has(#report-week-history-dialog[ope
 .report-week-history-item[aria-pressed="true"] { border-color: var(--ui-accent); background: var(--ui-selected); color: var(--ui-accent); }
 .report-week-history-label { color: var(--ui-text-muted); line-height: 1.6; }
 .report-week-history-reader { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.report-week-history-reader > h3 { margin: 0; font-size: 15px; }
+.report-week-history-reader h3 { margin: 0; font-size: 15px; }
 .report-week-history-reader > .report-note { margin: 8px 0 12px; }
 .report-week-history-reader > .ui-tabs { margin-bottom: 12px; }
 #report-week-history-preview, #report-week-history-source { flex: 1; min-height: 0; max-height: none; }

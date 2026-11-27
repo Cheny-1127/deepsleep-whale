@@ -4,7 +4,9 @@ const {_electron:electron}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const root=path.resolve(__dirname,'../..'),dir=fs.mkdtempSync('/tmp/whale-reports-ui-'),vault=path.join(dir,'vault'),out=path.join(root,'out');
 for(const directory of [vault,out])fs.mkdirSync(directory,{recursive:true});
-const now=Date.parse(process.env.WHALE_REPORT_WEEK_HISTORY_ONLY==='1'||process.env.WHALE_REPORT_CONTINUOUS_WEEK_ONLY==='1'?'2026-11-08T12:00:00+08:00':'2026-10-26T18:00:00+08:00');
+const regenerateWeekOnly=process.env.WHALE_REPORT_REGENERATE_WEEK_ONLY==='1';
+const removeWeekOnly=process.env.WHALE_REPORT_REMOVE_WEEK_ONLY==='1';
+const now=Date.parse(regenerateWeekOnly||removeWeekOnly?'2026-11-15T12:00:00+08:00':process.env.WHALE_REPORT_WEEK_HISTORY_ONLY==='1'||process.env.WHALE_REPORT_CONTINUOUS_WEEK_ONLY==='1'?'2026-11-08T12:00:00+08:00':'2026-10-26T18:00:00+08:00');
 const groupedMatches=process.env.WHALE_REPORT_MATCH_GROUP_ONLY==='1';
 const removingWorks=process.env.WHALE_REPORT_REMOVE_ONLY==='1';
 const lifecycleOnly=process.env.WHALE_REPORT_LIFECYCLE_ONLY==='1';
@@ -18,7 +20,7 @@ const dailyCatchupOnly=process.env.WHALE_REPORT_DAILY_CATCHUP_ONLY==='1';
 const {MODULE_IDS}=require('../../src/app/module-settings.cjs');
 fs.writeFileSync(path.join(dir,'modules.json'),JSON.stringify(Object.fromEntries(MODULE_IDS.map(id=>[id,['planner','reports'].includes(id)]))));
 fs.writeFileSync(path.join(dir,'settings.json'),JSON.stringify({sources:{codex:false,cursor:false},notifications:false,sound:false}));
-if(process.env.WHALE_REPORT_SUMMARY_ONLY==='1'||process.env.WHALE_REPORT_HISTORY_ONLY==='1'||process.env.WHALE_REPORT_MATCH_ONLY==='1'||groupedMatches||removingWorks||lifecycleOnly||branchPolicy||previewOnly||previewScrollOnly||weeklyHistoryOnly||continuousWeekOnly||aiWeekOnly){
+if(process.env.WHALE_REPORT_SUMMARY_ONLY==='1'||process.env.WHALE_REPORT_HISTORY_ONLY==='1'||process.env.WHALE_REPORT_MATCH_ONLY==='1'||groupedMatches||removingWorks||lifecycleOnly||branchPolicy||previewOnly||previewScrollOnly||weeklyHistoryOnly||continuousWeekOnly||regenerateWeekOnly||removeWeekOnly||aiWeekOnly){
   const {defaultSettings}=require('../../src/reports/model.cjs');
   const mr=iid=>({iid,title:'修复事项 '+iid,url:'https://gitlab.example.test/business/service/-/merge_requests/'+iid,state:'merged',sourceBranch:'feat-cy-task-'+iid,targetBranch:'main',mergedAt:Date.parse('2026-10-26T08:00:00+08:00')});
   const entry=(id,extra)=>({id,sourceKey:id,date:'2026-10-26',title:'原始提交 '+id,project:'business/service',details:'',source:'gitlab',status:'done',included:true,sourceActive:true,removed:false,edited:false,createdAt:now,updatedAt:now,...extra});
@@ -61,9 +63,14 @@ if(process.env.WHALE_REPORT_SUMMARY_ONLY==='1'||process.env.WHALE_REPORT_HISTORY
   }else for(const record of records)if(record.source==='gitlab')record.sourceMeta.mrLifecycleChecked=true;
   const seed=process.env.WHALE_REPORT_SUMMARY_DATA?JSON.parse(fs.readFileSync(process.env.WHALE_REPORT_SUMMARY_DATA,'utf8')):{version:1,revision:0,settings:defaultSettings(vault),entries:records,weeks:{},sources:Array.from({length:31},(_,i)=>({key:'gitlab:business/repo-'+i,project:'business/repo-'+i,count:0,error:'',checkedAt:now})),archives:{},dirtyDates:[]};
   seed.settings={...seed.settings,archiveDir:vault,autoCollect:false,autoArchive:false,autoWeekly:false};
-  if(weeklyHistoryOnly||continuousWeekOnly){
+  if(weeklyHistoryOnly||continuousWeekOnly||regenerateWeekOnly||removeWeekOnly){
     seed.weeks=weeklyHistoryOnly?{'2026-11-02':{start:'2026-11-02',end:'2026-11-08',content:'# 本周已保存草稿\n\n保留人工总结。',edited:true}}:{};
-    if(continuousWeekOnly)seed.entries=[['2026-10-30','已写过的成果'],['2026-10-31','周六工作'],['2026-11-01','周日工作'],['2026-11-02','周一工作'],['2026-11-08','写报告当天工作']].map(([date,title],index)=>entry('continuous-'+index,{date,title,source:'manual',sourceMeta:{}}));
+    if(continuousWeekOnly||regenerateWeekOnly)seed.entries=[['2026-10-30','已写过的成果'],['2026-10-31','周六工作'],['2026-11-01','周日工作'],['2026-11-02','周一工作'],['2026-11-08','写报告当天工作'],...(regenerateWeekOnly?[['2026-11-15','今天完成的工作']]:[])].map(([date,title],index)=>entry('continuous-'+index,{date,title,source:'manual',sourceMeta:{}}));
+    if(regenerateWeekOnly)for(const [start,end] of [['2026-10-31','2026-11-07'],['2026-11-08','2026-11-09'],['2026-11-10','2026-11-15']])seed.weeks[start+'..'+end]={start,end,content:'# 测试周报 '+end,edited:true};
+    if(removeWeekOnly){
+      seed.entries=[['2026-11-07','上次已汇总的工作'],['2026-11-08','这次需要重新汇总的工作'],['2026-11-15','今天完成的工作']].map(([date,title],index)=>entry('remove-week-'+index,{date,title,source:'manual',sourceMeta:{}}));
+      seed.weeks={'2026-10-31..2026-11-07':{start:'2026-10-31',end:'2026-11-07',content:'# 上次正式周报',edited:true},'2026-11-08..2026-11-09':{start:'2026-11-08',end:'2026-11-09',content:'# 测试周报',edited:true,aiDraft:{content:'# AI 测试周报',baseHash:'fixture',templateHash:'fixture',edited:true}}};
+    }
     const folder=path.join(vault,'03-报告/2026/周报');fs.mkdirSync(folder,{recursive:true});
     fs.writeFileSync(path.join(folder,'2026-10-26至2026-10-30-周报.md'),'---\ntype: weekly-report\nperiod_start: "2026-10-26"\nperiod_end: "2026-10-30"\n---\n\n# 上周手工周报\n\n## 交付成果\n- **修复会员缓存边界**\n  - 已完成生产验证\n\n<img src=x onerror=alert(1)>\n');
     fs.writeFileSync(path.join(folder,'2026-10-23至2026-10-25-周报.md'),'# 更早的周报\n\n保留历史来源。');
@@ -133,16 +140,18 @@ require(${JSON.stringify(path.join(root,'src/clients/presence.cjs'))}).readClien
 const planner=require(${JSON.stringify(path.join(root,'src/app/planner.cjs'))}),makePlanner=planner.createPlanner;planner.createPlanner=options=>makePlanner({...options,now:()=>${now}});
 const reports=require(${JSON.stringify(path.join(root,'src/app/work-reports.cjs'))}),makeReports=reports.createWorkReports;reports.createWorkReports=options=>makeReports({...options,...(process.env.WHALE_REPORT_GITLAB_ONLY==='1'?{}:{gitlabStore:{load:()=>({url:'https://gitlab.example.test',token:'fixture-gitlab-secret',username:'cy',authors:'cy@example.test'})}}),gitlabFetchImpl:(url,request)=>net.fetch(url,request),now:()=>${now},readEnvironment:()=>({archiveDir:${JSON.stringify(vault)},jenkinsUrl:'https://jenkins.example.test',jenkinsUser:'fixture',jenkinsToken:'fixture-secret'})});
 if(process.env.WHALE_REPORT_AI_WEEK_ONLY==='1'){
-  const make=reports.createWorkReports;global.reportAiRequests=[];global.reportAiFail=false;
+  const make=reports.createWorkReports;global.reportAiRequests=[];global.reportAiFail=false;global.reportAiInvalid=false;
   reports.createWorkReports=options=>make({...options,ai:{snapshot:()=>({configured:true}),generate:async input=>{
     global.reportAiRequests.push(input);if(global.reportAiFail)throw Error('测试模型连接失败');
     const {template}=JSON.parse(input.prompt);
-    return template.replace('### 功能交付','### 功能交付'+String.fromCharCode(10,10)+'- 修复短剧分发遗漏剧本及制作资料同步。')
-      .replace('### 迭代完善','### 迭代完善'+String.fromCharCode(10,10)+'- 整理客服交接文档，补充值班安排。')
+    const result=template.replace('## 本周工作内容','> 根据本期已记录的工作整理。工作思考和下周计划为建议稿，待确认。'+String.fromCharCode(10,10)+'## 本周工作内容')
+      .replace('### 功能交付','### 功能交付'+String.fromCharCode(10,10)+'- 整理客服交接文档，补充值班安排。')
+      .replace('### 迭代完善','### 迭代完善'+String.fromCharCode(10,10)+'- 修复短剧分发时遗漏剧本及制作资料同步的问题。')
       .replace('## 本周工作思考','## 本周工作思考'+String.fromCharCode(10,10)+'- 建议在资料同步前核对缺失字段。')
       .replace('## 需要支持的工作事项','## 需要支持的工作事项'+String.fromCharCode(10,10)+'- 等待渠道确认结算规则。')
       .replace('## 下周工作计划','## 下周工作计划'+String.fromCharCode(10,10)+'- 建议继续梳理退款回归用例。')
       .replace('## 来源记录','## 来源记录'+String.fromCharCode(10,10)+'- 2026-10-26 日报');
+    return global.reportAiInvalid?result.replace('- 整理客服交接文档，补充值班安排。','- **客服交接文档**（已完成）：补充值班安排。'):result;
   }}});
 }
 if(process.env.WHALE_REPORT_GITLAB_ONLY==='1'){
@@ -178,7 +187,7 @@ async function launch(){
   await app.evaluate(async({BrowserWindow})=>{for(let i=0;i<100&&!BrowserWindow.getAllWindows().some(w=>w.webContents.getURL().endsWith('/index.html'));i++)await new Promise(resolve=>setTimeout(resolve,30));});
   panel=app.windows().find(p=>p.url().endsWith('/index.html'));pet=app.windows().find(p=>p.url().endsWith('/pet.html'));assert.ok(panel);
   await panel.waitForFunction(()=>document.getElementById('reports-module-toggle')?.disabled===false);
-  if(weeklyHistoryOnly||continuousWeekOnly||aiWeekOnly)await panel.evaluate(time=>{Date.now=()=>time;},now);
+  if(weeklyHistoryOnly||continuousWeekOnly||regenerateWeekOnly||removeWeekOnly||aiWeekOnly)await panel.evaluate(time=>{Date.now=()=>time;},now);
   await panel.locator('#nav-reports').click();await panel.locator('#report-date').fill('2026-10-26');await panel.locator('#report-date').dispatchEvent('change');
 }
 async function entries(){return (await panel.evaluate(()=>window.whale.reports('snapshot',{date:'2026-10-26'}))).value.entries;}
@@ -207,7 +216,12 @@ async function policy(){const state=await app.evaluate(({BrowserWindow})=>({mode
     const basic=await panel.locator('#report-week-content').inputValue();
     await panel.locator('#report-generate-ai').click();await panel.waitForFunction(()=>document.querySelector('#report-week-ai-tab').getAttribute('aria-selected')==='true');
     assert.deepEqual(await panel.locator('#report-week-preview h2').allTextContents(),['本周工作内容','本周工作思考','需要支持的工作事项','下周工作计划','来源记录']);
-    assert.equal(await panel.locator('#report-week-preview blockquote').count(),2);
+    assert.equal(await panel.locator('#report-week-preview blockquote').count(),3);
+    assert.deepEqual(await panel.locator('#report-week-preview h3').allTextContents(),['功能交付','迭代完善']);
+    assert.equal(await panel.locator('#report-week-preview strong, #report-week-preview ul ul').count(),0,'发送格式使用完整短句和单层列表');
+    assert.doesNotMatch(await panel.locator('#report-week-preview').innerText(),/待发布|待上线|发布情况未核实/,'发布未核实的正文只描述实际改动');
+    assert.match(basic,/（待发布）/);const request=JSON.parse((await app.evaluate(()=>global.reportAiRequests))[0].prompt);
+    assert.match(request.baseReport,/（发布情况未核实）/);assert.doesNotMatch(request.baseReport,/（待发布）/);
     assert.equal((await app.evaluate(()=>global.reportAiRequests)).length,1);
     await panel.locator('#report-week-base-tab').click();assert.equal(await panel.locator('#report-week-content').inputValue(),basic);
     await panel.locator('#report-week-base-tab').press('ArrowRight');await panel.locator('#report-week-source-tab').click();
@@ -223,6 +237,9 @@ async function policy(){const state=await app.evaluate(({BrowserWindow})=>({mode
     const retained=await panel.locator('#report-week-content').inputValue();await app.evaluate(()=>{global.reportAiFail=true;});await panel.locator('#report-generate-ai').click();
     await panel.waitForFunction(()=>document.getElementById('report-error').textContent.includes('测试模型连接失败'));
     assert.equal(await panel.locator('#report-week-content').inputValue(),retained);assert.equal(await panel.locator('#report-generate-ai').textContent(),'AI 整理周报');assert.equal(await panel.locator('#report-week-content').evaluate(node=>node.readOnly),false);
+    await app.evaluate(()=>{global.reportAiFail=false;global.reportAiInvalid=true;});await panel.locator('#report-generate-ai').click();
+    await panel.waitForFunction(()=>document.getElementById('report-error').textContent.includes('正文格式不符合要求'));
+    assert.equal(await panel.locator('#report-week-content').inputValue(),retained,'不符合发送格式的回复不能覆盖已有周报');
     await panel.locator('#report-archive-week').click();await panel.waitForFunction(()=>document.getElementById('report-feedback').textContent.includes('AI 周报已归档'));
     assert.ok(fs.existsSync(path.join(vault,'周报/AI/2026-10-26至2026-10-26-周报.md')));
     await panel.locator('#report-week-base-tab').click();await panel.locator('#report-archive-week').click();await panel.waitForFunction(()=>document.getElementById('report-feedback').textContent.includes('基础周报已归档'));
@@ -240,9 +257,70 @@ async function policy(){const state=await app.evaluate(({BrowserWindow})=>({mode
     await panel.locator('[name="aiWeeklyTemplate"]').fill((await panel.locator('[name="aiWeeklyTemplate"]').inputValue())+'\n保持简洁。');
     await panel.locator('#report-settings-form [type="submit"]').click();await panel.waitForFunction(()=>!document.querySelector('#report-settings-dialog[open]'));
     await policy();await app.close();app=null;await launch();await panel.locator('#report-weekly-tab').click();await panel.waitForFunction(()=>document.getElementById('report-week-content').value.includes('本周工作思考'));
-    assert.equal(await panel.locator('#report-week-content').inputValue(),retained);assert.match(await panel.locator('#report-week-status').innerText(),/模板已变化/);
+    assert.equal(await panel.locator('#report-week-content').inputValue(),retained);assert.match(await panel.locator('#report-week-status').innerText(),/模板或整理规则已更新/);
     assert.equal((await app.evaluate(()=>global.reportAiRequests)).length,0,'重开页面和读取草稿不请求模型');
-    await policy();assert.deepEqual(errors,[]);console.log('PASS two-step AI weekly report, templates, draft protection, archive, restart and original sidebar');return;
+    await policy();assert.deepEqual(errors,[]);console.log('PASS two-step AI weekly report, plain single-level prose, actual progress, invalid-format preservation, templates, draft protection, archive, restart and original sidebar');return;
+  }
+  if(removeWeekOnly){
+    await panel.locator('#report-weekly-tab').click();await panel.waitForFunction(()=>document.getElementById('report-week-start').value==='2026-11-10');
+    const ledger=()=>fs.readFileSync(path.join(dir,'work-reports.json'),'utf8'),before=ledger(),entriesBefore=JSON.parse(before).entries;
+    const originalFile=path.join(vault,'03-报告/2026/周报/2026-10-26至2026-10-30-周报.md'),originalNote=fs.readFileSync(originalFile,'utf8');
+    await panel.locator('#report-history-week').click();await panel.waitForFunction(()=>!document.getElementById('report-week-history-reader').hidden);
+    await panel.locator('.report-week-history-item').filter({hasText:'应用草稿'}).filter({hasText:'2026-11-08 ～ 2026-11-09'}).click();await panel.waitForFunction(()=>document.getElementById('report-week-history-remove').hidden===false);
+    const remove=panel.locator('#report-week-history-remove'),confirm=async()=>{await remove.click();await panel.waitForFunction(()=>document.querySelector('.ui-confirm-dialog[open]'));};
+    await confirm();assert.match(await panel.locator('.ui-confirm-dialog').innerText(),/基础周报及 AI 周报/);await panel.locator('.ui-confirm-dialog .outline').click();assert.equal(ledger(),before);
+    for(const width of [1060,760]){
+      await app.evaluate(({BrowserWindow},width)=>{const win=BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/index.html'));win.setMinimumSize(700,680);win.setContentSize(width,850);},width);
+      await panel.waitForFunction(width=>innerWidth===width,width);assert.ok(await panel.locator('#report-week-history-dialog').evaluate(node=>node.scrollWidth<=node.clientWidth));
+      assert.ok(await remove.evaluate(node=>{const rect=node.getBoundingClientRect();return rect.left>=0&&rect.right<=innerWidth&&rect.bottom<=innerHeight;}));await panel.screenshot({path:path.join(out,`report-remove-week-${width}.png`)});
+    }
+    fs.mkdirSync(path.join(dir,'work-reports.json.tmp'));await confirm();await panel.locator('.ui-confirm-dialog .primary').click();await panel.waitForFunction(()=>document.getElementById('report-week-history-error').textContent.includes('保存失败'));fs.rmdirSync(path.join(dir,'work-reports.json.tmp'));
+    assert.equal(ledger(),before);assert.match(await panel.locator('#report-week-history-preview').innerText(),/测试周报/);
+    await confirm();await panel.locator('.ui-confirm-dialog .primary').click();await panel.waitForFunction(()=>document.querySelectorAll('.report-week-history-item').length===3&&document.getElementById('report-week-start').value==='2026-11-08');
+    assert.equal(JSON.parse(ledger()).weeks['2026-11-08..2026-11-09'],undefined);assert.deepEqual(JSON.parse(ledger()).entries,entriesBefore);assert.equal(fs.readFileSync(originalFile,'utf8'),originalNote);
+    await panel.locator('.report-week-history-item').filter({hasText:'上周手工周报'}).click();await panel.waitForFunction(()=>document.getElementById('report-week-history-title').textContent==='2026-10-26 ～ 2026-10-30');assert.equal(await remove.isVisible(),false);
+    await panel.locator('#report-week-history-close').click();await panel.locator('#report-generate').click();await panel.waitForFunction(()=>document.getElementById('report-week-content').value.includes('今天完成的工作'));
+    assert.match(await panel.locator('#report-week-content').inputValue(),/这次需要重新汇总/);assert.doesNotMatch(await panel.locator('#report-week-content').inputValue(),/上次已汇总/);
+    await panel.locator('#report-week-source-tab').click();await panel.locator('#report-week-content').fill('# 当前未保存的修改');
+    await panel.evaluate(()=>window.whale.reports('save-week',{start:'2026-11-10',end:'2026-11-11',content:'# 另一份测试草稿'}));
+    await panel.locator('#report-history-week').click();await panel.waitForFunction(()=>document.querySelectorAll('.report-week-history-item').length===5);
+    await panel.locator('.report-week-history-item').filter({hasText:'另一份测试草稿'}).click();await panel.waitForFunction(()=>document.getElementById('report-week-history-title').textContent==='2026-11-10 ～ 2026-11-11');await confirm();await panel.locator('.ui-confirm-dialog .primary').click();await panel.waitForFunction(()=>document.querySelectorAll('.report-week-history-item').length===4);
+    assert.equal(await panel.locator('#report-week-content').inputValue(),'# 当前未保存的修改','删除另一份草稿保留当前输入');
+    await panel.locator('.report-week-history-item').filter({hasText:'应用草稿'}).filter({hasText:'2026-11-08 ～ 2026-11-15'}).click();await panel.waitForFunction(()=>document.getElementById('report-week-history-title').textContent==='2026-11-08 ～ 2026-11-15');await confirm();assert.match(await panel.locator('.ui-confirm-dialog').innerText(),/未保存的修改也会丢失/);await panel.locator('.ui-confirm-dialog .primary').click();await panel.waitForFunction(()=>document.querySelectorAll('.report-week-history-item').length===3&&document.getElementById('report-week-content').value==='');
+    await panel.locator('#report-week-history-close').click();await policy();await app.close();app=null;await launch();await panel.locator('#report-weekly-tab').click();await panel.waitForFunction(()=>document.getElementById('report-week-start').value==='2026-11-08');
+    assert.equal(await panel.locator('#report-week-content').inputValue(),'');await policy();assert.deepEqual(errors,[]);console.log('PASS: draft deletion confirmation/cancel, base and AI deletion, failed-save preservation, Obsidian/daily work preserved, automatic 11/08-to-today range, dirty editor protection, restart and hidden 760/1060 layout');return;
+  }
+  if(regenerateWeekOnly){
+    await panel.locator('#report-weekly-tab').click();await panel.waitForFunction(()=>document.getElementById('report-week-content').value.includes('测试周报 2026-11-15'));
+    const start=panel.locator('#report-week-start'),end=panel.locator('#report-week-date'),source=panel.locator('#report-week-content'),status=panel.locator('#report-week-status');
+    await start.waitFor({state:'visible',timeout:5000});assert.equal(await start.inputValue(),'2026-11-10');
+    const ledger=()=>fs.readFileSync(path.join(dir,'work-reports.json'),'utf8'),original=ledger();
+    const selectStart=async date=>{await start.fill(date);await start.dispatchEvent('change');await panel.waitForFunction(date=>document.getElementById('report-week-status').textContent.includes(date),date);};
+    await selectStart('2026-10-31');assert.equal(await source.inputValue(),'');assert.equal(ledger(),original,'选择范围不写入历史');
+    await start.fill('2026-11-16');await start.dispatchEvent('change');await panel.waitForFunction(()=>!document.getElementById('report-error').hidden);
+    await panel.locator('#report-generate').click();assert.equal(ledger(),original,'无效范围不生成或覆盖');
+    await selectStart('2026-10-31');await panel.locator('#report-generate').click();await panel.waitForFunction(()=>document.getElementById('report-week-content').value.includes('今天完成的工作'));
+    const generated=await source.inputValue();assert.match(generated,/周六工作/);assert.doesNotMatch(generated,/已写过的成果/);
+    assert.equal(JSON.parse(ledger()).weeks['2026-11-10..2026-11-15'].content,'# 测试周报 2026-11-15');
+    await panel.locator('#report-week-source-tab').click();await source.fill(generated+'\n尚未保存的总结。');
+    await panel.locator('#report-history-week').click();await panel.waitForFunction(()=>!document.getElementById('report-week-history-reader').hidden);
+    await panel.locator('.report-week-history-item').filter({hasText:'上周手工周报'}).click();await panel.waitForFunction(()=>document.getElementById('report-week-history-title').textContent==='2026-10-26 ～ 2026-10-30');
+    await panel.locator('#report-week-history-continue').click();await panel.waitForFunction(()=>document.querySelector('.ui-confirm-dialog[open]'));await panel.locator('.ui-confirm-dialog .outline').click();
+    assert.equal(await panel.locator('#report-week-history-dialog').evaluate(node=>node.open),true);assert.match(await source.inputValue(),/尚未保存/);
+    const beforeContinue=ledger();await panel.locator('#report-week-history-continue').click();await panel.waitForFunction(()=>document.querySelector('.ui-confirm-dialog[open]'));await panel.locator('.ui-confirm-dialog .primary').click();
+    await panel.waitForFunction(()=>!document.getElementById('report-week-history-dialog').open);assert.equal(await start.inputValue(),'2026-10-31');assert.equal(await end.inputValue(),'2026-11-15');assert.equal(ledger(),beforeContinue,'历史入口只选择范围，不自动改写周报');
+    await panel.locator('#report-week-source-tab').click();await source.fill(generated+'\n已保存的总结。');await panel.locator('#report-save-week').click();await panel.waitForFunction(()=>document.getElementById('report-feedback').textContent.includes('草稿已保存'));
+    await panel.locator('#report-generate').click();await panel.waitForFunction(()=>document.querySelector('.ui-confirm-dialog[open]'));await panel.locator('.ui-confirm-dialog .outline').click();assert.match(await source.inputValue(),/已保存的总结/);
+    await end.fill('2026-11-14');await end.dispatchEvent('change');await panel.waitForFunction(()=>document.getElementById('report-week-status').textContent.includes('2026-11-14'));assert.equal(await start.inputValue(),'2026-10-31','修改截止日保留手选起点');
+    await panel.locator('#report-week-auto-range').click();await panel.waitForFunction(()=>document.getElementById('report-week-start').value==='2026-11-10');
+    assert.match(await status.textContent(),/2026-11-10 ～ 2026-11-14/);
+    for(const width of [1060,760]){
+      await app.evaluate(({BrowserWindow},width)=>{const win=BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('/index.html'));win.setMinimumSize(700,680);win.setContentSize(width,850);},width);
+      await panel.waitForFunction(width=>innerWidth===width,width);assert.ok(await panel.locator('main').evaluate(node=>node.scrollWidth<=node.clientWidth));
+      await panel.screenshot({path:path.join(out,`report-regenerate-week-${width}.png`)});
+    }
+    await policy();await app.close();app=null;await launch();await panel.locator('#report-weekly-tab').click();await panel.waitForFunction(()=>document.getElementById('report-week-content').value.includes('已保存的总结'));assert.equal(await panel.locator('#report-week-start').inputValue(),'2026-10-31');
+    await policy();assert.deepEqual(errors,[]);console.log('PASS: regenerate past test drafts with explicit dates/history baseline, unchanged history, unsaved/saved edit protection, invalid dates, automatic range, restart and hidden 760/1060 layout');return;
   }
   if(continuousWeekOnly){
     const select=async date=>{await panel.locator('#report-week-date').fill(date);await panel.locator('#report-week-date').dispatchEvent('change');await panel.waitForFunction(date=>document.getElementById('report-week-status').textContent.includes(date),date);};

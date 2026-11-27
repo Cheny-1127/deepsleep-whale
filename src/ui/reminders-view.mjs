@@ -7,6 +7,12 @@ function hourglass() {
   svg.innerHTML='<path d="M4 2.5h8M4 13.5h8M5 2.5c.2 2.4 1.4 3.5 3 5.5-1.6 2-2.8 3.1-3 5.5M11 2.5c-.2 2.4-1.4 3.5-3 5.5 1.6 2 2.8 3.1 3 5.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>';
   return svg;
 }
+// 来源图标由项目自带，替换 assets/source-icons 下的文件即可；来源名仍保留在悬停和读屏文字中。
+function sourceIcon(source) {
+  const icon=document.createElement('img');icon.className='completion-source';icon.width=12;icon.height=12;icon.alt='';icon.draggable=false;
+  icon.src=`../../assets/source-icons/${source}.svg`;
+  return icon;
+}
 function reminderClock(text,ends) {
   const clock=document.createElement('span');clock.className='completion-reminder-clock';clock.append(hourglass());
   const label=document.createElement('span');label.className='completion-reminder-time';label.textContent=text;
@@ -71,6 +77,13 @@ export function createReminderView({render,action,floating}) {
       const isTask=Boolean(item.state);
       button.classList.toggle('pending-row',item.state==='approval');
       button.dataset.noticeId=isTask?item.session_id:item.id;button.textContent=item.title;button.title=button.textContent;
+      if(item.source==='claude') {
+        button.setAttribute('aria-label',item.title);
+        const icon=sourceIcon('claude');
+        // 图标缺失时退回文字前缀，不留下无法辨认来源的行。
+        icon.addEventListener('error',()=>{button.textContent=item.title;});
+        button.replaceChildren(icon,item.title.replace(/^Claude · /,''));
+      }
       button.addEventListener('click',()=>void openReminder({sessionId:item.session_id,noticeId:isTask?undefined:item.id},button));
       wrapper.append(button);return wrapper;
     }));
@@ -145,7 +158,7 @@ export function createReminderView({render,action,floating}) {
       detail.textContent=`${unread?'本轮已结束':states[item.state]||'已停止'} · ${new Date(item.time).toLocaleTimeString('zh-CN')} · ${item.session_id.slice(-8)}`;
       text.append(title,detail);element.append(text);
       const open=document.createElement('button');open.textContent='打开聊天';
-      open.disabled=!/^(cursor:)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item.session_id);
+      open.disabled=!/^(cursor:|claude:)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item.session_id);
       open.addEventListener('click',()=>void openReminder({sessionId:item.session_id,noticeId:unread?item.id:undefined},open));
       element.append(open);
       if(unread) {
